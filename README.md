@@ -2,6 +2,10 @@
 
 Đây là phiên bản mã nguồn của ứng dụng Windows desktop.
 
+## Tải xuống
+
+Bạn có thể tải phiên bản mới nhất [tại đây](https://github.com/sangbuidinh/s9h-YoutubeDownloader/releases/latest).
+
 ## Cách chạy
 
 ```powershell
@@ -19,7 +23,6 @@ Youtube Downloader/
 |-- yt-dlp.exe
 |-- ffmpeg.exe
 |-- deno.exe
-|-- api key.txt
 \-- data/
     |-- app_settings.json
     \-- download_state.json
