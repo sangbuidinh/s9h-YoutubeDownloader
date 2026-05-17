@@ -1,22 +1,63 @@
-# User data and settings
+# User data and app state
 data/download_state.json
 data/app_settings.json
 data/cookies.txt
-www.youtube.com_cookies.txt
+data/*.log
+data/*.tmp
+
+# Examples are allowed
+!data/*.example.json
+!data/*.example.txt
+
+# Cookies / session files
+*cookie*.txt
+*cookies*.txt
+*.cookies
+www.youtube.com_cookies*.txt
 
 # Sensitive keys
 api key.txt
 *key*.txt
+*.key
+*.token
+*.secret
+secrets.*
+.env
+.env.*
 
-# Logs
+# Runtime binaries
+yt-dlp.exe
+ffmpeg.exe
+deno.exe
+data/bin/yt-dlp.exe
+data/bin/ffmpeg.exe
+data/bin/deno.exe
+*.exe
+*.dll
+
+# Build / package
+build/
+dist/
+*.spec
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz
+
+# Logs / temp
 *.log
+*.tmp
+*.temp
+*.part
 
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
+.venv/
+venv/
 
-# PyInstaller
-build/
-dist/
-*.spec
+# Windows
+Thumbs.db
+desktop.ini

@@ -1,105 +1,98 @@
-# YouTube Downloader Source
+# Mã Nguồn YouTube Downloader
 
-This is the source-code version of the Windows desktop app.
+Đây là phiên bản mã nguồn của ứng dụng Windows desktop.
 
-## How to run
+## Cách chạy
 
 ```powershell
 cd "D:\Youtube Downloader Source"
 python app.py
 ```
 
-## Required runtime files
+## Cấu trúc file chạy yêu cầu (Required runtime files)
 
-The app expects these files in the existing runtime folder:
-
-```text
-D:\Youtube Downloader\yt-dlp.exe
-D:\Youtube Downloader\ffmpeg.exe
-D:\Youtube Downloader\api key.txt
-```
-
-`api key.txt` is read only. The app never modifies it.
-
-Optional: place `deno.exe` next to `yt-dlp.exe` to let yt-dlp use Deno for YouTube JavaScript challenge solving. It remains external so it can be updated independently.
-
-When packaged, the app resolves its runtime folder from the location of `Youtube Downloaderbs.exe`. Keep these files next to the final executable:
+Dựa theo bản package, ứng dụng yêu cầu các công cụ và thư mục bên dưới nằm cạnh file thực thi chính:
 
 ```text
 Youtube Downloader/
 |-- Youtube Downloaderbs.exe
 |-- yt-dlp.exe
 |-- ffmpeg.exe
+|-- deno.exe
 |-- api key.txt
-\-- data
+\-- data/
+    |-- app_settings.json
     \-- download_state.json
 ```
 
-When running from source, app state is stored under `D:\Youtube Downloader Source\data`, and runtime tools are read from the source folder if present or from `D:\Youtube Downloader` during development.
+- `api key.txt`: File chỉ đọc (read-only). Ứng dụng không bao giờ sửa đổi file này.
+- `deno.exe`: Có thể dùng để yt-dlp giải quyết các thử thách JavaScript của YouTube. Các công cụ này được để bên ngoài file .exe nhằm mục đích có thể cập nhật độc lập mà không cần build lại app.
 
-## Download modes
+Khi chạy trực tiếp từ mã nguồn, dữ liệu cấu hình ứng dụng được lưu trữ ở `D:\Youtube Downloader Source\data`. Các công cụ chạy ứng dụng (như yt-dlp, ffmpeg) sẽ được ưu tiên đọc từ thư mục mã nguồn nếu có, hoặc đọc fallback từ `D:\Youtube Downloader` trong quá trình phát triển (development).
 
-The `Kiểu tải` dropdown controls which files are downloaded for selected videos:
+## Các chế độ tải (Download modes)
+
+Dropdown `Kiểu tải` điều khiển các file nào sẽ được tải xuống cho các video được chọn:
 
 1. `Video + Thumb`
 2. `Audio MP3 + Thumb`
 3. `Video + Audio MP3 + Thumb`
 
-The default mode is `Video + Thumb`. MP3 extraction requires `ffmpeg.exe`.
+Chế độ mặc định là `Video + Thumb`. Việc trích xuất MP3 yêu cầu phải có `ffmpeg.exe`.
 
-## Output structure
+## Cấu trúc thư mục đầu ra
 
-For a selected save folder, downloads are written as:
+Với một thư mục lưu file đã chọn, các file tải về sẽ được phân bổ theo cấu trúc sau:
 
 ```text
-<selected folder>
-\-- <Channel Name>
-    |-- video
+<Thư mục lưu>
+\-- <Tên Kênh>
+    |-- video/
     |   |-- Example Title.mp4
     |   |-- Example Title (2).mp4
     |   \-- Another Video Title.mp4
-    |-- thumb
+    |-- thumb/
     |   |-- Example Title.jpg
     |   |-- Example Title (2).jpg
     |   \-- Another Video Title.jpg
-    \-- audio
+    \-- audio/
         |-- Example Title.mp3
         |-- Example Title (2).mp3
         \-- Another Video Title.mp3
 ```
 
-`audio/` is created only when an MP3 download mode is used. The output channel folder should only contain folders created by this app: `video/`, `thumb/`, and `audio/` when audio is used. Temporary files are created outside the output folder and cleaned when possible.
+Thư mục `audio/` chỉ được tạo ra khi bạn dùng các chế độ tải MP3. Thư mục kênh đầu ra chỉ nên chứa các thư mục con do ứng dụng này tạo ra (`video/`, `thumb/`, và `audio/`). Các file tạm (temp) sẽ được tạo ra bên ngoài thư mục đầu ra này và sẽ tự động dọn dẹp khi có thể.
 
-Persistent app state is stored outside the output channel folder. In source mode it is stored at `D:\Youtube Downloader Source\data\download_state.json`; in packaged mode it is stored at `data\download_state.json` next to `Youtube Downloaderbs.exe`.
+Trạng thái ứng dụng được lưu bên ngoài thư mục kênh tải về. Khi chạy từ mã nguồn, trạng thái lưu tại `D:\Youtube Downloader Source\data\download_state.json`; khi chạy bản package, nó lưu tại `data\download_state.json` nằm ngay cạnh `Youtube Downloaderbs.exe`.
 
-`download_state.json` is the source of truth for video status. Saved `video_path`, `thumb_path`, and `audio_path` values are references only, because users may rename files after downloading.
+`download_state.json` là nguồn dữ liệu chuẩn duy nhất (source of truth) cho trạng thái của các video. Các giá trị đường dẫn `video_path`, `thumb_path`, và `audio_path` được lưu lại chỉ mang tính chất tham khảo cho UI, vì người dùng có thể đổi tên file gốc sau khi tải xuống.
 
-The last manually entered API key is stored outside the output channel folder at `data\app_settings.json` next to `download_state.json`. The app ignores missing or corrupted settings and starts with an empty API key field.
+API key cuối cùng được nhập bằng tay sẽ được lưu ở `data\app_settings.json`. Ứng dụng sẽ tự động bỏ qua nếu file cài đặt bị thiếu hoặc bị lỗi (corrupted) và sẽ khởi động với ô nhập API key trống.
 
-Manual status edits are saved immediately to `data/download_state.json` by `channel_id` and `video_id`. Manual overrides are used first on later loads until the user clears the manual status or successfully downloads the requested files again.
+Khi người dùng tự cập nhật trạng thái tải, chúng sẽ được lưu ngay lập tức vào `data/download_state.json` theo khóa `channel_id` và `video_id`. Trạng thái sửa đổi thủ công này sẽ được ưu tiên hiển thị ở các lần mở app sau này, cho đến khi người dùng xóa trạng thái thủ công đó hoặc tiến hành tải lại thành công.
 
-Downloaded files use the original YouTube video title as the filename, sanitized only for Windows filename compatibility. Video, thumbnail, and audio outputs share the same sanitized base filename.
+Các file tải về dùng đúng tên gốc của video trên YouTube, chỉ chuẩn hóa các ký tự không hợp lệ cho tương thích với quy tắc đặt tên file của Windows. Các file Video, hình thu nhỏ (thumbnail), và nhạc (audio) của cùng một video sẽ luôn dùng chung một tên gốc (base filename).
 
-Video downloads use yt-dlp best available format by default. The final output is merged to `.mp4` when possible.
+Quá trình tải video mặc định dùng định dạng tốt nhất từ yt-dlp. File xuất ra cuối cùng sẽ được tự động nối (merge) thành định dạng chuẩn `.mp4` khi có thể.
 
-## Download limit
+## Giới hạn tốc độ tải (Download limit)
 
-The speed limit field uses MB/s numbers only:
+Trường giới hạn tốc độ thiết kế riêng cho đơn vị MB/s:
 
-- Empty or `0` means unlimited.
-- `5` is passed to yt-dlp as `--limit-rate 5M`.
-- `1.5` is passed to yt-dlp as `--limit-rate 1.5M`.
-- Text, negative values, and command-like values such as `--anything` are rejected.
+- Bỏ trống hoặc nhập `0` có nghĩa là không giới hạn.
+- Nhập `5` sẽ truyền cho yt-dlp tham số `--limit-rate 5M`.
+- Nhập `1.5` sẽ truyền cho yt-dlp tham số `--limit-rate 1.5M`.
+- Chữ viết, số âm, hay các lệnh kiểu command như `--anything` đều sẽ bị tự động từ chối.
 
-## Loading more videos
+## Tải thêm video
 
-Short videos are hidden by default. The app uses `videos.list(contentDetails.duration)` and the UI threshold `Ẩn video dưới: [3] phút` to decide visibility. Use the `Hiển thị video ngắn` checkbox to show all loaded videos without refetching.
+Các video ngắn (shorts) sẽ được ẩn đi theo mặc định. Ứng dụng sử dụng API trả về `videos.list(contentDetails.duration)` và ngưỡng UI ở ô `Ẩn video dưới: [3] phút` để quyết định ẩn/hiện. Sử dụng checkbox `Hiển thị video ngắn` để xem lại toàn bộ các video đã lấy về mà không cần gọi API lại.
 
-The first fetch scans uploads until it has up to 100 visible videos after duration filtering, no more videos are available, or the 500-upload safety scan limit is reached. Use `Xem thêm video` to append the next older videos from the same uploads playlist.
+Lần gọi API đầu tiên sẽ quét qua danh sách tải lên (uploads playlist) cho đến khi lấy được đủ 100 video thỏa mãn điều kiện hiển thị (sau khi lọc thời lượng), hoặc khi không còn video nào nữa trên kênh, hoặc khi đạt ngưỡng giới hạn an toàn là quét qua 500 video. Dùng nút `Xem thêm video` để tiếp tục tải các video cũ hơn từ kênh đó.
 
-## Current limitations
+## Giới hạn thiết kế (Current limitations)
 
-- No SQLite database.
-- No JSON, TXT, CSV, metadata, or sidecar export.
-- No one-folder-per-video output.
-- No cloud sync or login system.
+- Không dùng database SQLite.
+- Không xuất dữ liệu metadata, sidecar, JSON, TXT, hay CSV.
+- Không chia cấu trúc một-thư-mục-cho-mỗi-video.
+- Không có hệ thống đồng bộ đám mây (cloud sync) hay đăng nhập.
