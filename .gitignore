@@ -1,0 +1,22 @@
+# User data and settings
+data/download_state.json
+data/app_settings.json
+data/cookies.txt
+www.youtube.com_cookies.txt
+
+# Sensitive keys
+api key.txt
+*key*.txt
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller
+build/
+dist/
+*.spec
