@@ -1,5 +1,11 @@
 # User data and app state
 data/download_state.json
+data/download_state.sqlite3
+data/download_state.sqlite3-*
+data/*.sqlite3
+data/*.sqlite3-*
+data/download_state.sqlite_export*.json
+data/backups/
 data/app_settings.json
 data/cookies.txt
 data/*.log
@@ -61,3 +67,10 @@ venv/
 # Windows
 Thumbs.db
 desktop.ini
+
+# Runtime state backups / reports
+data/download_state.json.bak.*
+data/*.bak.*
+data/validation_report*.json
+data/download_state.sqlite_export*.json
+data/backups/

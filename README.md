@@ -23,9 +23,11 @@ Youtube Downloader/
 |-- yt-dlp.exe
 |-- ffmpeg.exe
 |-- deno.exe
+|-- api key.txt
 \-- data/
     |-- app_settings.json
-    \-- download_state.json
+    |-- download_state.json
+    \-- download_state.sqlite3
 ```
 
 - `api key.txt`: File chỉ đọc (read-only). Ứng dụng không bao giờ sửa đổi file này.
@@ -66,13 +68,36 @@ Với một thư mục lưu file đã chọn, các file tải về sẽ được
 
 Thư mục `audio/` chỉ được tạo ra khi bạn dùng các chế độ tải MP3. Thư mục kênh đầu ra chỉ nên chứa các thư mục con do ứng dụng này tạo ra (`video/`, `thumb/`, và `audio/`). Các file tạm (temp) sẽ được tạo ra bên ngoài thư mục đầu ra này và sẽ tự động dọn dẹp khi có thể.
 
-Trạng thái ứng dụng được lưu bên ngoài thư mục kênh tải về. Khi chạy từ mã nguồn, trạng thái lưu tại `D:\Youtube Downloader Source\data\download_state.json`; khi chạy bản package, nó lưu tại `data\download_state.json` nằm ngay cạnh `Youtube Downloaderbs.exe`.
+Trạng thái ứng dụng được lưu bên ngoài thư mục kênh tải về. Backend runtime mặc định hiện là SQLite tại `data\download_state.sqlite3`. File `data\download_state.json` vẫn được giữ làm dữ liệu rollback/fallback và không bị xóa tự động, nhưng có thể cũ hơn SQLite nếu không export snapshot mới.
 
-`download_state.json` là nguồn dữ liệu chuẩn duy nhất (source of truth) cho trạng thái của các video. Các giá trị đường dẫn `video_path`, `thumb_path`, và `audio_path` được lưu lại chỉ mang tính chất tham khảo cho UI, vì người dùng có thể đổi tên file gốc sau khi tải xuống.
+`download_state.sqlite3` là nguồn dữ liệu runtime mặc định cho trạng thái của các video. Các giá trị đường dẫn `video_path`, `thumb_path`, và `audio_path` được lưu lại chỉ mang tính chất tham khảo cho UI, vì người dùng có thể đổi tên file gốc sau khi tải xuống. Runtime SQLite files (`data/*.sqlite3` và `data/*.sqlite3-*`) được ignore bởi git.
+
+Có thể ép backend bằng biến môi trường `YTDL_STATE_BACKEND`:
+
+```powershell
+$env:YTDL_STATE_BACKEND='json'    # rollback về JSON
+$env:YTDL_STATE_BACKEND='sqlite'  # ép dùng SQLite
+Remove-Item Env:YTDL_STATE_BACKEND
+```
+
+Các lệnh thủ công cho migration và kiểm tra dữ liệu:
+
+```powershell
+python scripts/migrate_download_state_to_sqlite.py
+python scripts/validate_download_state_migration.py
+```
+
+Các lệnh bảo trì SQLite runtime:
+
+```powershell
+python scripts/sqlite_state_health_check.py
+python scripts/backup_sqlite_state.py
+python scripts/export_sqlite_state_to_json.py
+```
 
 API key cuối cùng được nhập bằng tay sẽ được lưu ở `data\app_settings.json`. Ứng dụng sẽ tự động bỏ qua nếu file cài đặt bị thiếu hoặc bị lỗi (corrupted) và sẽ khởi động với ô nhập API key trống.
 
-Khi người dùng tự cập nhật trạng thái tải, chúng sẽ được lưu ngay lập tức vào `data/download_state.json` theo khóa `channel_id` và `video_id`. Trạng thái sửa đổi thủ công này sẽ được ưu tiên hiển thị ở các lần mở app sau này, cho đến khi người dùng xóa trạng thái thủ công đó hoặc tiến hành tải lại thành công.
+Khi người dùng tự cập nhật trạng thái tải, chúng sẽ được lưu ngay lập tức vào backend trạng thái đang được chọn theo khóa định danh video, không dùng tên file hoặc đường dẫn làm khóa chính. Trạng thái sửa đổi thủ công này sẽ được ưu tiên hiển thị ở các lần mở app sau này, cho đến khi người dùng xóa trạng thái thủ công đó hoặc tiến hành tải lại thành công.
 
 Các file tải về dùng đúng tên gốc của video trên YouTube, chỉ chuẩn hóa các ký tự không hợp lệ cho tương thích với quy tắc đặt tên file của Windows. Các file Video, hình thu nhỏ (thumbnail), và nhạc (audio) của cùng một video sẽ luôn dùng chung một tên gốc (base filename).
 
@@ -95,7 +120,7 @@ Lần gọi API đầu tiên sẽ quét qua danh sách tải lên (uploads playl
 
 ## Giới hạn thiết kế (Current limitations)
 
-- Không dùng database SQLite.
+- SQLite là backend trạng thái mặc định; JSON vẫn được giữ để rollback/fallback.
 - Không xuất dữ liệu metadata, sidecar, JSON, TXT, hay CSV.
 - Không chia cấu trúc một-thư-mục-cho-mỗi-video.
 - Không có hệ thống đồng bộ đám mây (cloud sync) hay đăng nhập.

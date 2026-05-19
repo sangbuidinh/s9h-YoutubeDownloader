@@ -1,6 +1,10 @@
 import json
+import os
+import sqlite3
+import sys
 import tempfile
 import time
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,7 +15,13 @@ from core.download_modes import (
     PART_VIDEO,
     required_parts,
 )
-from core.runtime_paths import data_dir, state_file
+from core.runtime_paths import data_dir, db_file, state_file
+
+STATE_BACKEND_ENV = "YTDL_STATE_BACKEND"
+BACKEND_JSON = "json"
+BACKEND_SQLITE = "sqlite"
+DEFAULT_BACKEND = BACKEND_SQLITE
+_BACKEND_WARNING_KEYS: set[str] = set()
 
 STATUS_NOT_DOWNLOADED = "Chưa tải"
 STATUS_DOWNLOADED = "Đã tải"
@@ -78,7 +88,43 @@ PARTS_BY_MISSING_STATUS = {
 }
 
 
+def get_state_backend_name() -> str:
+    return _selected_backend()
+
+
+def get_state_backend_reason() -> str:
+    return _selected_backend_reason()
+
+
+def is_sqlite_backend_enabled() -> bool:
+    return get_state_backend_name() == BACKEND_SQLITE
+
+
 def load_state() -> dict:
+    if is_sqlite_backend_enabled():
+        from core import db_store
+
+        return db_store.load_state()
+    return _json_load_state()
+
+
+def get_channel_video_entries(channel_id: str) -> dict:
+    if is_sqlite_backend_enabled():
+        from core import db_store
+
+        return db_store.get_channel_video_entries(channel_id)
+    return _json_get_channel_video_entries(channel_id)
+
+
+def get_video_entry(channel_id: str, video_id: str) -> dict | None:
+    if is_sqlite_backend_enabled():
+        from core import db_store
+
+        return db_store.get_video_entry(channel_id, video_id)
+    return _json_get_video_entry(channel_id, video_id)
+
+
+def _json_load_state() -> dict:
     state_path = state_file()
     if not state_path.exists():
         return _empty_state()
@@ -96,19 +142,85 @@ def load_state() -> dict:
     return data
 
 
-def get_channel_video_entries(channel_id: str) -> dict:
+def _json_get_channel_video_entries(channel_id: str) -> dict:
     if not channel_id:
         return {}
-    channel = load_state().get("channels", {}).get(channel_id, {})
+    channel = _json_load_state().get("channels", {}).get(channel_id, {})
     videos = channel.get("videos", {})
     return videos if isinstance(videos, dict) else {}
 
 
-def get_video_entry(channel_id: str, video_id: str) -> dict | None:
+def _json_get_video_entry(channel_id: str, video_id: str) -> dict | None:
     if not channel_id or not video_id:
         return None
-    entry = get_channel_video_entries(channel_id).get(video_id)
+    entry = _json_get_channel_video_entries(channel_id).get(video_id)
     return entry if isinstance(entry, dict) else None
+
+
+def _selected_backend() -> str:
+    backend, _reason = _resolve_state_backend()
+    return backend
+
+
+def _selected_backend_reason() -> str:
+    _backend, reason = _resolve_state_backend()
+    return reason
+
+
+def _resolve_state_backend() -> tuple[str, str]:
+    requested = (os.environ.get(STATE_BACKEND_ENV, "") or "").strip().lower()
+    if requested == BACKEND_JSON:
+        return BACKEND_JSON, "forced_json"
+    if requested == BACKEND_SQLITE:
+        if _sqlite_backend_ready():
+            return BACKEND_SQLITE, "forced_sqlite"
+        _warn_backend_once(
+            "sqlite_unavailable_forced",
+            f"[WARNING] {STATE_BACKEND_ENV}=sqlite but {db_file()} is missing, empty, or invalid; using JSON state backend.",
+        )
+        return BACKEND_JSON, "forced_sqlite_unavailable_fallback_json"
+    if requested:
+        _warn_backend_once(
+            f"invalid:{requested}",
+            f"[WARNING] Unsupported {STATE_BACKEND_ENV}={requested!r}; trying SQLite state backend first.",
+        )
+
+    if DEFAULT_BACKEND == BACKEND_SQLITE and _sqlite_backend_ready():
+        if requested:
+            return BACKEND_SQLITE, "invalid_env_fallback_sqlite"
+        return BACKEND_SQLITE, "default_sqlite"
+
+    if requested:
+        reason = "invalid_env_sqlite_unavailable_fallback_json"
+    else:
+        reason = "default_sqlite_unavailable_fallback_json"
+    _warn_backend_once(
+        "sqlite_unavailable_default",
+        f"[WARNING] SQLite state DB {db_file()} is missing, empty, or invalid; using JSON state backend.",
+    )
+    return BACKEND_JSON, reason
+
+
+def _sqlite_backend_ready() -> bool:
+    sqlite_path = db_file()
+    if not sqlite_path.exists():
+        return False
+    try:
+        with closing(sqlite3.connect(f"{sqlite_path.resolve().as_uri()}?mode=ro", uri=True)) as conn:
+            row = conn.execute("SELECT COUNT(*) FROM download_items").fetchone()
+    except sqlite3.Error:
+        return False
+    return bool(row and row[0] > 0)
+
+
+def _warn_backend_once(key: str, message: str) -> None:
+    if key in _BACKEND_WARNING_KEYS:
+        return
+    _BACKEND_WARNING_KEYS.add(key)
+    try:
+        print(message, file=sys.stderr)
+    except OSError:
+        pass
 
 
 def get_effective_status(entry: dict | None, download_mode: str = MODE_VIDEO_THUMB) -> str:
@@ -186,7 +298,68 @@ def missing_parts_for_mode(entry: dict | None, download_mode: str) -> tuple[str,
     return tuple(part for part in parts if part_status_from_entry(entry, part) != STATUS_DOWNLOADED)
 
 
+def _status_after_manual_clear(entry: dict, previous_manual_status: str | None, download_mode: str) -> str:
+    if (
+        isinstance(previous_manual_status, str)
+        and previous_manual_status
+        and entry.get("status") == previous_manual_status
+    ):
+        return _effective_status_from_explicit_part_states(entry, download_mode)
+    return get_effective_status(entry, download_mode)
+
+
+def _effective_status_from_explicit_part_states(entry: dict | None, download_mode: str) -> str:
+    if not isinstance(entry, dict):
+        return STATUS_NOT_DOWNLOADED
+
+    parts = required_parts(download_mode)
+    part_statuses = {part: _explicit_part_status_from_entry(entry, part) for part in parts}
+    if all(status == STATUS_DOWNLOADED for status in part_statuses.values()):
+        return STATUS_DOWNLOADED
+
+    downloaded_parts = [part for part, status in part_statuses.items() if status == STATUS_DOWNLOADED]
+    failed_parts = [part for part, status in part_statuses.items() if status == STATUS_ERROR]
+    if not downloaded_parts and failed_parts:
+        return STATUS_ERROR
+    if not downloaded_parts and not failed_parts:
+        return STATUS_NOT_DOWNLOADED
+
+    missing_parts = [part for part, status in part_statuses.items() if status != STATUS_DOWNLOADED]
+    return MISSING_STATUS_BY_PARTS.get(frozenset(missing_parts), STATUS_NOT_DOWNLOADED)
+
+
+def _explicit_part_status_from_entry(entry: dict | None, part: str) -> str:
+    if not isinstance(entry, dict):
+        return STATUS_NOT_DOWNLOADED
+    status = entry.get(PART_STATUS_KEYS.get(part, ""))
+    if status in (STATUS_NOT_DOWNLOADED, STATUS_DOWNLOADED, STATUS_ERROR):
+        return status
+    return STATUS_NOT_DOWNLOADED
+
+
 def update_manual_status(
+    channel_id: str,
+    channel_name: str,
+    save_base_folder: str,
+    video,
+    status: str,
+    paths=None,
+) -> None:
+    if is_sqlite_backend_enabled():
+        _sqlite_update_common_video_fields(channel_id, channel_name, save_base_folder, video, paths)
+        from core import db_store
+
+        db_store.update_manual_status(
+            channel_id,
+            getattr(video, "video_id", ""),
+            status,
+            save_base_folder=save_base_folder,
+        )
+        return
+    _json_update_manual_status(channel_id, channel_name, save_base_folder, video, status, paths)
+
+
+def _json_update_manual_status(
     channel_id: str,
     channel_name: str,
     save_base_folder: str,
@@ -199,13 +372,12 @@ def update_manual_status(
     if not channel_id or not getattr(video, "video_id", ""):
         return
 
-    state = load_state()
+    state = _json_load_state()
     channel = _ensure_channel(state, channel_id, channel_name, save_base_folder)
     videos = channel.setdefault("videos", {})
     existing = videos.get(video.video_id, {})
     entry = dict(existing) if isinstance(existing, dict) else {}
     _apply_common_video_fields(entry, channel_id, channel_name, save_base_folder, video, paths)
-    entry["status"] = status
     entry["manual_status"] = status
     entry["manual_override"] = True
     entry["updated_at"] = _now_iso()
@@ -222,29 +394,94 @@ def clear_manual_status(
     status: str | None = None,
     download_mode: str = MODE_VIDEO_THUMB,
 ) -> None:
+    if is_sqlite_backend_enabled():
+        from core import db_store
+
+        if paths is not None or status is not None:
+            _sqlite_update_common_video_fields(channel_id, channel_name, save_base_folder, video, paths)
+        db_store.clear_manual_status(
+            channel_id,
+            getattr(video, "video_id", ""),
+            save_base_folder=save_base_folder,
+        )
+        if status in SUPPORTED_STATUS_VALUES:
+            db_store.update_video_state(
+                channel_id,
+                getattr(video, "video_id", ""),
+                {"status": status},
+                save_base_folder=save_base_folder,
+            )
+        return
+    _json_clear_manual_status(channel_id, channel_name, save_base_folder, video, paths, status, download_mode)
+
+
+def _json_clear_manual_status(
+    channel_id: str,
+    channel_name: str,
+    save_base_folder: str,
+    video,
+    paths=None,
+    status: str | None = None,
+    download_mode: str = MODE_VIDEO_THUMB,
+) -> None:
     if not channel_id or not getattr(video, "video_id", ""):
         return
 
-    state = load_state()
+    state = _json_load_state()
     channel = _ensure_channel(state, channel_id, channel_name, save_base_folder)
     videos = channel.setdefault("videos", {})
     existing = videos.get(video.video_id, {})
     if not isinstance(existing, dict) and paths is None and status is None:
         return
     entry = dict(existing) if isinstance(existing, dict) else {}
+    previous_manual_status = entry.get("manual_status")
     _apply_common_video_fields(entry, channel_id, channel_name, save_base_folder, video, paths)
     entry.pop("manual_status", None)
     entry.pop("manual_override", None)
     if status in SUPPORTED_STATUS_VALUES:
         entry["status"] = status
     else:
-        entry["status"] = get_effective_status(entry, download_mode)
+        entry["status"] = _status_after_manual_clear(entry, previous_manual_status, download_mode)
     entry["updated_at"] = _now_iso()
     videos[video.video_id] = entry
     _save_state(state)
 
 
 def update_video_part_state(
+    channel_id: str,
+    channel_name: str,
+    save_base_folder: str,
+    video,
+    paths,
+    part: str,
+    part_status: str,
+    download_mode: str = MODE_VIDEO_THUMB,
+) -> None:
+    if is_sqlite_backend_enabled():
+        _sqlite_update_video_part_state(
+            channel_id,
+            channel_name,
+            save_base_folder,
+            video,
+            paths,
+            part,
+            part_status,
+            download_mode,
+        )
+        return
+    _json_update_video_part_state(
+        channel_id,
+        channel_name,
+        save_base_folder,
+        video,
+        paths,
+        part,
+        part_status,
+        download_mode,
+    )
+
+
+def _json_update_video_part_state(
     channel_id: str,
     channel_name: str,
     save_base_folder: str,
@@ -261,7 +498,7 @@ def update_video_part_state(
     if not channel_id or not getattr(video, "video_id", ""):
         return
 
-    state = load_state()
+    state = _json_load_state()
     channel = _ensure_channel(state, channel_id, channel_name, save_base_folder)
     videos = channel.setdefault("videos", {})
     existing = videos.get(video.video_id, {})
@@ -286,11 +523,38 @@ def reconcile_downloaded_item_state(
     paths,
     download_mode: str = MODE_VIDEO_THUMB,
 ) -> tuple[str, str]:
+    if is_sqlite_backend_enabled():
+        return _sqlite_reconcile_downloaded_item_state(
+            channel_id,
+            channel_name,
+            save_base_folder,
+            video,
+            paths,
+            download_mode,
+        )
+    return _json_reconcile_downloaded_item_state(
+        channel_id,
+        channel_name,
+        save_base_folder,
+        video,
+        paths,
+        download_mode,
+    )
+
+
+def _json_reconcile_downloaded_item_state(
+    channel_id: str,
+    channel_name: str,
+    save_base_folder: str,
+    video,
+    paths,
+    download_mode: str = MODE_VIDEO_THUMB,
+) -> tuple[str, str]:
     """Reconcile the current run's final files back into download_state.json."""
     if not channel_id or not getattr(video, "video_id", ""):
         return STATUS_NOT_DOWNLOADED, STATUS_NOT_DOWNLOADED
 
-    state = load_state()
+    state = _json_load_state()
     channel = _ensure_channel(state, channel_id, channel_name, save_base_folder)
     videos = channel.setdefault("videos", {})
     existing = videos.get(video.video_id, {})
@@ -329,10 +593,24 @@ def update_video_state(
     paths,
     status: str,
 ) -> None:
+    if is_sqlite_backend_enabled():
+        _sqlite_update_video_state(channel_id, channel_name, save_base_folder, video, paths, status)
+        return
+    _json_update_video_state(channel_id, channel_name, save_base_folder, video, paths, status)
+
+
+def _json_update_video_state(
+    channel_id: str,
+    channel_name: str,
+    save_base_folder: str,
+    video,
+    paths,
+    status: str,
+) -> None:
     if not channel_id or not getattr(video, "video_id", ""):
         return
 
-    state = load_state()
+    state = _json_load_state()
     channel = _ensure_channel(state, channel_id, channel_name, save_base_folder)
     videos = channel.setdefault("videos", {})
     existing = videos.get(video.video_id, {})
@@ -351,6 +629,185 @@ def update_video_state(
     entry["updated_at"] = _now_iso()
     videos[video.video_id] = entry
     _save_state(state)
+
+
+def _sqlite_update_common_video_fields(
+    channel_id: str,
+    channel_name: str,
+    save_base_folder: str,
+    video,
+    paths=None,
+) -> None:
+    if not channel_id or not getattr(video, "video_id", ""):
+        return
+    from core import db_store
+
+    updates = _sqlite_common_video_updates(channel_name, video, paths)
+    db_store.update_video_state(
+        channel_id,
+        video.video_id,
+        updates,
+        save_base_folder=save_base_folder,
+    )
+
+
+def _sqlite_update_video_part_state(
+    channel_id: str,
+    channel_name: str,
+    save_base_folder: str,
+    video,
+    paths,
+    part: str,
+    part_status: str,
+    download_mode: str,
+) -> None:
+    if part not in PART_STATUS_KEYS:
+        raise ValueError("Unsupported file part")
+    if part_status not in (STATUS_NOT_DOWNLOADED, STATUS_DOWNLOADED, STATUS_ERROR):
+        raise ValueError("Unsupported part status")
+    if not channel_id or not getattr(video, "video_id", ""):
+        return
+    from core import db_store
+
+    _sqlite_update_common_video_fields(channel_id, channel_name, save_base_folder, video, paths)
+    filename, file_path = _sqlite_part_file_values(paths, part)
+    db_store.update_video_part_state(
+        channel_id,
+        video.video_id,
+        part,
+        filename=filename,
+        file_path=file_path,
+        status=part_status,
+        save_base_folder=save_base_folder,
+        download_mode=download_mode,
+        **_sqlite_common_video_updates(channel_name, video, paths),
+    )
+
+
+def _sqlite_reconcile_downloaded_item_state(
+    channel_id: str,
+    channel_name: str,
+    save_base_folder: str,
+    video,
+    paths,
+    download_mode: str,
+) -> tuple[str, str]:
+    if not channel_id or not getattr(video, "video_id", ""):
+        return STATUS_NOT_DOWNLOADED, STATUS_NOT_DOWNLOADED
+    from core import db_store
+
+    existing_entry = db_store.get_video_entry(channel_id, video.video_id, save_base_folder=save_base_folder)
+    old_status = get_effective_status(existing_entry, download_mode)
+    _sqlite_update_common_video_fields(channel_id, channel_name, save_base_folder, video, paths)
+
+    has_downloaded_required_part = False
+    for part in required_parts(download_mode):
+        part_path = _part_final_path(paths, part)
+        part_status = STATUS_DOWNLOADED if _file_exists_with_size(part_path) else STATUS_NOT_DOWNLOADED
+        has_downloaded_required_part = has_downloaded_required_part or part_status == STATUS_DOWNLOADED
+        filename, file_path = _sqlite_part_file_values(paths, part)
+        db_store.update_video_part_state(
+            channel_id,
+            video.video_id,
+            part,
+            filename=filename,
+            file_path=file_path,
+            status=part_status,
+            save_base_folder=save_base_folder,
+            download_mode=download_mode,
+            **_sqlite_common_video_updates(channel_name, video, paths),
+        )
+
+    if has_downloaded_required_part:
+        db_store.clear_manual_status(channel_id, video.video_id, save_base_folder=save_base_folder)
+
+    new_entry = db_store.get_video_entry(channel_id, video.video_id, save_base_folder=save_base_folder)
+    new_status = get_effective_status(new_entry, download_mode)
+    db_store.update_video_state(
+        channel_id,
+        video.video_id,
+        {"status": new_status, **({"downloaded_at": _now_iso()} if new_status == STATUS_DOWNLOADED else {})},
+        save_base_folder=save_base_folder,
+    )
+    return old_status, new_status
+
+
+def _sqlite_update_video_state(
+    channel_id: str,
+    channel_name: str,
+    save_base_folder: str,
+    video,
+    paths,
+    status: str,
+) -> None:
+    if not channel_id or not getattr(video, "video_id", ""):
+        return
+    from core import db_store
+
+    updates = _sqlite_common_video_updates(channel_name, video, paths)
+    if paths is not None:
+        updates.update(
+            {
+                "video_filename": paths.video_path.name,
+                "thumb_filename": paths.thumb_path.name,
+                "audio_filename": paths.audio_path.name,
+                "video_path": str(paths.video_path),
+                "thumb_path": str(paths.thumb_path),
+                "audio_path": str(paths.audio_path),
+            }
+        )
+    if status == STATUS_DOWNLOADED:
+        updates["video_status"] = STATUS_DOWNLOADED
+        updates["thumb_status"] = STATUS_DOWNLOADED
+        updates["downloaded_at"] = _now_iso()
+    elif status == STATUS_ERROR:
+        updates["video_status"] = STATUS_ERROR
+        updates["thumb_status"] = STATUS_ERROR
+    updates["status"] = status
+    db_store.update_video_state(
+        channel_id,
+        video.video_id,
+        updates,
+        save_base_folder=save_base_folder,
+    )
+
+
+def _sqlite_common_video_updates(channel_name: str, video, paths=None) -> dict:
+    updates = {
+        "channel_name": channel_name,
+        "original_title": getattr(video, "title", ""),
+    }
+    filename_base = getattr(video, "sanitized_filename_base", "")
+    if paths is not None:
+        filename_base = filename_base or paths.video_path.stem
+    if filename_base:
+        updates["sanitized_filename_base"] = filename_base
+    if hasattr(video, "display_order"):
+        updates["display_order_at_download"] = video.display_order
+    if paths is not None:
+        updates.update(
+            {
+                "video_filename": paths.video_path.name,
+                "thumb_filename": paths.thumb_path.name,
+                "audio_filename": paths.audio_path.name,
+                "video_path": str(paths.video_path),
+                "thumb_path": str(paths.thumb_path),
+                "audio_path": str(paths.audio_path),
+            }
+        )
+    return updates
+
+
+def _sqlite_part_file_values(paths, part: str) -> tuple[str | None, str | None]:
+    if paths is None:
+        return None, None
+    if part == PART_VIDEO:
+        return paths.video_path.name, str(paths.video_path)
+    if part == PART_THUMB:
+        return paths.thumb_path.name, str(paths.thumb_path)
+    if part == PART_AUDIO:
+        return paths.audio_path.name, str(paths.audio_path)
+    raise ValueError("Unsupported file part")
 
 
 def _ensure_channel(state: dict, channel_id: str, channel_name: str, save_base_folder: str) -> dict:

@@ -24,6 +24,10 @@ def state_file() -> Path:
     return data_dir() / "download_state.json"
 
 
+def db_file() -> Path:
+    return data_dir() / "download_state.sqlite3"
+
+
 def runtime_file(filename: str) -> Path:
     primary = app_root() / filename
     if primary.exists() or is_frozen():
