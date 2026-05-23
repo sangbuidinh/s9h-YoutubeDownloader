@@ -83,6 +83,8 @@ def classify_general_error(text: str) -> FriendlyError:
         return FRIENDLY_ERRORS["missing_ffmpeg"]
     if _contains_sqlite_state_error(lower):
         return FRIENDLY_ERRORS["sqlite_state"]
+    if _contains_premiere_safe_mp4_error(lower):
+        return FRIENDLY_ERRORS["premiere_safe_mp4"]
     if _contains_stream_interrupted(lower):
         return FRIENDLY_ERRORS["stream_interrupted"]
     if _contains_audio_extraction(lower):
@@ -213,6 +215,17 @@ def _contains_missing_ytdlp(text: str) -> bool:
 def _contains_missing_ffmpeg(text: str) -> bool:
     lower = (text or "").lower()
     return "ffmpeg.exe missing" in lower or "ffmpeg not found" in lower
+
+
+def _contains_premiere_safe_mp4_error(text: str) -> bool:
+    lower = (text or "").lower()
+    return (
+        "premiere_safe_mp4_validation_failed" in lower
+        or "requested format is not available" in lower
+        or "requested format not available" in lower
+        or "no video formats found" in lower
+        or "no suitable formats" in lower
+    )
 
 
 def _contains_sqlite_state_error(text: str) -> bool:
@@ -474,6 +487,16 @@ FRIENDLY_ERRORS = {
         (
             r"Đặt ffmpeg.exe trong data\bin của thư mục portable",
             "Sau đó tải lại video",
+        ),
+    ),
+    "premiere_safe_mp4": FriendlyError(
+        "ERROR",
+        "Không có bản MP4 H.264/AAC phù hợp cho Premiere",
+        "Video này không có định dạng MP4 H.264/AAC hợp lệ ở 1080p trở xuống, hoặc file tải về không đạt chuẩn Premiere-safe.",
+        (
+            "Bỏ qua video này",
+            "Cập nhật yt-dlp.exe rồi thử lại",
+            "Nếu vẫn lỗi, tải thủ công bằng chế độ khác ngoài tool",
         ),
     ),
     "sqlite_state": FriendlyError(

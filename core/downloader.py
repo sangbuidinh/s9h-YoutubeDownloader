@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.download_modes import (
+    MODE_VIDEO_AUDIO_THUMB,
     MODE_VIDEO_THUMB,
     PART_AUDIO,
     PART_THUMB,
@@ -43,11 +44,9 @@ from core.state_store import (
 
 
 USER_AGENT = "YouTube Downloader Source/1.0"
-PREFERRED_VIDEO_FORMAT = (
-    "bv*[ext=mp4][vcodec^=avc1]+ba[ext=m4a]/"
-    "bv*[ext=mp4]+ba[ext=m4a]/"
-    "b[ext=mp4]/"
-    "best"
+PREMIERE_SAFE_VIDEO_FORMAT = (
+    "bv*[height<=1080][ext=mp4][vcodec^=avc1]+ba[ext=m4a][acodec^=mp4a]/"
+    "b[height<=1080][ext=mp4][vcodec^=avc1][acodec^=mp4a]"
 )
 MAX_FINAL_PATH_LENGTH = 240
 OUTPUT_PATH_TOO_LONG_MESSAGE = (
@@ -188,6 +187,7 @@ def download_items(
 ) -> None:
     validate_download_environment(options)
     ensure_output_dirs(options.base_folder, options.channel_name, options.download_mode)
+    _log_runtime_tool_summary(log)
     downloaded_count = 0
     failed_count = 0
     skipped_count = 0
@@ -246,7 +246,7 @@ def download_items(
                     _remember_run_part(run_parts_current_run, part)
                     if part == PART_VIDEO:
                         log(f"[INFO] Downloading {stem}.mp4")
-                        log("[INFO] Preferred codec: H.264/AVC MP4 when available.")
+                        log("[INFO] Premiere-safe mode: MP4 H.264/AAC only, max 1080p.")
                         _download_video(
                             video.video_id,
                             stem,
@@ -258,15 +258,53 @@ def download_items(
                         )
                     elif part == PART_AUDIO:
                         log(f"[INFO] Downloading audio {stem}.mp3")
-                        _download_audio(
-                            video.video_id,
-                            stem,
-                            temp_path,
-                            paths.audio_path,
-                            options,
-                            log,
-                            cancel_controller,
-                        )
+                        if options.download_mode == MODE_VIDEO_AUDIO_THUMB:
+                            if not _premiere_safe_mp4_ready(paths.video_path):
+                                current_part = PART_VIDEO
+                                _remember_run_part(run_parts_current_run, PART_VIDEO)
+                                log(f"[INFO] Local MP4 missing or invalid; downloading {stem}.mp4 for MP3 extraction.")
+                                log("[INFO] Premiere-safe mode: MP4 H.264/AAC only, max 1080p.")
+                                _download_video(
+                                    video.video_id,
+                                    stem,
+                                    temp_path,
+                                    paths.video_path,
+                                    options,
+                                    log,
+                                    cancel_controller,
+                                )
+                                update_video_part_state(
+                                    options.channel_id,
+                                    options.channel_name,
+                                    options.base_folder,
+                                    video,
+                                    paths,
+                                    PART_VIDEO,
+                                    STATUS_DOWNLOADED,
+                                    options.download_mode,
+                                )
+                                entry = get_video_entry(options.channel_id, video.video_id)
+                                video.status = get_effective_status(entry, options.download_mode)
+                                status_callback(video)
+                                log(_part_success_message(PART_VIDEO, stem))
+                            current_part = PART_AUDIO
+                            _extract_mp3_from_video(
+                                paths.video_path,
+                                temp_path,
+                                paths.audio_path,
+                                log,
+                                cancel_controller,
+                            )
+                        else:
+                            _download_audio(
+                                video.video_id,
+                                stem,
+                                temp_path,
+                                paths.audio_path,
+                                options,
+                                log,
+                                cancel_controller,
+                            )
                     elif part == PART_THUMB:
                         log(f"[INFO] Downloading thumbnail {stem}.jpg")
                         _download_thumbnail(video, stem, temp_path, paths.thumb_path, options, log, cancel_controller)
@@ -464,13 +502,13 @@ def _download_video(
     cancel_controller: DownloadController | None = None,
 ) -> None:
     url = f"https://www.youtube.com/watch?v={video_id}"
+    if final_path.exists() and _premiere_safe_mp4_ready(final_path):
+        return
     output_template = str(temp_dir / f"{_safe_temp_stem(video_id)}.%(ext)s")
     command = _base_ytdlp_command(options) + [
         "-f",
-        PREFERRED_VIDEO_FORMAT,
+        PREMIERE_SAFE_VIDEO_FORMAT,
         "--merge-output-format",
-        "mp4",
-        "--remux-video",
         "mp4",
         "--no-write-info-json",
         "--no-write-description",
@@ -481,6 +519,7 @@ def _download_video(
     ]
     _run_ytdlp_with_retries(command, options, log, cancel_controller)
     _move_single_file(temp_dir, "*.mp4", final_path, log)
+    _validate_premiere_safe_mp4(final_path, log)
 
 
 def _download_audio(
@@ -511,6 +550,69 @@ def _download_audio(
     _move_single_file(temp_dir, "*.mp3", final_path, log)
 
 
+def _extract_mp3_from_video(
+    source_video_path: Path,
+    temp_dir: Path,
+    final_audio_path: Path,
+    log=None,
+    cancel_controller: DownloadController | None = None,
+) -> None:
+    _validate_premiere_safe_mp4(source_video_path, log)
+    if _final_file_ready(final_audio_path):
+        return
+
+    temp_mp3_path = temp_dir / f"{_safe_temp_stem(final_audio_path.stem)}.mp3"
+    command = [
+        str(runtime_file("ffmpeg.exe")),
+        "-y",
+        "-i",
+        str(source_video_path),
+        "-vn",
+        "-codec:a",
+        "libmp3lame",
+        "-q:a",
+        "0",
+        str(temp_mp3_path),
+    ]
+    _run_ffmpeg_for_audio(command, cancel_controller)
+    if not _final_file_ready(temp_mp3_path):
+        raise DownloadError("audio extraction failed")
+    _move_with_retry(temp_mp3_path, final_audio_path, log)
+    if not _final_file_ready(final_audio_path):
+        raise DownloadError("audio extraction failed")
+
+
+def _run_ffmpeg_for_audio(command: list[str], cancel_controller: DownloadController | None = None) -> str:
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    process = None
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=creationflags,
+        )
+        if cancel_controller is not None:
+            cancel_controller.set_current_process(process)
+        stdout, stderr = process.communicate()
+    except FileNotFoundError:
+        raise DownloadError("ffmpeg.exe missing")
+    except KeyboardInterrupt:
+        raise DownloadCancelled("download cancelled/interrupted")
+    finally:
+        if process is not None and cancel_controller is not None:
+            cancel_controller.clear_current_process(process)
+
+    if process.returncode == 0:
+        return f"{stdout}\n{stderr}"
+    if _cancel_requested(cancel_controller):
+        raise DownloadCancelled("download cancelled/interrupted")
+    raise DownloadError("audio extraction failed")
+
+
 def _download_thumbnail(
     video,
     stem: str,
@@ -522,6 +624,17 @@ def _download_thumbnail(
 ) -> None:
     url = f"https://www.youtube.com/watch?v={video.video_id}"
     output_template = str(temp_dir / f"{_safe_temp_stem(video.video_id)}.%(ext)s")
+    if video.thumbnail_url:
+        try:
+            log("[INFO] Downloading thumbnail from API URL first.")
+            _raise_if_cancelled(cancel_controller)
+            _download_thumbnail_from_url(video.thumbnail_url, temp_dir / f"{_safe_temp_stem(video.video_id)}.jpg", final_path, log)
+            return
+        except DownloadCancelled:
+            raise
+        except DownloadError:
+            log("[WARNING] API thumbnail download failed, falling back to yt-dlp thumbnail.")
+
     command = _base_ytdlp_command(options) + [
         "--skip-download",
         "--write-thumbnail",
@@ -539,14 +652,9 @@ def _download_thumbnail(
     except YtdlpExecutionError as exc:
         if exc.bot_check or exc.http_403:
             raise
-        if not video.thumbnail_url:
-            raise
+        raise
     except DownloadError:
-        if not video.thumbnail_url:
-            raise DownloadError("thumbnail download failed")
-
-    _raise_if_cancelled(cancel_controller)
-    _download_thumbnail_from_url(video.thumbnail_url, temp_dir / f"{_safe_temp_stem(video.video_id)}.jpg", final_path, log)
+        raise DownloadError("thumbnail download failed")
 
 
 def _base_ytdlp_command(options: DownloadOptions) -> list[str]:
@@ -555,6 +663,18 @@ def _base_ytdlp_command(options: DownloadOptions) -> list[str]:
         str(runtime_file("yt-dlp.exe")),
         "--no-playlist",
         "--no-overwrites",
+        "--retries",
+        "30",
+        "--fragment-retries",
+        "30",
+        "--file-access-retries",
+        "10",
+        "--socket-timeout",
+        "60",
+        "--http-chunk-size",
+        "1M",
+        "-N",
+        "4",
         "--ffmpeg-location",
         str(runtime_file("ffmpeg.exe").parent),
     ]
@@ -572,8 +692,209 @@ def _base_ytdlp_command(options: DownloadOptions) -> list[str]:
     return command
 
 
+def _premiere_safe_mp4_ready(path: Path) -> bool:
+    try:
+        _validate_premiere_safe_mp4(path)
+    except DownloadError:
+        return False
+    return True
+
+
+def _validate_premiere_safe_mp4(path: Path, log=None) -> None:
+    try:
+        if not path.exists():
+            _fail_premiere_safe_validation(path, "file does not exist", log)
+        if not path.is_file():
+            _fail_premiere_safe_validation(path, "path is not a file", log)
+        if path.suffix.lower() != ".mp4":
+            _fail_premiere_safe_validation(path, "file extension is not .mp4", log)
+        if path.stat().st_size <= 0:
+            _fail_premiere_safe_validation(path, "file size is zero", log)
+    except OSError as exc:
+        _fail_premiere_safe_validation(path, f"file check failed: {type(exc).__name__}", log)
+
+    try:
+        output = _probe_media_with_ffmpeg(path)
+    except DownloadError as exc:
+        message = str(exc)
+        if message == "ffmpeg.exe missing":
+            raise
+        reason = message.removeprefix("premiere_safe_mp4_validation_failed: ").strip() or "unable to probe media"
+        _fail_premiere_safe_validation(path, reason, log)
+    ok, reason = _parse_premiere_safe_probe_output(output)
+    if not ok:
+        _fail_premiere_safe_validation(path, reason, log)
+
+
+def _fail_premiere_safe_validation(path: Path, reason: str, log=None) -> None:
+    if path.suffix.lower() == ".mp4":
+        _delete_invalid_file(path, log)
+    raise DownloadError(f"premiere_safe_mp4_validation_failed: {reason}")
+
+
+def _delete_invalid_file(path: Path, log=None) -> None:
+    try:
+        if path.exists() and path.is_file():
+            path.unlink()
+            if log:
+                log("[WARNING] Removed invalid Premiere-safe MP4 output.")
+    except OSError:
+        if log:
+            log("[WARNING] Invalid Premiere-safe MP4 output could not be removed.")
+
+
+def _probe_media_with_ffmpeg(path: Path) -> str:
+    ffmpeg_path = runtime_file("ffmpeg.exe")
+    ffprobe_path = ffmpeg_path.with_name("ffprobe.exe")
+    if ffprobe_path.exists():
+        output = _run_probe_command(
+            [
+                str(ffprobe_path),
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type,codec_name,codec_tag_string,width,height",
+                "-of",
+                "compact=p=0:nk=0",
+                str(path),
+            ]
+        )
+        if output.strip():
+            return output
+
+    output = _run_probe_command([str(ffmpeg_path), "-hide_banner", "-i", str(path)])
+    if output.strip():
+        return output
+    raise DownloadError("premiere_safe_mp4_validation_failed: unable to probe media")
+
+
+def _run_probe_command(command: list[str]) -> str:
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            creationflags=creationflags,
+        )
+    except FileNotFoundError:
+        raise DownloadError("ffmpeg.exe missing")
+    except subprocess.TimeoutExpired:
+        raise DownloadError("premiere_safe_mp4_validation_failed: media probe timed out")
+    return f"{result.stdout}\n{result.stderr}"
+
+
+def _parse_premiere_safe_probe_output(output: str) -> tuple[bool, str]:
+    lines = [line.strip() for line in (output or "").splitlines() if line.strip()]
+    video_lines = [line for line in lines if _is_video_stream_line(line)]
+    audio_lines = [line for line in lines if _is_audio_stream_line(line)]
+    if not video_lines:
+        return False, "no video stream"
+    if not audio_lines:
+        return False, "no audio stream"
+
+    video_line = video_lines[0]
+    audio_line = audio_lines[0]
+    if not _contains_h264_video_codec(video_line):
+        return False, "video codec is not H.264/AVC"
+    if not _contains_aac_audio_codec(audio_line):
+        return False, "audio codec is not AAC"
+
+    height = _extract_video_height(video_line)
+    if height is None:
+        return False, "video height is unknown"
+    if height > 1080:
+        return False, "video height is above 1080p"
+    return True, ""
+
+
+def _is_video_stream_line(line: str) -> bool:
+    lower = line.lower()
+    return "video:" in lower or "codec_type=video" in lower
+
+
+def _is_audio_stream_line(line: str) -> bool:
+    lower = line.lower()
+    return "audio:" in lower or "codec_type=audio" in lower
+
+
+def _contains_h264_video_codec(line: str) -> bool:
+    lower = line.lower()
+    return "codec_name=h264" in lower or "codec_tag_string=avc1" in lower or "video: h264" in lower or "avc1" in lower
+
+
+def _contains_aac_audio_codec(line: str) -> bool:
+    lower = line.lower()
+    return "codec_name=aac" in lower or "codec_tag_string=mp4a" in lower or "audio: aac" in lower or "mp4a" in lower
+
+
+def _extract_video_height(line: str) -> int | None:
+    height_match = re.search(r"(?:^|[|,\s])height=(\d{2,5})(?:$|[|,\s])", line.lower())
+    if height_match:
+        return int(height_match.group(1))
+    resolution_match = re.search(r"(?<![0-9])(\d{2,5})x(\d{2,5})(?![0-9])", line.lower())
+    if resolution_match:
+        return int(resolution_match.group(2))
+    return None
+
+
 def _deno_runtime_path() -> Path:
     return runtime_file("deno.exe")
+
+
+def _log_runtime_tool_summary(log) -> None:
+    ytdlp_path = runtime_file("yt-dlp.exe")
+    ffmpeg_path = runtime_file("ffmpeg.exe")
+    deno_path = _deno_runtime_path()
+
+    ytdlp_version = _get_command_version(ytdlp_path, ["--version"])
+    if ytdlp_version:
+        log(f"[INFO] yt-dlp version: {ytdlp_version}")
+    else:
+        log("[INFO] yt-dlp version: unavailable")
+
+    ffmpeg_version = _get_command_version(ffmpeg_path, ["-version"]) if ffmpeg_path.exists() else ""
+    if ffmpeg_path.exists() and ffmpeg_version:
+        log(f"[INFO] ffmpeg found: yes ({ffmpeg_version})")
+    elif ffmpeg_path.exists():
+        log("[INFO] ffmpeg found: yes (version unavailable)")
+    else:
+        log("[INFO] ffmpeg found: no")
+
+    deno_version = _get_command_version(deno_path, ["--version"]) if deno_path.exists() else ""
+    if deno_path.exists() and deno_version:
+        log(f"[INFO] deno found: yes ({deno_version})")
+    elif deno_path.exists():
+        log("[INFO] deno found: yes (version unavailable)")
+    else:
+        log("[INFO] deno found: no")
+
+
+def _get_command_version(path: Path, args: list[str]) -> str:
+    if not path.exists():
+        return ""
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        result = subprocess.run(
+            [str(path), *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            creationflags=creationflags,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    output = result.stdout or result.stderr or ""
+    for line in output.splitlines():
+        line = line.strip()
+        if line:
+            return line
+    return ""
 
 
 def _cancel_requested(cancel_controller: DownloadController | None) -> bool:
@@ -604,11 +925,13 @@ def _run_ytdlp_with_retries(
     http_403_delays = [10, 30]
     http_403_retries = 0
     bot_check_retries = 0
+    stream_interrupted_retried = False
+    current_command = list(command)
 
     while True:
         _raise_if_cancelled(cancel_controller)
         try:
-            stderr = _run_ytdlp(command, cancel_controller)
+            stderr = _run_ytdlp(current_command, cancel_controller)
             if (
                 SHOW_TECHNICAL_WARNINGS
                 and stderr
@@ -638,6 +961,15 @@ def _run_ytdlp_with_retries(
                     f"Retrying in {delay} seconds (retry {http_403_retries}/2)."
                 )
                 _sleep_with_cancel(delay, cancel_controller)
+                continue
+
+            if _contains_stream_interrupted_output(exc.combined_output) and not stream_interrupted_retried:
+                stream_interrupted_retried = True
+                current_command = _ensure_flag(
+                    _replace_option(command, "--http-chunk-size", "512K"),
+                    "--no-continue",
+                )
+                log("[WARNING] Stream interrupted. Retrying once with safer chunk settings.")
                 continue
 
             raise
@@ -696,9 +1028,9 @@ def _classify_ytdlp_error(output: str) -> str:
         return "yt-dlp needs a supported JavaScript runtime for this YouTube extraction"
     if "private video" in lower:
         return "private video"
+    if _contains_premiere_safe_format_error(output):
+        return "no Premiere-safe MP4 H.264/AAC format available"
     if "video unavailable" in lower or "unavailable" in lower:
-        return "video unavailable"
-    if "requested format is not available" in lower:
         return "video unavailable"
     if "permission denied" in lower or "access is denied" in lower or "winerror 5" in lower:
         return "file permission denied"
@@ -727,6 +1059,56 @@ def _contains_http_403_error(stderr: str) -> bool:
 def _contains_missing_js_runtime_error(stderr: str) -> bool:
     lower = (stderr or "").lower()
     return "no supported javascript runtime" in lower or "javascript runtime" in lower or "ejs" in lower
+
+
+def _contains_premiere_safe_format_error(text: str) -> bool:
+    lower = (text or "").lower()
+    return (
+        "premiere_safe_mp4_validation_failed" in lower
+        or "requested format is not available" in lower
+        or "requested format not available" in lower
+        or "no video formats found" in lower
+        or "no suitable formats" in lower
+    )
+
+
+def _contains_stream_interrupted_output(text: str) -> bool:
+    lower = (text or "").lower()
+    return (
+        "bytes read" in lower
+        or "more expected" in lower
+        or "read timed out" in lower
+        or "fragment" in lower
+        or "got error" in lower
+        or "giving up after" in lower
+        or "connection reset" in lower
+    )
+
+
+def _replace_option(command: list[str], option: str, value: str) -> list[str]:
+    replaced = []
+    index = 0
+    while index < len(command):
+        if command[index] == option:
+            index += 2
+            continue
+        replaced.append(command[index])
+        index += 1
+    insert_at = _option_insert_index(replaced)
+    return [*replaced[:insert_at], option, value, *replaced[insert_at:]]
+
+
+def _ensure_flag(command: list[str], flag: str) -> list[str]:
+    if flag in command:
+        return list(command)
+    insert_at = _option_insert_index(command)
+    return [*command[:insert_at], flag, *command[insert_at:]]
+
+
+def _option_insert_index(command: list[str]) -> int:
+    if command and re.match(r"https?://", command[-1], flags=re.IGNORECASE):
+        return len(command) - 1
+    return len(command)
 
 
 def _validate_output_paths(paths, parts: tuple[str, ...]) -> None:
@@ -866,17 +1248,29 @@ def _download_thumbnail_from_url(thumbnail_url: str, temp_path: Path, final_path
     request = urllib.request.Request(thumbnail_url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=25) as response:
+            content_type = response.headers.get("Content-Type", "")
             data = response.read()
     except (urllib.error.URLError, TimeoutError):
         raise DownloadError("thumbnail download failed")
 
-    if not data:
+    if not _is_jpeg_download(content_type, data):
         raise DownloadError("thumbnail download failed")
 
     temp_path.write_bytes(data)
     if _final_file_ready(final_path):
         return
     _move_with_retry(temp_path, final_path, log)
+
+
+def _is_jpeg_download(content_type: str, data: bytes) -> bool:
+    if not data or len(data) < 3:
+        return False
+    if not data.startswith(b"\xff\xd8\xff"):
+        return False
+    lower_type = (content_type or "").lower()
+    if lower_type and any(kind in lower_type for kind in ("webp", "png", "gif", "avif")):
+        return False
+    return True
 
 
 def _move_with_retry(source_path: Path, final_path: Path, log=None) -> None:
