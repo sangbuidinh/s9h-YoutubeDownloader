@@ -4,9 +4,7 @@ Windows desktop app for fetching a YouTube channel video list with the YouTube D
 
 ## Download Latest Release
 
-Download the latest packaged build from:
-
-https://github.com/sangbuidinh/s9h-YoutubeDownloader/releases/latest
+⬇️ Download the latest packaged build from [here](https://github.com/sangbuidinh/s9h-YoutubeDownloader/releases/latest).
 
 ## Portable Folder Structure
 
