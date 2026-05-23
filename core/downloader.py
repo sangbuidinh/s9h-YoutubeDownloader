@@ -519,7 +519,7 @@ def _download_video(
     ]
     _run_ytdlp_with_retries(command, options, log, cancel_controller)
     _move_single_file(temp_dir, "*.mp4", final_path, log)
-    _validate_premiere_safe_mp4(final_path, log)
+    _validate_premiere_safe_mp4(final_path, log, delete_invalid=True)
 
 
 def _download_audio(
@@ -557,7 +557,7 @@ def _extract_mp3_from_video(
     log=None,
     cancel_controller: DownloadController | None = None,
 ) -> None:
-    _validate_premiere_safe_mp4(source_video_path, log)
+    _validate_premiere_safe_mp4(source_video_path, log, delete_invalid=False)
     if _final_file_ready(final_audio_path):
         return
 
@@ -694,24 +694,29 @@ def _base_ytdlp_command(options: DownloadOptions) -> list[str]:
 
 def _premiere_safe_mp4_ready(path: Path) -> bool:
     try:
-        _validate_premiere_safe_mp4(path)
+        _validate_premiere_safe_mp4(path, delete_invalid=False)
     except DownloadError:
         return False
     return True
 
 
-def _validate_premiere_safe_mp4(path: Path, log=None) -> None:
+def _validate_premiere_safe_mp4(path: Path, log=None, delete_invalid: bool = True) -> None:
     try:
         if not path.exists():
-            _fail_premiere_safe_validation(path, "file does not exist", log)
+            _fail_premiere_safe_validation(path, "file does not exist", log, delete_invalid=delete_invalid)
         if not path.is_file():
-            _fail_premiere_safe_validation(path, "path is not a file", log)
+            _fail_premiere_safe_validation(path, "path is not a file", log, delete_invalid=delete_invalid)
         if path.suffix.lower() != ".mp4":
-            _fail_premiere_safe_validation(path, "file extension is not .mp4", log)
+            _fail_premiere_safe_validation(path, "file extension is not .mp4", log, delete_invalid=delete_invalid)
         if path.stat().st_size <= 0:
-            _fail_premiere_safe_validation(path, "file size is zero", log)
+            _fail_premiere_safe_validation(path, "file size is zero", log, delete_invalid=delete_invalid)
     except OSError as exc:
-        _fail_premiere_safe_validation(path, f"file check failed: {type(exc).__name__}", log)
+        _fail_premiere_safe_validation(
+            path,
+            f"file check failed: {type(exc).__name__}",
+            log,
+            delete_invalid=delete_invalid,
+        )
 
     try:
         output = _probe_media_with_ffmpeg(path)
@@ -720,14 +725,19 @@ def _validate_premiere_safe_mp4(path: Path, log=None) -> None:
         if message == "ffmpeg.exe missing":
             raise
         reason = message.removeprefix("premiere_safe_mp4_validation_failed: ").strip() or "unable to probe media"
-        _fail_premiere_safe_validation(path, reason, log)
+        _fail_premiere_safe_validation(path, reason, log, delete_invalid=delete_invalid)
     ok, reason = _parse_premiere_safe_probe_output(output)
     if not ok:
-        _fail_premiere_safe_validation(path, reason, log)
+        _fail_premiere_safe_validation(path, reason, log, delete_invalid=delete_invalid)
 
 
-def _fail_premiere_safe_validation(path: Path, reason: str, log=None) -> None:
-    if path.suffix.lower() == ".mp4":
+def _fail_premiere_safe_validation(
+    path: Path,
+    reason: str,
+    log=None,
+    delete_invalid: bool = True,
+) -> None:
+    if delete_invalid and path.suffix.lower() == ".mp4":
         _delete_invalid_file(path, log)
     raise DownloadError(f"premiere_safe_mp4_validation_failed: {reason}")
 

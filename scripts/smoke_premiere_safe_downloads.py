@@ -27,6 +27,8 @@ def main() -> int:
     _test_error_classifier()
     _test_thumbnail_url_first_and_jpeg_only()
     _test_validation_parser()
+    _test_premiere_safe_ready_is_non_destructive()
+    _test_fresh_download_validation_can_delete_invalid_output()
     _test_stream_interrupted_retry()
     _test_video_audio_mode_extracts_from_local_mp4()
     print("Premiere-safe download smoke tests passed")
@@ -182,6 +184,48 @@ Stream #0:0: Video: h264 (High) (avc1 / 0x31637661), yuv420p, 1280x720
         _assert(not downloader._parse_premiere_safe_probe_output(output)[0], f"{name} unexpectedly passed")
 
 
+def _test_premiere_safe_ready_is_non_destructive() -> None:
+    with TemporaryDirectory() as temp_dir:
+        path = Path(temp_dir) / "invalid.mp4"
+        path.write_bytes(b"not a real h264 aac mp4")
+
+        old_probe = downloader._probe_media_with_ffmpeg
+        try:
+            downloader._probe_media_with_ffmpeg = lambda _path: """
+Stream #0:0: Video: av1 (Main) (av01 / 0x31307661), yuv420p, 1920x1080
+Stream #0:1: Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo
+"""
+            ready = downloader._premiere_safe_mp4_ready(path)
+        finally:
+            downloader._probe_media_with_ffmpeg = old_probe
+
+        _assert(not ready, "invalid MP4 was reported as ready")
+        _assert(path.exists(), "readiness check deleted an existing invalid MP4")
+
+
+def _test_fresh_download_validation_can_delete_invalid_output() -> None:
+    with TemporaryDirectory() as temp_dir:
+        path = Path(temp_dir) / "invalid_download.mp4"
+        path.write_bytes(b"invalid current run output")
+
+        old_probe = downloader._probe_media_with_ffmpeg
+        try:
+            downloader._probe_media_with_ffmpeg = lambda _path: """
+Stream #0:0: Video: vp9 (Profile 0), yuv420p, 1280x720
+Stream #0:1: Audio: opus, 48000 Hz, stereo
+"""
+            try:
+                downloader._validate_premiere_safe_mp4(path, delete_invalid=True)
+            except downloader.DownloadError:
+                pass
+            else:
+                raise AssertionError("invalid MP4 validation unexpectedly passed")
+        finally:
+            downloader._probe_media_with_ffmpeg = old_probe
+
+        _assert(not path.exists(), "destructive validation did not delete invalid fresh MP4")
+
+
 def _test_stream_interrupted_retry() -> None:
     calls = []
     old_run = downloader._run_ytdlp
@@ -266,7 +310,7 @@ def _test_video_audio_mode_extracts_from_local_mp4() -> None:
             try:
                 downloader.validate_download_environment = lambda _options: None
 
-                def validate_mp4(path, _log=None):
+                def validate_mp4(path, _log=None, delete_invalid: bool = True):
                     if not Path(path).exists():
                         raise downloader.DownloadError("premiere_safe_mp4_validation_failed: file does not exist")
 
