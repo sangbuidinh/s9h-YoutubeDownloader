@@ -10,7 +10,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core import db_store, downloader, state_store
-from core.download_modes import MODE_VIDEO_AUDIO_THUMB, PART_AUDIO, PART_THUMB, PART_VIDEO
+from core.download_modes import MODE_VIDEO_AUDIO_THUMB, MODE_VIDEO_THUMB, PART_AUDIO, PART_THUMB, PART_VIDEO
 from core.downloader import DownloadOptions
 from core.error_messages import classify_general_error, classify_ytdlp_error
 from core.file_status import build_output_paths
@@ -31,6 +31,11 @@ def main() -> int:
     _test_fresh_download_validation_can_delete_invalid_output()
     _test_stream_interrupted_retry()
     _test_video_audio_mode_extracts_from_local_mp4()
+    _test_video_failure_removes_existing_thumb()
+    _test_video_failure_removes_existing_audio_and_thumb_in_combined_mode()
+    _test_audio_failure_does_not_remove_thumb_or_video()
+    _test_thumbnail_failure_does_not_remove_video_or_audio()
+    _test_move_single_file_can_replace_invalid_existing_video()
     print("Premiere-safe download smoke tests passed")
     return 0
 
@@ -357,9 +362,238 @@ def _test_video_audio_mode_extracts_from_local_mp4() -> None:
     _assert("yt-dlp-audio" not in calls, "combined mode called yt-dlp audio extraction")
 
 
+def _test_video_failure_removes_existing_thumb() -> None:
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        db_path = root / "data" / "download_state.sqlite3"
+        video = _video("fail-video-thumb")
+        paths = build_output_paths(root, CHANNEL_NAME, video.sanitized_filename_base)
+        paths.thumb_path.parent.mkdir(parents=True, exist_ok=True)
+        paths.thumb_path.write_bytes(b"old thumb")
+        calls = []
+
+        with _patched_db_file(db_path):
+            old_validate_environment = downloader.validate_download_environment
+            old_download_video = downloader._download_video
+            old_download_thumbnail = downloader._download_thumbnail
+            try:
+                downloader.validate_download_environment = lambda _options: None
+
+                def fail_video(*_args, **_kwargs):
+                    calls.append("video")
+                    raise downloader.DownloadError("premiere_safe_mp4_validation_failed: video codec is not H.264/AVC")
+
+                def thumb_should_not_run(*_args, **_kwargs):
+                    calls.append("thumb")
+                    raise AssertionError("thumbnail should not run after video failure")
+
+                downloader._download_video = fail_video
+                downloader._download_thumbnail = thumb_should_not_run
+                downloader.download_items(
+                    [video],
+                    DownloadOptions(
+                        base_folder=str(root),
+                        channel_id=CHANNEL_ID,
+                        channel_name=CHANNEL_NAME,
+                        download_mode=MODE_VIDEO_THUMB,
+                    ),
+                    lambda _message: None,
+                    lambda _video: None,
+                )
+                entry = db_store.get_video_entry(CHANNEL_ID, video.video_id, save_base_folder=str(root))
+            finally:
+                downloader.validate_download_environment = old_validate_environment
+                downloader._download_video = old_download_video
+                downloader._download_thumbnail = old_download_thumbnail
+
+        _assert("video" in calls, "video download did not run")
+        _assert("thumb" not in calls, "thumbnail ran after video failure")
+        _assert(not paths.thumb_path.exists(), "existing thumbnail was not removed after video failure")
+        _assert(state_store.part_status_from_entry(entry, PART_THUMB) == state_store.STATUS_ERROR, "thumb state was not marked error")
+
+
+def _test_video_failure_removes_existing_audio_and_thumb_in_combined_mode() -> None:
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        db_path = root / "data" / "download_state.sqlite3"
+        video = _video("fail-video-combo")
+        paths = build_output_paths(root, CHANNEL_NAME, video.sanitized_filename_base)
+        paths.audio_path.parent.mkdir(parents=True, exist_ok=True)
+        paths.thumb_path.parent.mkdir(parents=True, exist_ok=True)
+        paths.audio_path.write_bytes(b"old mp3")
+        paths.thumb_path.write_bytes(b"old thumb")
+
+        with _patched_db_file(db_path):
+            old_validate_environment = downloader.validate_download_environment
+            old_download_video = downloader._download_video
+            old_extract_mp3 = downloader._extract_mp3_from_video
+            old_download_thumbnail = downloader._download_thumbnail
+            try:
+                downloader.validate_download_environment = lambda _options: None
+
+                def fail_video(*_args, **_kwargs):
+                    raise downloader.DownloadError("premiere_safe_mp4_validation_failed: no suitable formats")
+
+                def audio_should_not_run(*_args, **_kwargs):
+                    raise AssertionError("audio extraction should not run after video failure")
+
+                def thumb_should_not_run(*_args, **_kwargs):
+                    raise AssertionError("thumbnail should not run after video failure")
+
+                downloader._download_video = fail_video
+                downloader._extract_mp3_from_video = audio_should_not_run
+                downloader._download_thumbnail = thumb_should_not_run
+                downloader.download_items(
+                    [video],
+                    DownloadOptions(
+                        base_folder=str(root),
+                        channel_id=CHANNEL_ID,
+                        channel_name=CHANNEL_NAME,
+                        download_mode=MODE_VIDEO_AUDIO_THUMB,
+                    ),
+                    lambda _message: None,
+                    lambda _video: None,
+                )
+                entry = db_store.get_video_entry(CHANNEL_ID, video.video_id, save_base_folder=str(root))
+            finally:
+                downloader.validate_download_environment = old_validate_environment
+                downloader._download_video = old_download_video
+                downloader._extract_mp3_from_video = old_extract_mp3
+                downloader._download_thumbnail = old_download_thumbnail
+
+        _assert(not paths.audio_path.exists(), "existing MP3 was not removed after video failure")
+        _assert(not paths.thumb_path.exists(), "existing thumbnail was not removed after video failure")
+        _assert(state_store.part_status_from_entry(entry, PART_AUDIO) == state_store.STATUS_ERROR, "audio state was not marked error")
+        _assert(state_store.part_status_from_entry(entry, PART_THUMB) == state_store.STATUS_ERROR, "thumb state was not marked error")
+
+
+def _test_audio_failure_does_not_remove_thumb_or_video() -> None:
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        db_path = root / "data" / "download_state.sqlite3"
+        video = _video("fail-audio-only")
+        paths = build_output_paths(root, CHANNEL_NAME, video.sanitized_filename_base)
+        paths.video_path.parent.mkdir(parents=True, exist_ok=True)
+        paths.thumb_path.parent.mkdir(parents=True, exist_ok=True)
+        paths.video_path.write_bytes(b"existing video")
+        paths.thumb_path.write_bytes(b"existing thumb")
+        _seed_video_and_thumb_downloaded(db_path, video, paths, root)
+
+        with _patched_db_file(db_path):
+            old_validate_environment = downloader.validate_download_environment
+            old_premiere_ready = downloader._premiere_safe_mp4_ready
+            old_extract_mp3 = downloader._extract_mp3_from_video
+            old_download_thumbnail = downloader._download_thumbnail
+            try:
+                downloader.validate_download_environment = lambda _options: None
+                downloader._premiere_safe_mp4_ready = lambda _path: True
+
+                def fail_audio(*_args, **_kwargs):
+                    raise downloader.DownloadError("audio extraction failed")
+
+                def thumb_should_not_run(*_args, **_kwargs):
+                    raise AssertionError("thumbnail should not run after audio failure in this test")
+
+                downloader._extract_mp3_from_video = fail_audio
+                downloader._download_thumbnail = thumb_should_not_run
+                downloader.download_items(
+                    [video],
+                    DownloadOptions(
+                        base_folder=str(root),
+                        channel_id=CHANNEL_ID,
+                        channel_name=CHANNEL_NAME,
+                        download_mode=MODE_VIDEO_AUDIO_THUMB,
+                    ),
+                    lambda _message: None,
+                    lambda _video: None,
+                )
+            finally:
+                downloader.validate_download_environment = old_validate_environment
+                downloader._premiere_safe_mp4_ready = old_premiere_ready
+                downloader._extract_mp3_from_video = old_extract_mp3
+                downloader._download_thumbnail = old_download_thumbnail
+
+        _assert(paths.video_path.exists(), "audio failure removed video unexpectedly")
+        _assert(paths.thumb_path.exists(), "audio failure removed thumbnail unexpectedly")
+
+
+def _test_thumbnail_failure_does_not_remove_video_or_audio() -> None:
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        db_path = root / "data" / "download_state.sqlite3"
+        video = _video("fail-thumb-only")
+        paths = build_output_paths(root, CHANNEL_NAME, video.sanitized_filename_base)
+        paths.video_path.parent.mkdir(parents=True, exist_ok=True)
+        paths.audio_path.parent.mkdir(parents=True, exist_ok=True)
+        paths.video_path.write_bytes(b"existing video")
+        paths.audio_path.write_bytes(b"existing audio")
+        _seed_downloaded_parts(db_path, video, paths, root, (PART_VIDEO, PART_AUDIO))
+
+        with _patched_db_file(db_path):
+            old_validate_environment = downloader.validate_download_environment
+            old_download_thumbnail = downloader._download_thumbnail
+            try:
+                downloader.validate_download_environment = lambda _options: None
+
+                def fail_thumbnail(*_args, **_kwargs):
+                    raise downloader.DownloadError("thumbnail download failed")
+
+                downloader._download_thumbnail = fail_thumbnail
+                downloader.download_items(
+                    [video],
+                    DownloadOptions(
+                        base_folder=str(root),
+                        channel_id=CHANNEL_ID,
+                        channel_name=CHANNEL_NAME,
+                        download_mode=MODE_VIDEO_AUDIO_THUMB,
+                    ),
+                    lambda _message: None,
+                    lambda _video: None,
+                )
+            finally:
+                downloader.validate_download_environment = old_validate_environment
+                downloader._download_thumbnail = old_download_thumbnail
+
+        _assert(paths.video_path.exists(), "thumbnail failure removed video unexpectedly")
+        _assert(paths.audio_path.exists(), "thumbnail failure removed audio unexpectedly")
+
+
+def _test_move_single_file_can_replace_invalid_existing_video() -> None:
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        temp_root = root / "temp"
+        out_root = root / "out"
+        temp_root.mkdir()
+        out_root.mkdir()
+        final_path = out_root / "video.mp4"
+        final_path.write_bytes(b"old invalid mp4")
+        new_path = temp_root / "downloaded.mp4"
+        new_path.write_bytes(b"new mp4")
+
+        downloader._move_single_file(
+            temp_root,
+            "*.mp4",
+            final_path,
+            log=lambda _message: None,
+            replace_existing=True,
+        )
+
+        _assert(final_path.read_bytes() == b"new mp4", "fresh replacement did not overwrite invalid existing MP4")
+
+
 def _seed_video_and_thumb_downloaded(db_path: Path, video, paths, save_base_folder: Path) -> None:
+    _seed_downloaded_parts(db_path, video, paths, save_base_folder, (PART_VIDEO, PART_THUMB))
+
+
+def _seed_downloaded_parts(db_path: Path, video, paths, save_base_folder: Path, parts: tuple[str, ...]) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    for part, path in ((PART_VIDEO, paths.video_path), (PART_THUMB, paths.thumb_path)):
+    part_paths = {
+        PART_VIDEO: paths.video_path,
+        PART_THUMB: paths.thumb_path,
+        PART_AUDIO: paths.audio_path,
+    }
+    for part in parts:
+        path = part_paths[part]
         db_store.update_video_part_state(
             CHANNEL_ID,
             video.video_id,

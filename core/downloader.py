@@ -341,6 +341,14 @@ def download_items(
         except PermissionError as exc:
             _remember_run_part(run_parts_current_run, current_part)
             _mark_part_error(options, video, paths, current_part)
+            if current_part == PART_VIDEO:
+                _cleanup_companion_outputs_after_video_failure(
+                    options,
+                    video,
+                    paths,
+                    log,
+                    run_parts_current_run,
+                )
             final_status = _reconcile_current_item(
                 options,
                 video,
@@ -371,6 +379,14 @@ def download_items(
         except YtdlpExecutionError as exc:
             _remember_run_part(run_parts_current_run, current_part)
             _mark_part_error(options, video, paths, current_part)
+            if current_part == PART_VIDEO:
+                _cleanup_companion_outputs_after_video_failure(
+                    options,
+                    video,
+                    paths,
+                    log,
+                    run_parts_current_run,
+                )
             final_status = _reconcile_current_item(
                 options,
                 video,
@@ -399,6 +415,14 @@ def download_items(
         except DownloadError as exc:
             _remember_run_part(run_parts_current_run, current_part)
             _mark_part_error(options, video, paths, current_part)
+            if current_part == PART_VIDEO:
+                _cleanup_companion_outputs_after_video_failure(
+                    options,
+                    video,
+                    paths,
+                    log,
+                    run_parts_current_run,
+                )
             final_status = _reconcile_current_item(
                 options,
                 video,
@@ -421,6 +445,14 @@ def download_items(
         except Exception as exc:
             _remember_run_part(run_parts_current_run, current_part)
             _mark_part_error(options, video, paths, current_part)
+            if current_part == PART_VIDEO:
+                _cleanup_companion_outputs_after_video_failure(
+                    options,
+                    video,
+                    paths,
+                    log,
+                    run_parts_current_run,
+                )
             final_status = _reconcile_current_item(
                 options,
                 video,
@@ -518,7 +550,7 @@ def _download_video(
         url,
     ]
     _run_ytdlp_with_retries(command, options, log, cancel_controller)
-    _move_single_file(temp_dir, "*.mp4", final_path, log)
+    _move_single_file(temp_dir, "*.mp4", final_path, log, replace_existing=True)
     _validate_premiere_safe_mp4(final_path, log, delete_invalid=True)
 
 
@@ -1135,7 +1167,9 @@ def _validate_output_paths(paths, parts: tuple[str, ...]) -> None:
             raise DownloadError(OUTPUT_PATH_TOO_LONG_MESSAGE)
 
 
-def _remember_run_part(parts: list[str], part: str | None) -> None:
+def _remember_run_part(parts: list[str] | None, part: str | None) -> None:
+    if parts is None:
+        return
     if part and part not in parts:
         parts.append(part)
 
@@ -1156,6 +1190,53 @@ def _mark_part_error(options: DownloadOptions, video, paths, part: str | None) -
         )
     except OSError:
         pass
+
+
+def _cleanup_companion_outputs_after_video_failure(
+    options: DownloadOptions,
+    video,
+    paths,
+    log,
+    run_parts_current_run: list[str] | None = None,
+) -> None:
+    for part, path in _companion_outputs_for_failed_video(paths, options.download_mode):
+        _remember_run_part(run_parts_current_run, part)
+        _delete_companion_output_after_video_failure(path, part, log)
+        try:
+            update_video_part_state(
+                options.channel_id,
+                options.channel_name,
+                options.base_folder,
+                video,
+                paths,
+                part,
+                STATUS_ERROR,
+                options.download_mode,
+            )
+        except OSError:
+            if log:
+                log(f"[WARNING] Could not update companion state after video failure: {part}")
+
+
+def _companion_outputs_for_failed_video(paths, download_mode: str) -> tuple[tuple[str, Path], ...]:
+    companions: list[tuple[str, Path]] = []
+    mode_parts = required_parts(download_mode)
+    if PART_THUMB in mode_parts:
+        companions.append((PART_THUMB, paths.thumb_path))
+    if PART_AUDIO in mode_parts:
+        companions.append((PART_AUDIO, paths.audio_path))
+    return tuple(companions)
+
+
+def _delete_companion_output_after_video_failure(path: Path, part: str, log=None) -> None:
+    try:
+        if path.exists() and path.is_file():
+            path.unlink()
+            if log:
+                log(f"[WARNING] Removed {part} output after video failure: {path.name}")
+    except OSError:
+        if log:
+            log(f"[WARNING] Could not remove {part} output after video failure: {path.name}")
 
 
 def _success_file_list(stem: str, download_mode: str) -> str:
@@ -1242,8 +1323,14 @@ def _technical_lines_for_ytdlp(exc: YtdlpExecutionError) -> list[str]:
     return [*lines, f"yt-dlp exit code {exc.exit_code}"]
 
 
-def _move_single_file(temp_dir: Path, pattern: str, final_path: Path, log=None) -> None:
-    if _final_file_ready(final_path):
+def _move_single_file(
+    temp_dir: Path,
+    pattern: str,
+    final_path: Path,
+    log=None,
+    replace_existing: bool = False,
+) -> None:
+    if not replace_existing and _final_file_ready(final_path):
         return
 
     candidates = [path for path in temp_dir.rglob(pattern) if path.is_file()]
@@ -1251,7 +1338,7 @@ def _move_single_file(temp_dir: Path, pattern: str, final_path: Path, log=None) 
         raise DownloadError(f"expected {final_path.suffix} file was not created")
 
     candidates.sort(key=lambda path: path.stat().st_size, reverse=True)
-    _move_with_retry(candidates[0], final_path, log)
+    _move_with_retry(candidates[0], final_path, log, replace_existing=replace_existing)
 
 
 def _download_thumbnail_from_url(thumbnail_url: str, temp_path: Path, final_path: Path, log=None) -> None:
@@ -1283,14 +1370,19 @@ def _is_jpeg_download(content_type: str, data: bytes) -> bool:
     return True
 
 
-def _move_with_retry(source_path: Path, final_path: Path, log=None) -> None:
+def _move_with_retry(
+    source_path: Path,
+    final_path: Path,
+    log=None,
+    replace_existing: bool = False,
+) -> None:
     last_error: BaseException | None = None
     final_path.parent.mkdir(parents=True, exist_ok=True)
     for attempt, delay in enumerate((0, 1, 3, 5)):
         if delay:
             time.sleep(delay)
         try:
-            if _final_file_ready(final_path):
+            if _final_file_ready(final_path) and not replace_existing:
                 return
             if final_path.exists():
                 final_path.unlink()
