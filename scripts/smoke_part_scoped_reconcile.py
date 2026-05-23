@@ -1,5 +1,4 @@
 import inspect
-import json
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -28,12 +27,9 @@ def main() -> int:
 
     scenarios = _generated_scenarios()
     sqlite_runs = 0
-    json_runs = 0
     for scenario in scenarios:
         _run_sqlite_scenario(scenario)
         sqlite_runs += 1
-        _run_json_scenario(scenario)
-        json_runs += 1
 
     _assert(
         real_runtime_before == _snapshot_real_runtime_files(),
@@ -42,7 +38,7 @@ def main() -> int:
     mode_part_count = sum(len(required_parts(mode)) for mode in DOWNLOAD_MODES)
     print(
         "part-scoped reconcile smoke tests passed: "
-        f"mode_parts={mode_part_count} scenarios={len(scenarios)} sqlite={sqlite_runs} json={json_runs}"
+        f"mode_parts={mode_part_count} scenarios={len(scenarios)} sqlite={sqlite_runs}"
     )
     return 0
 
@@ -102,28 +98,6 @@ def _run_sqlite_scenario(scenario: dict) -> None:
         _assert_scenario_result("sqlite", scenario, before, after)
 
 
-def _run_json_scenario(scenario: dict) -> None:
-    with _temp_runtime() as paths:
-        video = _video(_scenario_video_id("json", scenario))
-        _write_json_state(paths["json_path"], video, _initial_parts(scenario), scenario["download_mode"])
-        run_paths = _run_paths(paths["data_dir"], scenario["existing_current_run_files"])
-
-        with _patched_json_paths(paths):
-            before = state_store._json_get_video_entry(CHANNEL_ID, video.video_id)
-            state_store._json_reconcile_downloaded_item_state(
-                CHANNEL_ID,
-                CHANNEL_NAME,
-                SAVE_BASE_FOLDER,
-                video,
-                run_paths,
-                scenario["download_mode"],
-                run_parts=scenario["run_parts"],
-            )
-            after = state_store._json_get_video_entry(CHANNEL_ID, video.video_id)
-
-        _assert_scenario_result("json", scenario, before, after)
-
-
 def _initial_parts(scenario: dict) -> dict[str, tuple[str, str, str]]:
     parts = {}
     for part in scenario["initial_downloaded_parts"]:
@@ -150,41 +124,6 @@ def _seed_sqlite_state(db_path: Path, video, parts: dict[str, tuple[str, str, st
             sanitized_filename_base=video.sanitized_filename_base,
             display_order_at_download=video.display_order,
         )
-
-
-def _write_json_state(
-    path: Path,
-    video,
-    parts: dict[str, tuple[str, str, str]],
-    download_mode: str,
-) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    entry = {
-        "channel_id": CHANNEL_ID,
-        "channel_name": CHANNEL_NAME,
-        "save_base_folder": SAVE_BASE_FOLDER,
-        "video_id": video.video_id,
-        "original_title": video.title,
-        "sanitized_filename_base": video.sanitized_filename_base,
-        "display_order_at_download": video.display_order,
-    }
-    for part, (status, filename, file_path) in parts.items():
-        entry[f"{part}_status"] = status
-        entry[f"{part}_filename"] = filename
-        entry[f"{part}_path"] = file_path
-    entry["status"] = state_store.get_effective_status(entry, download_mode)
-    state = {
-        "version": 1,
-        "channels": {
-            CHANNEL_ID: {
-                "channel_id": CHANNEL_ID,
-                "channel_name": CHANNEL_NAME,
-                "save_base_folder": SAVE_BASE_FOLDER,
-                "videos": {video.video_id: entry},
-            }
-        },
-    }
-    path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _run_paths(data_dir: Path, existing_current_run_files: tuple[str, ...]):
@@ -314,7 +253,6 @@ def _temp_runtime():
         data_dir = Path(temp_dir) / "data"
         yield {
             "data_dir": data_dir,
-            "json_path": data_dir / "download_state.json",
             "db_path": data_dir / "download_state.sqlite3",
         }
 
@@ -329,22 +267,8 @@ def _patched_sqlite_db(db_path: Path):
         db_store.db_file = old_db_file
 
 
-@contextmanager
-def _patched_json_paths(paths: dict):
-    old_state_file = state_store.state_file
-    old_data_dir = state_store.data_dir
-    try:
-        state_store.state_file = lambda: paths["json_path"]
-        state_store.data_dir = lambda: paths["data_dir"]
-        yield
-    finally:
-        state_store.state_file = old_state_file
-        state_store.data_dir = old_data_dir
-
-
 def _snapshot_real_runtime_files() -> dict[str, tuple[bool, int | None, int | None]]:
     paths = {
-        "json": state_store.state_file(),
         "sqlite": db_store.db_file(),
         "wal": Path(f"{db_store.db_file()}-wal"),
         "shm": Path(f"{db_store.db_file()}-shm"),

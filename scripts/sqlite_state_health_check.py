@@ -20,11 +20,9 @@ EXIT_MISSING_DB = 2
 
 REQUIRED_TABLES = {
     "app_meta",
-    "schema_migrations",
     "channels",
     "download_items",
     "download_files",
-    "import_warnings",
 }
 VALID_FILE_PARTS = ("video", "thumb", "audio")
 NULL_KEY = "<NULL>"
@@ -112,8 +110,6 @@ def _check_integrity(conn: sqlite3.Connection, result: HealthCheckResult) -> Non
 def _check_download_items(conn: sqlite3.Connection, result: HealthCheckResult) -> None:
     item_count = conn.execute("SELECT COUNT(*) FROM download_items").fetchone()[0]
     result.summary["download_items"] = item_count
-    if item_count <= 0:
-        result.blocking_issues.append("download_items is empty.")
 
     duplicates = conn.execute(
         """
@@ -160,7 +156,7 @@ def _check_download_files(conn: sqlite3.Connection, result: HealthCheckResult) -
 
 
 def _collect_summary(conn: sqlite3.Connection, result: HealthCheckResult) -> None:
-    for table_name in ("channels", "download_items", "download_files", "import_warnings"):
+    for table_name in ("channels", "download_items", "download_files"):
         if not _has_tables(result, table_name):
             continue
         result.summary[table_name] = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
@@ -227,7 +223,7 @@ def print_health_report(result: HealthCheckResult) -> None:
     print(f"status: {'HEALTHY' if result.healthy else 'UNHEALTHY'}")
 
     print("summary:")
-    for key in ("channels", "download_items", "download_files", "import_warnings"):
+    for key in ("channels", "download_items", "download_files"):
         if key in result.summary:
             print(f"  {key}: {result.summary[key]}")
     print(f"  required_tables_present: {result.summary.get('required_tables_present', False)}")

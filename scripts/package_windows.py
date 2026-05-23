@@ -23,11 +23,9 @@ PREFLIGHT_COMMANDS = (
         "core\\runtime_paths.py",
         "core\\state_store.py",
         "core\\db_store.py",
-        "core\\state_migration.py",
         "core\\youtube_api.py",
         "ui\\dialogs.py",
         "ui\\main_window.py",
-        "scripts\\migrate_download_state_to_sqlite.py",
     ),
 )
 
@@ -69,7 +67,7 @@ def main() -> int:
     print("Build completed")
     print(f"expected_exe: {DIST_EXE}")
     print("Post-build runtime files must remain external and be placed next to the exe:")
-    print("  data/download_state.sqlite3 or data/download_state.json")
+    print("  data/download_state.sqlite3")
     print("  data/app_settings.json")
     print("  data/bin/yt-dlp.exe")
     print("  data/bin/ffmpeg.exe")

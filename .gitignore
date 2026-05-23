@@ -4,12 +4,14 @@ data/download_state.sqlite3
 data/download_state.sqlite3-*
 data/*.sqlite3
 data/*.sqlite3-*
-data/download_state.sqlite_export*.json
 data/backups/
 data/app_settings.json
 data/cookies.txt
 data/*.log
 data/*.tmp
+data/*.bak.*
+data/*.sqlite_export*.json
+data/validation_report*.json
 
 # Examples are allowed
 !data/*.example.json
@@ -67,10 +69,3 @@ venv/
 # Windows
 Thumbs.db
 desktop.ini
-
-# Runtime state backups / reports
-data/download_state.json.bak.*
-data/*.bak.*
-data/validation_report*.json
-data/download_state.sqlite_export*.json
-data/backups/

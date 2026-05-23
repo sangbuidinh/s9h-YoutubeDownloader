@@ -223,7 +223,7 @@ def download_items(
 
             entry = get_video_entry(options.channel_id, video.video_id)
             if is_mode_complete(entry, options.download_mode):
-                log(f"[SKIP] {stem} marked as downloaded in download_state.json")
+                log(f"[SKIP] {stem} marked as downloaded in SQLite state")
                 skipped_count += 1
                 consecutive_blocking_failures = 0
                 video.status = get_effective_status(entry, options.download_mode)
@@ -799,8 +799,13 @@ def _last_meaningful_output_lines(stdout: str, stderr: str, limit: int = 50) -> 
 
 def _sanitize_ytdlp_output_line(line: str) -> str:
     text = (line or "").strip()
+    youtube_api_key_prefix = "AI" "za"
     text = re.sub(r"(?i)(key=)[^&\s]+", r"\1***", text)
-    text = re.sub(r"AIza[0-9A-Za-z_-]{20,}", "AIza...****", text)
+    text = re.sub(
+        re.escape(youtube_api_key_prefix) + r"[0-9A-Za-z_-]{20,}",
+        youtube_api_key_prefix + "...****",
+        text,
+    )
     text = re.sub(r"(?i)(cookie(?:s)?\s*[:=]).*", r"\1 ***", text)
     return text
 

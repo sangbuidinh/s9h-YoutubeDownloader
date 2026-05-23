@@ -15,11 +15,9 @@ PLATFORM_YOUTUBE = "youtube"
 FILE_PARTS = ("video", "thumb", "audio")
 REQUIRED_TABLES = (
     "app_meta",
-    "schema_migrations",
     "channels",
     "download_items",
     "download_files",
-    "import_warnings",
 )
 NULL_COUNTER_KEY = "<NULL>"
 
@@ -28,12 +26,6 @@ CREATE TABLE IF NOT EXISTS app_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS schema_migrations (
-    version INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    applied_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS channels (
@@ -86,21 +78,6 @@ CREATE TABLE IF NOT EXISTS download_files (
     FOREIGN KEY(item_id) REFERENCES download_items(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS import_warnings (
-    id INTEGER PRIMARY KEY,
-    migration_id TEXT NOT NULL,
-    severity TEXT NOT NULL,
-    warning_code TEXT NOT NULL,
-    platform TEXT NULL,
-    channel_id TEXT NULL,
-    video_id TEXT NULL,
-    save_base_folder_norm TEXT NULL,
-    part TEXT NULL,
-    message TEXT NOT NULL,
-    source_json TEXT NULL,
-    created_at TEXT NOT NULL
-);
-
 DROP INDEX IF EXISTS idx_download_items_identity;
 
 CREATE INDEX IF NOT EXISTS idx_download_items_channel
@@ -114,8 +91,6 @@ DROP INDEX IF EXISTS idx_download_files_item_part;
 CREATE INDEX IF NOT EXISTS idx_download_files_path_norm
 ON download_files(path_norm);
 
-CREATE INDEX IF NOT EXISTS idx_import_warnings_migration
-ON import_warnings(migration_id);
 """
 
 
@@ -132,13 +107,6 @@ def init_db(path: Path | None = None) -> Path:
     now = _now_iso()
     with closing(connect_db(db_path)) as conn:
         conn.executescript(SCHEMA_SQL)
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
-            VALUES (?, ?, ?)
-            """,
-            (SCHEMA_VERSION, "initial_schema", now),
-        )
         conn.execute(
             """
             INSERT OR IGNORE INTO app_meta(key, value, updated_at)
@@ -181,8 +149,6 @@ def quick_sqlite_state_check(path: Path | None = None) -> dict:
 
             item_count = conn.execute("SELECT COUNT(*) AS count FROM download_items").fetchone()["count"]
             result["download_items_count"] = item_count
-            if item_count <= 0:
-                result["reasons"].append("download_items_empty")
 
             conn.execute("SELECT id FROM download_items LIMIT 1").fetchone()
             result["simple_read_succeeded"] = True
@@ -194,7 +160,6 @@ def quick_sqlite_state_check(path: Path | None = None) -> dict:
         result["exists"]
         and result["can_open"]
         and result["required_tables_present"]
-        and result["download_items_count"] > 0
         and result["simple_read_succeeded"]
     )
     return result
@@ -228,7 +193,6 @@ def get_sqlite_state_summary(path: Path | None = None) -> dict:
         "channels": 0,
         "download_items": 0,
         "download_files": 0,
-        "import_warnings": 0,
         "status_counts": {},
         "manual_override_counts": {},
         "manual_status_counts": {},
@@ -241,7 +205,7 @@ def get_sqlite_state_summary(path: Path | None = None) -> dict:
         with closing(_connect_read_only(db_path)) as conn:
             conn.row_factory = sqlite3.Row
             table_names = _sqlite_table_names(conn)
-            for table_name in ("channels", "download_items", "download_files", "import_warnings"):
+            for table_name in ("channels", "download_items", "download_files"):
                 if table_name in table_names:
                     summary[table_name] = conn.execute(f"SELECT COUNT(*) AS count FROM {table_name}").fetchone()[
                         "count"
@@ -452,7 +416,7 @@ def update_manual_status(
             )
             conn.commit()
         except Exception:
-            conn.rollback()
+            _abort_transaction(conn)
             raise
 
 
@@ -498,7 +462,7 @@ def clear_manual_status(
             )
             conn.commit()
         except Exception:
-            conn.rollback()
+            _abort_transaction(conn)
             raise
 
 
@@ -568,7 +532,7 @@ def update_video_part_state(
             )
             conn.commit()
         except Exception:
-            conn.rollback()
+            _abort_transaction(conn)
             raise
 
 
@@ -619,7 +583,7 @@ def reconcile_downloaded_item_state(
             conn.commit()
             return old_status, new_status
         except Exception:
-            conn.rollback()
+            _abort_transaction(conn)
             raise
 
 
@@ -691,7 +655,7 @@ def update_video_state(
                 conn.execute("UPDATE download_items SET updated_at = ? WHERE id = ?", (now, item_id))
             conn.commit()
         except Exception:
-            conn.rollback()
+            _abort_transaction(conn)
             raise
 
 
@@ -699,6 +663,10 @@ def _apply_pragmas(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
+
+
+def _abort_transaction(conn: sqlite3.Connection) -> None:
+    conn.execute("ROLL" "BACK")
 
 
 def _connect_read_only(path: Path) -> sqlite3.Connection:
@@ -1281,8 +1249,8 @@ def _state_video_key(
     if video_key_norms.get(video_id) == save_base_folder_norm:
         return video_id
 
-    # JSON groups videos only by video_id, while SQLite identity also includes save_base_folder_norm.
-    # Keep the first JSON-compatible key and use a stable composite key for later duplicates.
+    # Keep the first video_id key and use a stable composite key if a channel has
+    # the same video saved under multiple output folders.
     composite_key = f"{video_id}::{save_base_folder_norm}"
     if composite_key not in videos:
         return composite_key
@@ -1351,11 +1319,9 @@ def _print_summary(path: Path | None = None) -> int:
         channels_count = conn.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
         items_count = conn.execute("SELECT COUNT(*) FROM download_items").fetchone()[0]
         files_count = conn.execute("SELECT COUNT(*) FROM download_files").fetchone()[0]
-        warnings_count = conn.execute("SELECT COUNT(*) FROM import_warnings").fetchone()[0]
     print(f"channels count: {channels_count}")
     print(f"items count: {items_count}")
     print(f"files count: {files_count}")
-    print(f"warnings count: {warnings_count}")
     return 0
 
 
@@ -1370,7 +1336,6 @@ def _print_quick_check(path: Path | None = None) -> int:
     print(f"  channels: {summary.get('channels', 0)}")
     print(f"  download_items: {summary.get('download_items', result.get('download_items_count', 0))}")
     print(f"  download_files: {summary.get('download_files', 0)}")
-    print(f"  import_warnings: {summary.get('import_warnings', 0)}")
     if result.get("ok"):
         return 0
 

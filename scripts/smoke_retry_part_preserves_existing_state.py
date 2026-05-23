@@ -1,4 +1,3 @@
-import json
 import os
 import sys
 from contextlib import contextmanager
@@ -27,7 +26,6 @@ def main() -> int:
     _test_sqlite_thumbnail_retry_preserves_existing_video()
     _test_sqlite_failed_retry_does_not_downgrade_video()
     _test_sqlite_audio_retry_preserves_video_and_thumb()
-    _test_json_thumbnail_retry_preserves_existing_video()
     _assert(
         real_runtime_before == _snapshot_real_runtime_files(),
         "real runtime state files were mutated by temp-file smoke tests",
@@ -151,40 +149,6 @@ def _test_sqlite_audio_retry_preserves_video_and_thumb() -> None:
         _assert(after["status"] == state_store.STATUS_DOWNLOADED, "audio retry aggregate did not become downloaded")
 
 
-def _test_json_thumbnail_retry_preserves_existing_video() -> None:
-    with _temp_runtime() as paths:
-        old_video_path = "D:/A/Channel/video/old_video.mp4"
-        _write_json_state(
-            paths["json_path"],
-            "json-retry-thumb",
-            {
-                PART_VIDEO: (state_store.STATUS_DOWNLOADED, "old_video.mp4", old_video_path),
-                PART_THUMB: (state_store.STATUS_ERROR, "old_thumb.jpg", "D:/A/Channel/thumb/old_thumb.jpg"),
-            },
-        )
-        run_paths = _run_paths(paths["data_dir"], video_exists=False, thumb_exists=True, audio_exists=False)
-        video = _video("json-retry-thumb")
-
-        with _patched_json_paths(paths):
-            before = state_store._json_get_video_entry(CHANNEL_ID, video.video_id)
-            state_store._json_reconcile_downloaded_item_state(
-                CHANNEL_ID,
-                CHANNEL_NAME,
-                SAVE_BASE_FOLDER,
-                video,
-                run_paths,
-                MODE_VIDEO_THUMB,
-            )
-            after = state_store._json_get_video_entry(CHANNEL_ID, video.video_id)
-
-        _assert_no_downloaded_part_downgraded(before, after, (PART_VIDEO, PART_THUMB))
-        _assert(after["video_status"] == state_store.STATUS_DOWNLOADED, "JSON video status was downgraded")
-        _assert(after["video_filename"] == "old_video.mp4", "JSON video filename was overwritten")
-        _assert(after["video_path"] == old_video_path, "JSON video path was overwritten")
-        _assert(after["thumb_status"] == state_store.STATUS_DOWNLOADED, "JSON thumb status was not promoted")
-        _assert(after["status"] == state_store.STATUS_DOWNLOADED, "JSON aggregate status did not become downloaded")
-
-
 def _seed_sqlite_part_state(
     db_path: Path,
     video_id: str,
@@ -206,39 +170,6 @@ def _seed_sqlite_part_state(
             original_title=f"Video {video_id}",
             sanitized_filename_base=video_id,
         )
-
-
-def _write_json_state(
-    path: Path,
-    video_id: str,
-    parts: dict[str, tuple[str, str, str]],
-) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    entry = {
-        "channel_id": CHANNEL_ID,
-        "channel_name": CHANNEL_NAME,
-        "save_base_folder": SAVE_BASE_FOLDER,
-        "video_id": video_id,
-        "original_title": f"Video {video_id}",
-        "sanitized_filename_base": video_id,
-        "status": state_store.STATUS_MISSING_THUMB,
-    }
-    for part, (status, filename, file_path) in parts.items():
-        entry[f"{part}_status"] = status
-        entry[f"{part}_filename"] = filename
-        entry[f"{part}_path"] = file_path
-    state = {
-        "version": 1,
-        "channels": {
-            CHANNEL_ID: {
-                "channel_id": CHANNEL_ID,
-                "channel_name": CHANNEL_NAME,
-                "save_base_folder": SAVE_BASE_FOLDER,
-                "videos": {video_id: entry},
-            }
-        },
-    }
-    path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _run_paths(data_dir: Path, video_exists: bool, thumb_exists: bool, audio_exists: bool):
@@ -297,7 +228,6 @@ def _temp_runtime():
         data_dir = Path(temp_dir) / "data"
         yield {
             "data_dir": data_dir,
-            "json_path": data_dir / "download_state.json",
             "db_path": data_dir / "download_state.sqlite3",
         }
 
@@ -312,22 +242,8 @@ def _patched_sqlite_db(db_path: Path):
         db_store.db_file = old_db_file
 
 
-@contextmanager
-def _patched_json_paths(paths: dict):
-    old_state_file = state_store.state_file
-    old_data_dir = state_store.data_dir
-    try:
-        state_store.state_file = lambda: paths["json_path"]
-        state_store.data_dir = lambda: paths["data_dir"]
-        yield
-    finally:
-        state_store.state_file = old_state_file
-        state_store.data_dir = old_data_dir
-
-
 def _snapshot_real_runtime_files() -> dict[str, tuple[bool, int | None, int | None]]:
     paths = {
-        "json": state_store.state_file(),
         "sqlite": db_store.db_file(),
         "wal": Path(f"{db_store.db_file()}-wal"),
         "shm": Path(f"{db_store.db_file()}-shm"),

@@ -1,217 +1,139 @@
-# Mã Nguồn YouTube Downloader
+# YouTube Downloaderbs
 
-Đây là phiên bản mã nguồn của ứng dụng Windows desktop.
+Windows desktop app for fetching a YouTube channel video list with the YouTube Data API and downloading selected videos, thumbnails, and MP3 audio through external runtime tools.
 
-## Tải xuống
+## Download Latest Release
 
-Bạn có thể tải phiên bản mới nhất [tại đây](https://github.com/sangbuidinh/s9h-YoutubeDownloader/releases/latest).
+Download the latest packaged build from:
 
-## Cách chạy
+https://github.com/sangbuidinh/s9h-YoutubeDownloader/releases/latest
+
+## Portable Folder Structure
+
+The portable package should be extracted with this structure:
+
+```text
+Youtube Downloader/
+|-- Youtube Downloaderbs.exe
+\-- data/
+    |-- api key.txt.example
+    |-- cookies.txt.example
+    |-- app_settings.example.json
+    \-- bin/
+        |-- yt-dlp.exe
+        |-- ffmpeg.exe
+        \-- deno.exe
+```
+
+Runtime files stay outside the executable so they can be updated without rebuilding the app.
+
+## Run From Source
 
 ```powershell
 cd "D:\Youtube Downloader Source"
 python app.py
 ```
 
-## Cấu trúc file chạy yêu cầu (Required runtime files)
+When running from source, app data is stored in this repository's `data` folder. Runtime tools are read from `data\bin` first, then from the source root, then from `D:\Youtube Downloader` during local development.
 
-Dựa theo bản package, ứng dụng yêu cầu các công cụ và thư mục bên dưới nằm cạnh file thực thi chính:
+## Required Runtime Tools
 
-```text
-Youtube Downloader/
-|-- Youtube Downloaderbs.exe
-\-- data/
-    |-- api key.txt.example
-    |-- cookies.txt.example
-    \-- bin/
-        |-- yt-dlp.exe
-        |-- ffmpeg.exe
-        \-- deno.exe
-```
+- `data\bin\yt-dlp.exe`: required for video and thumbnail downloads.
+- `data\bin\ffmpeg.exe`: required for merging video/audio and MP3 extraction.
+- `data\bin\deno.exe`: optional helper for YouTube JavaScript challenge handling.
 
-- `data\api key.txt`: File chỉ đọc (read-only). Ứng dụng không bao giờ sửa đổi file này. Package chỉ kèm file ví dụ `data\api key.txt.example`.
-- `data\bin\deno.exe`: Có thể dùng để yt-dlp giải quyết các thử thách JavaScript của YouTube. Các công cụ này được để bên ngoài file .exe nhằm mục đích có thể cập nhật độc lập mà không cần build lại app.
+## YouTube API Key
 
-Khi chạy trực tiếp từ mã nguồn, dữ liệu cấu hình ứng dụng được lưu trữ ở `D:\Youtube Downloader Source\data`. Các công cụ chạy ứng dụng (như yt-dlp, ffmpeg) sẽ được ưu tiên đọc từ `data\bin`, sau đó fallback về thư mục mã nguồn nếu có, hoặc đọc fallback từ `D:\Youtube Downloader` trong quá trình phát triển (development).
+You can enter an API key directly in the app. The last entered key is stored in `data\app_settings.json`.
 
-## Các chế độ tải (Download modes)
+You can also create `data\api key.txt` and put one API key per line. The packaged app includes only `data\api key.txt.example`; rename or copy it locally before adding real keys.
 
-Dropdown `Kiểu tải` điều khiển các file nào sẽ được tải xuống cho các video được chọn:
+## Cookies Format
+
+Cookies are optional. If YouTube asks for sign-in or bot verification, export cookies in Netscape `cookies.txt` format and select that file in the app.
+
+Do not upload real cookies to GitHub or include them in release packages.
+
+## Download Modes
+
+The download mode selector controls which files are created for selected videos:
 
 1. `Video + Thumb`
 2. `Audio MP3 + Thumb`
 3. `Video + Audio MP3 + Thumb`
 
-Chế độ mặc định là `Video + Thumb`. Việc trích xuất MP3 yêu cầu phải có `ffmpeg.exe`.
+The default mode is `Video + Thumb`. MP3 extraction requires `ffmpeg.exe`.
 
-## Cấu trúc thư mục đầu ra
+## Output Folder Structure
 
-Với một thư mục lưu file đã chọn, các file tải về sẽ được phân bổ theo cấu trúc sau:
+For the save folder selected in the UI, downloads are organized by channel:
 
 ```text
-<Thư mục lưu>
-\-- <Tên Kênh>
+<Save folder>/
+\-- <Channel name>/
     |-- video/
-    |   |-- Example Title.mp4
-    |   |-- Example Title (2).mp4
-    |   \-- Another Video Title.mp4
+    |   \-- Example Title.mp4
     |-- thumb/
-    |   |-- Example Title.jpg
-    |   |-- Example Title (2).jpg
-    |   \-- Another Video Title.jpg
+    |   \-- Example Title.jpg
     \-- audio/
-        |-- Example Title.mp3
-        |-- Example Title (2).mp3
-        \-- Another Video Title.mp3
+        \-- Example Title.mp3
 ```
 
-Thư mục `audio/` chỉ được tạo ra khi bạn dùng các chế độ tải MP3. Thư mục kênh đầu ra chỉ nên chứa các thư mục con do ứng dụng này tạo ra (`video/`, `thumb/`, và `audio/`). Các file tạm (temp) sẽ được tạo ra bên ngoài thư mục đầu ra này và sẽ tự động dọn dẹp khi có thể.
+The `audio` folder is created only when an audio download mode is used.
 
-Trạng thái ứng dụng được lưu bên ngoài thư mục kênh tải về. Backend runtime mặc định hiện là SQLite tại `data\download_state.sqlite3`. File `data\download_state.json` vẫn được giữ làm dữ liệu rollback/fallback và không bị xóa tự động, nhưng có thể cũ hơn SQLite nếu không export snapshot mới.
+## SQLite State Storage
 
-`download_state.sqlite3` là nguồn dữ liệu runtime mặc định cho trạng thái của các video. Các giá trị đường dẫn `video_path`, `thumb_path`, và `audio_path` được lưu lại chỉ mang tính chất tham khảo cho UI, vì người dùng có thể đổi tên file gốc sau khi tải xuống. Runtime SQLite files (`data/*.sqlite3` và `data/*.sqlite3-*`) được ignore bởi git.
+The app stores download status in:
 
-Có thể ép backend bằng biến môi trường `YTDL_STATE_BACKEND`:
-
-```powershell
-$env:YTDL_STATE_BACKEND='json'    # rollback về JSON
-$env:YTDL_STATE_BACKEND='sqlite'  # ép dùng SQLite
-Remove-Item Env:YTDL_STATE_BACKEND
+```text
+data/download_state.sqlite3
 ```
 
-Các lệnh thủ công cho migration và kiểm tra dữ liệu:
+This file is the only source of truth for downloaded, skipped, and manual statuses. The app does not depend on real output filenames when deciding old download status because users may rename downloaded files after download.
 
-```powershell
-python scripts/migrate_download_state_to_sqlite.py
-python scripts/validate_download_state_migration.py
+SQLite sidecar files may exist next to it:
+
+```text
+data/download_state.sqlite3-wal
+data/download_state.sqlite3-shm
 ```
 
-Các lệnh bảo trì SQLite runtime:
+Do not delete these files if you want to keep download history and manual statuses.
 
-```powershell
-python -m core.db_store --quick-check
-python scripts/sqlite_state_health_check.py
-python scripts/backup_sqlite_state.py
-python scripts/export_sqlite_state_to_json.py
-```
+## Packaging .exe
 
-## Đóng gói Windows .exe (Packaging)
-
-Runtime state và runtime tools phải nằm bên ngoài file `.exe`, cạnh thư mục app. Không bundle các file này vào executable:
-
-- `data/download_state.sqlite3`
-- `data/download_state.sqlite3-wal`
-- `data/download_state.sqlite3-shm`
-- `data/download_state.json`
-- `data/app_settings.json`
-- `data/bin/yt-dlp.exe`
-- `data/bin/ffmpeg.exe`
-- `data/bin/deno.exe`
-- cookies file do người dùng chọn
-
-Các file DB/runtime state đã được ignore bởi git. Trước khi build, chạy:
-
-```powershell
-python scripts/sqlite_state_health_check.py
-python scripts/backup_sqlite_state.py
-```
-
-Build bằng PyInstaller từ repo root:
+Build from the repository root:
 
 ```powershell
 python -m PyInstaller --noconfirm --clean --onefile --windowed --name "Youtube Downloaderbs" app.py
 ```
 
-Không bundle `data/`, SQLite DB, JSON state, cookies, API key thật, hay runtime tools vào executable; các file runtime cần được đặt cạnh `.exe` trong folder portable sau khi build.
-
-Folder portable sau build nên có cấu trúc:
+Expected output:
 
 ```text
-Youtube Downloader/
-|-- Youtube Downloaderbs.exe
-\-- data/
-    |-- api key.txt.example
-    |-- cookies.txt.example
-    \-- bin/
-        |-- yt-dlp.exe
-        |-- ffmpeg.exe
-        \-- deno.exe
+dist/Youtube Downloaderbs.exe
 ```
 
-`download_state.sqlite3` là runtime state mặc định. Với người dùng legacy, có thể chỉ copy `download_state.json`; app sẽ tự migration an toàn sang SQLite trong lần chạy đầu tiên.
+Build and release packages must keep user data and runtime tools outside the executable.
 
-Checklist test sau build:
+## Security Notes
 
-1. Existing SQLite user:
-   - Copy `data/download_state.sqlite3` vào `dist` app folder `data/`.
-   - Mở `.exe`, xác nhận dữ liệu cũ load đúng.
-   - Sửa manual status, đóng/mở lại, xác nhận status vẫn còn.
+Do not commit or upload:
 
-2. Legacy JSON-only user:
-   - Copy chỉ `data/download_state.json` và `data/app_settings.json`.
-   - Không copy SQLite files.
-   - Mở `.exe`, xác nhận app tạo `data/download_state.sqlite3`.
-   - Xác nhận có `data/backups/download_state.json.bak.*`.
-   - Xác nhận JSON không bị xóa.
-   - Đóng/mở lại, xác nhận migration không chạy lại.
+- `data/download_state.sqlite3`
+- `data/download_state.sqlite3-wal`
+- `data/download_state.sqlite3-shm`
+- `data/app_settings.json`
+- cookies files
+- API key files
+- generated `.exe` files
+- release archives
 
-3. Forced JSON rollback:
-   ```powershell
-   $env:YTDL_STATE_BACKEND='json'
-   .\Youtube Downloaderbs.exe
-   Remove-Item Env:YTDL_STATE_BACKEND
-   ```
-   Xác nhận app đọc JSON state.
+Only example files such as `data/app_settings.example.json`, `data/api key.txt.example`, and `data/cookies.txt.example` are safe to include.
 
-Manual runtime test nên làm thêm: mở app, load channel/video list, sửa/xóa manual status, tải một video/thumb nhỏ, đóng/mở lại và xác nhận SQLite vẫn lưu đúng.
+## Current Limitations
 
-## Legacy JSON users
-
-Nếu người dùng cũ chỉ có `data/download_state.json` và chưa có `data/download_state.sqlite3`, app sẽ thử migration an toàn ngay lúc startup trong lần chạy đầu tiên:
-
-- Chỉ chạy khi SQLite bị thiếu hoặc chưa có `download_items`.
-- Người dùng đã có SQLite chỉ chạy kiểm tra nhẹ bằng `SELECT 1 FROM download_items LIMIT 1`; startup không scan DB lớn.
-- Backup JSON trước vào `data/backups/download_state.json.bak.YYYYMMDD-HHMMSS`.
-- Không xóa hoặc ghi đè `data/download_state.json`.
-- Nếu migration thành công, app dùng SQLite.
-- Nếu migration lỗi, app fallback về JSON và tiếp tục chạy.
-- Full health check vẫn là lệnh thủ công:
-  ```powershell
-  python scripts/sqlite_state_health_check.py
-  ```
-
-Rollback thủ công về JSON:
-
-```powershell
-$env:YTDL_STATE_BACKEND='json'
-```
-
-API key cuối cùng được nhập bằng tay sẽ được lưu ở `data\app_settings.json`. Ứng dụng sẽ tự động bỏ qua nếu file cài đặt bị thiếu hoặc bị lỗi (corrupted) và sẽ khởi động với ô nhập API key trống.
-
-Khi người dùng tự cập nhật trạng thái tải, chúng sẽ được lưu ngay lập tức vào backend trạng thái đang được chọn theo khóa định danh video, không dùng tên file hoặc đường dẫn làm khóa chính. Trạng thái sửa đổi thủ công này sẽ được ưu tiên hiển thị ở các lần mở app sau này, cho đến khi người dùng xóa trạng thái thủ công đó hoặc tiến hành tải lại thành công.
-
-Các file tải về dùng đúng tên gốc của video trên YouTube, chỉ chuẩn hóa các ký tự không hợp lệ cho tương thích với quy tắc đặt tên file của Windows. Các file Video, hình thu nhỏ (thumbnail), và nhạc (audio) của cùng một video sẽ luôn dùng chung một tên gốc (base filename).
-
-Quá trình tải video mặc định dùng định dạng tốt nhất từ yt-dlp. File xuất ra cuối cùng sẽ được tự động nối (merge) thành định dạng chuẩn `.mp4` khi có thể.
-
-## Giới hạn tốc độ tải (Download limit)
-
-Trường giới hạn tốc độ thiết kế riêng cho đơn vị MB/s:
-
-- Bỏ trống hoặc nhập `0` có nghĩa là không giới hạn.
-- Nhập `5` sẽ truyền cho yt-dlp tham số `--limit-rate 5M`.
-- Nhập `1.5` sẽ truyền cho yt-dlp tham số `--limit-rate 1.5M`.
-- Chữ viết, số âm, hay các lệnh kiểu command như `--anything` đều sẽ bị tự động từ chối.
-
-## Tải thêm video
-
-Các video ngắn (shorts) sẽ được ẩn đi theo mặc định. Ứng dụng sử dụng API trả về `videos.list(contentDetails.duration)` và ngưỡng UI ở ô `Ẩn video dưới: [3] phút` để quyết định ẩn/hiện. Sử dụng checkbox `Hiển thị video ngắn` để xem lại toàn bộ các video đã lấy về mà không cần gọi API lại.
-
-Lần gọi API đầu tiên sẽ quét qua danh sách tải lên (uploads playlist) cho đến khi lấy được đủ 100 video thỏa mãn điều kiện hiển thị (sau khi lọc thời lượng), hoặc khi không còn video nào nữa trên kênh, hoặc khi đạt ngưỡng giới hạn an toàn là quét qua 500 video. Dùng nút `Xem thêm video` để tiếp tục tải các video cũ hơn từ kênh đó.
-
-## Giới hạn thiết kế (Current limitations)
-
-- SQLite là backend trạng thái mặc định; JSON vẫn được giữ để rollback/fallback.
-- Không xuất dữ liệu metadata, sidecar, JSON, TXT, hay CSV.
-- Không chia cấu trúc một-thư-mục-cho-mỗi-video.
-- Không có hệ thống đồng bộ đám mây (cloud sync) hay đăng nhập.
+- The app requires a YouTube Data API key to fetch channel videos.
+- Some YouTube downloads may require valid cookies.
+- Runtime tools must be updated manually in `data\bin`.
+- Download status is stored by channel/video identity and selected save folder, not by scanning old output folders.

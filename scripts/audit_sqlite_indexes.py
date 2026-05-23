@@ -15,9 +15,7 @@ TABLES = (
     "channels",
     "download_items",
     "download_files",
-    "import_warnings",
     "app_meta",
-    "schema_migrations",
 )
 
 QUERY_PLANS = (

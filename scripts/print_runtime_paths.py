@@ -7,7 +7,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core.app_settings import app_settings_file
-from core.runtime_paths import app_root, data_dir, db_file, is_frozen, runtime_file, state_file
+from core.runtime_paths import app_root, data_dir, db_file, is_frozen, runtime_file
 
 
 RUNTIME_FILES = (
@@ -27,7 +27,6 @@ def main() -> int:
     print(f"app_root: {app_root()}")
     print(f"data_dir: {data_dir()}")
     print(f"db_path: {db_file()}")
-    print(f"json_state_path: {state_file()}")
     print(f"settings_path: {app_settings_file()}")
     print("external_runtime_files:")
     for label, filename in RUNTIME_FILES:

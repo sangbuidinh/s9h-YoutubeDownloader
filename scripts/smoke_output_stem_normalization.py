@@ -202,7 +202,6 @@ def _temp_runtime():
 def _patched_db_file(db_path: Path):
     old_db_file = db_store.db_file
     old_state_db_file = state_store.db_file
-    _reset_state_store_caches()
     try:
         db_store.db_file = lambda: db_path
         state_store.db_file = lambda: db_path
@@ -210,18 +209,10 @@ def _patched_db_file(db_path: Path):
     finally:
         db_store.db_file = old_db_file
         state_store.db_file = old_state_db_file
-        _reset_state_store_caches()
-
-
-def _reset_state_store_caches() -> None:
-    state_store._BACKEND_WARNING_KEYS.clear()
-    state_store._MIGRATION_RESULTS_BY_PATH.clear()
-    state_store._STATE_BACKEND_INIT_RESULT = None
 
 
 def _snapshot_real_runtime_files() -> dict[str, tuple[bool, int | None, int | None]]:
     paths = {
-        "json": state_store.state_file(),
         "sqlite": db_store.db_file(),
         "wal": Path(f"{db_store.db_file()}-wal"),
         "shm": Path(f"{db_store.db_file()}-shm"),

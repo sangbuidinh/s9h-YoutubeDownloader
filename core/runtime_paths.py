@@ -25,10 +25,6 @@ def bin_dir() -> Path:
     return data_dir() / "bin"
 
 
-def state_file() -> Path:
-    return data_dir() / "download_state.json"
-
-
 def db_file() -> Path:
     return data_dir() / "download_state.sqlite3"
 

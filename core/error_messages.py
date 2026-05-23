@@ -81,6 +81,8 @@ def classify_general_error(text: str) -> FriendlyError:
         return FRIENDLY_ERRORS["missing_ytdlp"]
     if _contains_missing_ffmpeg(lower):
         return FRIENDLY_ERRORS["missing_ffmpeg"]
+    if _contains_sqlite_state_error(lower):
+        return FRIENDLY_ERRORS["sqlite_state"]
     if _contains_stream_interrupted(lower):
         return FRIENDLY_ERRORS["stream_interrupted"]
     if _contains_audio_extraction(lower):
@@ -211,6 +213,18 @@ def _contains_missing_ytdlp(text: str) -> bool:
 def _contains_missing_ffmpeg(text: str) -> bool:
     lower = (text or "").lower()
     return "ffmpeg.exe missing" in lower or "ffmpeg not found" in lower
+
+
+def _contains_sqlite_state_error(text: str) -> bool:
+    lower = (text or "").lower()
+    return (
+        "không thể mở cơ sở dữ liệu sqlite" in lower
+        or "sqlite database" in lower
+        or "sqlite3." in lower
+        or "database disk image is malformed" in lower
+        or "database is locked" in lower
+        or "unable to open database file" in lower
+    )
 
 
 def _contains_path_too_long(text: str) -> bool:
@@ -460,6 +474,16 @@ FRIENDLY_ERRORS = {
         (
             r"Đặt ffmpeg.exe trong data\bin của thư mục portable",
             "Sau đó tải lại video",
+        ),
+    ),
+    "sqlite_state": FriendlyError(
+        "ERROR",
+        "Không thể mở cơ sở dữ liệu SQLite",
+        "Tool không thể đọc hoặc ghi file trạng thái tải xuống.",
+        (
+            "Đóng các bản tool khác nếu đang mở",
+            "Kiểm tra quyền ghi trong thư mục data",
+            "Giữ lại file data\\download_state.sqlite3 nếu cần bảo toàn lịch sử tải",
         ),
     ),
     "audio_failed": FriendlyError(
