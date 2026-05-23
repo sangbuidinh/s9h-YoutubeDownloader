@@ -4,6 +4,7 @@ from pathlib import Path
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 LEGACY_RUNTIME_DIR = Path(r"D:\Youtube Downloader")
+RUNTIME_BIN_FILENAMES = {"yt-dlp.exe", "ffmpeg.exe", "deno.exe"}
 
 
 def is_frozen() -> bool:
@@ -20,6 +21,10 @@ def data_dir() -> Path:
     return app_root() / "data"
 
 
+def bin_dir() -> Path:
+    return data_dir() / "bin"
+
+
 def state_file() -> Path:
     return data_dir() / "download_state.json"
 
@@ -29,10 +34,20 @@ def db_file() -> Path:
 
 
 def runtime_file(filename: str) -> Path:
-    primary = app_root() / filename
-    if primary.exists() or is_frozen():
-        return primary
-    fallback = LEGACY_RUNTIME_DIR / filename
-    if fallback.exists():
-        return fallback
+    if filename.casefold() in RUNTIME_BIN_FILENAMES:
+        primary = bin_dir() / filename
+        candidates = (primary, app_root() / filename)
+    elif filename == "api key.txt":
+        primary = data_dir() / filename
+        candidates = (primary, app_root() / filename)
+    else:
+        primary = app_root() / filename
+        candidates = (primary,)
+
+    if not is_frozen():
+        candidates = (*candidates, LEGACY_RUNTIME_DIR / filename)
+
+    for path in candidates:
+        if path.exists():
+            return path
     return primary

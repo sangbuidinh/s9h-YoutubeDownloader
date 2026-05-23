@@ -383,7 +383,7 @@ FRIENDLY_ERRORS = {
         (
             "Kiểm tra lại API key",
             "Bật YouTube Data API v3 trong Google Cloud",
-            "Thêm API key mới vào api key.txt",
+            r"Thêm API key mới vào data\api key.txt",
         ),
     ),
     "api_quota": FriendlyError(
@@ -392,7 +392,7 @@ FRIENDLY_ERRORS = {
         "API key này đã dùng hết giới hạn trong ngày.",
         (
             "Đợi quota reset",
-            "Hoặc thêm API key khác vào api key.txt",
+            r"Hoặc thêm API key khác vào data\api key.txt",
             "Tool sẽ thử key khác nếu có",
         ),
     ),
@@ -411,7 +411,7 @@ FRIENDLY_ERRORS = {
         "Thiếu yt-dlp.exe",
         "Tool không tìm thấy yt-dlp.exe trong thư mục chương trình.",
         (
-            "Đặt yt-dlp.exe cùng thư mục với file .exe của tool",
+            r"Đặt yt-dlp.exe trong data\bin của thư mục portable",
             "Sau đó mở lại tool",
         ),
     ),
@@ -458,7 +458,7 @@ FRIENDLY_ERRORS = {
         "Thiếu ffmpeg.exe",
         "Tool cần ffmpeg để ghép video và audio hoặc convert thumbnail.",
         (
-            "Đặt ffmpeg.exe cùng thư mục với file .exe của tool",
+            r"Đặt ffmpeg.exe trong data\bin của thư mục portable",
             "Sau đó tải lại video",
         ),
     ),
@@ -467,7 +467,7 @@ FRIENDLY_ERRORS = {
         "Không thể trích xuất MP3",
         "yt-dlp hoặc ffmpeg không tạo được file MP3 hoàn chỉnh.",
         (
-            "Kiểm tra ffmpeg.exe nằm cùng thư mục với tool",
+            r"Kiểm tra ffmpeg.exe nằm trong data\bin của thư mục portable",
             "Cập nhật yt-dlp.exe nếu file quá cũ",
             "Thử tải lại video sau vài phút",
         ),

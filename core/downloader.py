@@ -30,7 +30,7 @@ from core.error_messages import (
     format_friendly_error,
     missing_js_runtime_warning,
 )
-from core.filename_utils import sanitize_video_filename_base
+from core.filename_utils import normalize_output_stem
 from core.runtime_paths import runtime_file
 from core.state_store import (
     get_effective_status,
@@ -205,13 +205,16 @@ def download_items(
         if _cancel_requested(cancel_controller):
             break
 
-        stem = getattr(video, "sanitized_filename_base", "") or sanitize_video_filename_base(video.title)
+        raw_stem = getattr(video, "sanitized_filename_base", "") or getattr(video, "title", "")
+        stem = normalize_output_stem(raw_stem)
+        video.sanitized_filename_base = stem
         paths = build_output_paths(
             options.base_folder,
             options.channel_name,
             stem,
         )
         current_part = None
+        run_parts_current_run: list[str] = []
 
         log(f"[INFO] Starting download: {index}/{len(videos)}")
         log(f"[INFO] Mode: {options.download_mode}")
@@ -240,6 +243,7 @@ def download_items(
                 for part in missing_parts:
                     _raise_if_cancelled(cancel_controller)
                     current_part = part
+                    _remember_run_part(run_parts_current_run, part)
                     if part == PART_VIDEO:
                         log(f"[INFO] Downloading {stem}.mp4")
                         log("[INFO] Preferred codec: H.264/AVC MP4 when available.")
@@ -282,7 +286,14 @@ def download_items(
                     log(_part_success_message(part, stem))
                     current_part = None
 
-            final_status = _reconcile_current_item(options, video, paths, log, status_callback)
+            final_status = _reconcile_current_item(
+                options,
+                video,
+                paths,
+                log,
+                status_callback,
+                run_parts=tuple(run_parts_current_run),
+            )
             if final_status == STATUS_DOWNLOADED:
                 downloaded_count += 1
                 consecutive_blocking_failures = 0
@@ -290,8 +301,16 @@ def download_items(
             else:
                 failed_count += 1
         except PermissionError as exc:
+            _remember_run_part(run_parts_current_run, current_part)
             _mark_part_error(options, video, paths, current_part)
-            final_status = _reconcile_current_item(options, video, paths, log, status_callback)
+            final_status = _reconcile_current_item(
+                options,
+                video,
+                paths,
+                log,
+                status_callback,
+                run_parts=tuple(run_parts_current_run) or None,
+            )
             if final_status == STATUS_DOWNLOADED:
                 downloaded_count += 1
                 consecutive_blocking_failures = 0
@@ -301,11 +320,27 @@ def download_items(
             consecutive_blocking_failures = 0
             _log_friendly_general_error(log, f"{type(exc).__name__}: {exc}", [f"{type(exc).__name__}: {exc}"])
         except DownloadCancelled:
-            _reconcile_current_item(options, video, paths, log, status_callback)
+            _remember_run_part(run_parts_current_run, current_part)
+            _reconcile_current_item(
+                options,
+                video,
+                paths,
+                log,
+                status_callback,
+                run_parts=tuple(run_parts_current_run) or None,
+            )
             break
         except YtdlpExecutionError as exc:
+            _remember_run_part(run_parts_current_run, current_part)
             _mark_part_error(options, video, paths, current_part)
-            final_status = _reconcile_current_item(options, video, paths, log, status_callback)
+            final_status = _reconcile_current_item(
+                options,
+                video,
+                paths,
+                log,
+                status_callback,
+                run_parts=tuple(run_parts_current_run) or None,
+            )
             if final_status == STATUS_DOWNLOADED:
                 downloaded_count += 1
                 consecutive_blocking_failures = 0
@@ -324,8 +359,16 @@ def download_items(
             else:
                 consecutive_blocking_failures = 0
         except DownloadError as exc:
+            _remember_run_part(run_parts_current_run, current_part)
             _mark_part_error(options, video, paths, current_part)
-            final_status = _reconcile_current_item(options, video, paths, log, status_callback)
+            final_status = _reconcile_current_item(
+                options,
+                video,
+                paths,
+                log,
+                status_callback,
+                run_parts=tuple(run_parts_current_run) or None,
+            )
             if final_status == STATUS_DOWNLOADED:
                 downloaded_count += 1
                 consecutive_blocking_failures = 0
@@ -338,8 +381,16 @@ def download_items(
             else:
                 _log_friendly_general_error(log, str(exc), [str(exc)])
         except Exception as exc:
+            _remember_run_part(run_parts_current_run, current_part)
             _mark_part_error(options, video, paths, current_part)
-            final_status = _reconcile_current_item(options, video, paths, log, status_callback)
+            final_status = _reconcile_current_item(
+                options,
+                video,
+                paths,
+                log,
+                status_callback,
+                run_parts=tuple(run_parts_current_run) or None,
+            )
             if final_status == STATUS_DOWNLOADED:
                 downloaded_count += 1
                 consecutive_blocking_failures = 0
@@ -359,7 +410,14 @@ def download_items(
         log(f"[WARNING] Bot-check/403 failures: {blocking_failure_count}")
 
 
-def _reconcile_current_item(options: DownloadOptions, video, paths, log, status_callback) -> str:
+def _reconcile_current_item(
+    options: DownloadOptions,
+    video,
+    paths,
+    log,
+    status_callback,
+    run_parts: tuple[str, ...] | None = None,
+) -> str:
     try:
         old_status, new_status = reconcile_downloaded_item_state(
             options.channel_id,
@@ -368,6 +426,7 @@ def _reconcile_current_item(options: DownloadOptions, video, paths, log, status_
             video,
             paths,
             options.download_mode,
+            run_parts=run_parts,
         )
     except OSError as exc:
         technical = f"File operation failed during state save: {type(exc).__name__}: {exc}"
@@ -379,7 +438,7 @@ def _reconcile_current_item(options: DownloadOptions, video, paths, log, status_
         return new_status
     video.status = new_status
     if old_status != new_status:
-        log(f"[INFO] State reconciled from actual files: {old_status} -> {new_status}")
+        log(f"[INFO] State reconciled after current run: {old_status} -> {new_status}")
     log(f"[INFO] Final status: {new_status}")
     status_callback(video)
     return new_status
@@ -514,7 +573,7 @@ def _base_ytdlp_command(options: DownloadOptions) -> list[str]:
 
 
 def _deno_runtime_path() -> Path:
-    return runtime_file("yt-dlp.exe").parent / "deno.exe"
+    return runtime_file("deno.exe")
 
 
 def _cancel_requested(cancel_controller: DownloadController | None) -> bool:
@@ -682,6 +741,11 @@ def _validate_output_paths(paths, parts: tuple[str, ...]) -> None:
     for final_path in final_paths:
         if len(str(final_path.resolve(strict=False))) > MAX_FINAL_PATH_LENGTH:
             raise DownloadError(OUTPUT_PATH_TOO_LONG_MESSAGE)
+
+
+def _remember_run_part(parts: list[str], part: str | None) -> None:
+    if part and part not in parts:
+        parts.append(part)
 
 
 def _mark_part_error(options: DownloadOptions, video, paths, part: str | None) -> None:

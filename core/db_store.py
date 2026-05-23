@@ -6,12 +6,22 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
+from core.filename_utils import normalize_output_stem
 from core.runtime_paths import db_file
 
 
 SCHEMA_VERSION = 1
 PLATFORM_YOUTUBE = "youtube"
 FILE_PARTS = ("video", "thumb", "audio")
+REQUIRED_TABLES = (
+    "app_meta",
+    "schema_migrations",
+    "channels",
+    "download_items",
+    "download_files",
+    "import_warnings",
+)
+NULL_COUNTER_KEY = "<NULL>"
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS app_meta (
@@ -91,14 +101,15 @@ CREATE TABLE IF NOT EXISTS import_warnings (
     created_at TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_download_items_identity
-ON download_items(platform, channel_id, video_id, save_base_folder_norm);
+DROP INDEX IF EXISTS idx_download_items_identity;
 
 CREATE INDEX IF NOT EXISTS idx_download_items_channel
 ON download_items(channel_db_id);
 
-CREATE INDEX IF NOT EXISTS idx_download_files_item_part
-ON download_files(item_id, part);
+CREATE INDEX IF NOT EXISTS idx_download_items_channel_folder
+ON download_items(platform, channel_id, save_base_folder_norm);
+
+DROP INDEX IF EXISTS idx_download_files_item_part;
 
 CREATE INDEX IF NOT EXISTS idx_download_files_path_norm
 ON download_files(path_norm);
@@ -137,6 +148,112 @@ def init_db(path: Path | None = None) -> Path:
         )
         conn.commit()
     return db_path
+
+
+def quick_sqlite_state_check(path: Path | None = None) -> dict:
+    db_path = path or db_file()
+    result = {
+        "ok": False,
+        "db_path": str(db_path),
+        "exists": db_path.exists(),
+        "can_open": False,
+        "required_tables_present": False,
+        "missing_tables": list(REQUIRED_TABLES),
+        "download_items_count": 0,
+        "simple_read_succeeded": False,
+        "reasons": [],
+    }
+    if not db_path.exists():
+        result["reasons"].append("db_missing")
+        return result
+
+    try:
+        with closing(_connect_read_only(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            result["can_open"] = True
+            table_names = _sqlite_table_names(conn)
+            missing_tables = [table for table in REQUIRED_TABLES if table not in table_names]
+            result["missing_tables"] = missing_tables
+            result["required_tables_present"] = not missing_tables
+            if missing_tables:
+                result["reasons"].append("missing_required_tables")
+                return result
+
+            item_count = conn.execute("SELECT COUNT(*) AS count FROM download_items").fetchone()["count"]
+            result["download_items_count"] = item_count
+            if item_count <= 0:
+                result["reasons"].append("download_items_empty")
+
+            conn.execute("SELECT id FROM download_items LIMIT 1").fetchone()
+            result["simple_read_succeeded"] = True
+    except sqlite3.Error as exc:
+        result["reasons"].append(f"sqlite_error:{type(exc).__name__}: {exc}")
+        return result
+
+    result["ok"] = (
+        result["exists"]
+        and result["can_open"]
+        and result["required_tables_present"]
+        and result["download_items_count"] > 0
+        and result["simple_read_succeeded"]
+    )
+    return result
+
+
+def is_sqlite_state_usable(path: Path | None = None) -> bool:
+    return bool(quick_sqlite_state_check(path).get("ok"))
+
+
+def sqlite_has_any_items(path: Path | None = None) -> bool:
+    db_path = path or db_file()
+    if not db_path.exists():
+        return False
+
+    try:
+        with closing(_connect_read_only(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            table_names = _sqlite_table_names(conn)
+            if any(table_name not in table_names for table_name in REQUIRED_TABLES):
+                return False
+            row = conn.execute("SELECT 1 FROM download_items LIMIT 1").fetchone()
+            return row is not None
+    except sqlite3.Error:
+        return False
+
+
+def get_sqlite_state_summary(path: Path | None = None) -> dict:
+    db_path = path or db_file()
+    summary = {
+        "db_path": str(db_path),
+        "channels": 0,
+        "download_items": 0,
+        "download_files": 0,
+        "import_warnings": 0,
+        "status_counts": {},
+        "manual_override_counts": {},
+        "manual_status_counts": {},
+    }
+    if not db_path.exists():
+        summary["error"] = "db_missing"
+        return summary
+
+    try:
+        with closing(_connect_read_only(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            table_names = _sqlite_table_names(conn)
+            for table_name in ("channels", "download_items", "download_files", "import_warnings"):
+                if table_name in table_names:
+                    summary[table_name] = conn.execute(f"SELECT COUNT(*) AS count FROM {table_name}").fetchone()[
+                        "count"
+                    ]
+
+            if "download_items" in table_names:
+                summary["status_counts"] = _counts_by_nullable_text(conn, "status")
+                summary["manual_override_counts"] = _manual_override_counts(conn)
+                summary["manual_status_counts"] = _counts_by_nullable_text(conn, "manual_status")
+    except sqlite3.Error as exc:
+        summary["error"] = f"sqlite_error:{type(exc).__name__}: {exc}"
+    return summary
 
 
 def load_state(path: Path | None = None) -> dict:
@@ -215,19 +332,70 @@ def get_channel_video_entries(
     if not channel_id:
         return {}
 
-    videos = load_state(path).get("channels", {}).get(channel_id, {}).get("videos", {})
-    if not isinstance(videos, dict):
+    db_path = path or db_file()
+    if not db_path.exists():
         return {}
+
+    where_sql, params = _channel_items_where(channel_id, save_base_folder)
+    videos: dict = {}
+    video_key_norms: dict[str, str] = {}
+    item_id_to_entry: dict[int, dict] = {}
+
+    with closing(_connect_read_only(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        item_rows = conn.execute(
+            f"""
+            SELECT
+                di.id,
+                di.platform,
+                di.channel_id,
+                di.video_id,
+                di.save_base_folder_raw,
+                di.save_base_folder_norm,
+                di.original_title,
+                di.sanitized_filename_base,
+                di.display_order_at_download,
+                di.status,
+                di.manual_status,
+                di.manual_override,
+                di.downloaded_at,
+                di.updated_at,
+                c.channel_name,
+                c.save_base_folder_raw AS channel_save_base_folder_raw
+            FROM download_items di
+            LEFT JOIN channels c ON c.id = di.channel_db_id
+            WHERE {where_sql}
+            ORDER BY di.id
+            """,
+            params,
+        ).fetchall()
+
+        for row in item_rows:
+            entry = _row_to_item_entry(row)
+            video_key = _state_video_key(videos, video_key_norms, row["video_id"], row["save_base_folder_norm"])
+            videos[video_key] = entry
+            item_id_to_entry[row["id"]] = entry
+
+        if item_id_to_entry:
+            file_rows = conn.execute(
+                f"""
+                SELECT df.item_id, df.part, df.status, df.filename_raw, df.path_raw
+                FROM download_files df
+                JOIN download_items di ON di.id = df.item_id
+                WHERE {where_sql}
+                ORDER BY di.id, df.part
+                """,
+                params,
+            ).fetchall()
+            for row in file_rows:
+                entry = item_id_to_entry.get(row["item_id"])
+                if entry is not None:
+                    _apply_file_row(entry, row)
+
     if save_base_folder is None:
         return videos
 
-    save_base_folder_norm = _normalize_path_text(save_base_folder)
-    return {
-        video_key: entry
-        for video_key, entry in videos.items()
-        if isinstance(entry, dict)
-        and _normalize_path_text(entry.get("save_base_folder", "")) == save_base_folder_norm
-    }
+    return videos
 
 
 def get_video_entry(
@@ -239,15 +407,17 @@ def get_video_entry(
     if not channel_id or not video_id:
         return None
 
-    videos = get_channel_video_entries(channel_id, path=path, save_base_folder=save_base_folder)
-    entry = videos.get(video_id)
-    if isinstance(entry, dict):
-        return entry
+    db_path = path or db_file()
+    if not db_path.exists():
+        return None
 
-    for candidate in videos.values():
-        if isinstance(candidate, dict) and candidate.get("video_id") == video_id:
-            return candidate
-    return None
+    with closing(_connect_read_only(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        item_id = _resolve_item_id_for_read(conn, channel_id, video_id, save_base_folder)
+        if item_id is None:
+            return None
+        entry = _entry_for_item_id(conn, item_id)
+        return entry if entry else None
 
 
 def update_manual_status(
@@ -535,6 +705,76 @@ def _connect_read_only(path: Path) -> sqlite3.Connection:
     return sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
 
 
+def _sqlite_table_names(conn: sqlite3.Connection) -> set[str]:
+    rows = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+    return {row["name"] if isinstance(row, sqlite3.Row) else row[0] for row in rows}
+
+
+def _counts_by_nullable_text(conn: sqlite3.Connection, column_name: str) -> dict[str, int]:
+    if column_name not in {"status", "manual_status"}:
+        raise ValueError("Unsupported count column")
+    rows = conn.execute(
+        f"""
+        SELECT COALESCE({column_name}, ?) AS key, COUNT(*) AS count
+        FROM download_items
+        GROUP BY key
+        ORDER BY key
+        """,
+        (NULL_COUNTER_KEY,),
+    ).fetchall()
+    return {row["key"]: row["count"] for row in rows}
+
+
+def _manual_override_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    rows = conn.execute(
+        """
+        SELECT
+            CASE
+                WHEN manual_override IS NULL THEN 'missing/NULL'
+                WHEN manual_override = 0 THEN 'false/0'
+                WHEN manual_override = 1 THEN 'true/1'
+                ELSE 'invalid'
+            END AS key,
+            COUNT(*) AS count
+        FROM download_items
+        GROUP BY key
+        ORDER BY key
+        """
+    ).fetchall()
+    return {row["key"]: row["count"] for row in rows}
+
+
+def _channel_items_where(channel_id: str, save_base_folder: str | None = None) -> tuple[str, tuple]:
+    clauses = ["di.platform = ?", "di.channel_id = ?"]
+    params: list[str] = [PLATFORM_YOUTUBE, channel_id]
+    if save_base_folder is not None:
+        clauses.append("di.save_base_folder_norm = ?")
+        params.append(_normalize_path_text(save_base_folder))
+    return " AND ".join(clauses), tuple(params)
+
+
+def _resolve_item_id_for_read(
+    conn: sqlite3.Connection,
+    channel_id: str,
+    video_id: str,
+    save_base_folder: str | None = None,
+) -> int | None:
+    if save_base_folder is not None:
+        return _resolve_item_id(conn, channel_id, video_id, save_base_folder)
+
+    row = conn.execute(
+        """
+        SELECT id
+        FROM download_items
+        WHERE platform = ? AND channel_id = ? AND video_id = ?
+        ORDER BY id
+        LIMIT 1
+        """,
+        (PLATFORM_YOUTUBE, channel_id, video_id),
+    ).fetchone()
+    return int(row["id"] if isinstance(row, sqlite3.Row) else row[0]) if row else None
+
+
 def _resolve_item_id(
     conn: sqlite3.Connection,
     channel_id: str,
@@ -600,9 +840,10 @@ def _ensure_item(
         save_base_folder_norm,
         now,
     )
-    sanitized_filename_base = _text_or_empty(updates.get("sanitized_filename_base")).strip()
-    if not sanitized_filename_base:
-        sanitized_filename_base = f"yt_{video_id}"
+    sanitized_filename_base_raw = _text_or_empty(updates.get("sanitized_filename_base")).strip()
+    if not sanitized_filename_base_raw:
+        sanitized_filename_base_raw = f"yt_{video_id}"
+    sanitized_filename_base = normalize_output_stem(sanitized_filename_base_raw)
 
     cursor = conn.execute(
         """
@@ -708,7 +949,7 @@ def _apply_item_updates(conn: sqlite3.Connection, item_id: int, updates: dict, n
 
     if "sanitized_filename_base" in updates and _has_text(updates.get("sanitized_filename_base")):
         assignments.append("sanitized_filename_base = ?")
-        params.append(str(updates.get("sanitized_filename_base")))
+        params.append(normalize_output_stem(str(updates.get("sanitized_filename_base"))))
 
     if "manual_override" in updates and updates.get("manual_override") is not None:
         assignments.append("manual_override = ?")
@@ -1118,6 +1359,29 @@ def _print_summary(path: Path | None = None) -> int:
     return 0
 
 
+def _print_quick_check(path: Path | None = None) -> int:
+    result = quick_sqlite_state_check(path)
+    summary = get_sqlite_state_summary(path)
+    print(f"status: {'OK' if result.get('ok') else 'FAIL'}")
+    print(f"DB path: {result.get('db_path')}")
+    if summary.get("error"):
+        print(f"summary_error: {summary['error']}")
+    print("counts:")
+    print(f"  channels: {summary.get('channels', 0)}")
+    print(f"  download_items: {summary.get('download_items', result.get('download_items_count', 0))}")
+    print(f"  download_files: {summary.get('download_files', 0)}")
+    print(f"  import_warnings: {summary.get('import_warnings', 0)}")
+    if result.get("ok"):
+        return 0
+
+    reasons = result.get("reasons") or ["unknown"]
+    print(f"reason: {', '.join(str(reason) for reason in reasons)}")
+    missing_tables = result.get("missing_tables") or []
+    if missing_tables:
+        print(f"missing_tables: {', '.join(missing_tables)}")
+    return 2 if "db_missing" in reasons else 1
+
+
 def _dump_one(channel_id: str, video_id: str, path: Path | None = None) -> int:
     entry = get_video_entry(channel_id, video_id, path=path)
     if entry is None:
@@ -1230,6 +1494,7 @@ def main() -> int:
     _configure_stdio()
     parser = argparse.ArgumentParser(description="Manual SQLite state-store smoke tools.")
     parser.add_argument("--summary", action="store_true", help="Print row counts from the SQLite state DB.")
+    parser.add_argument("--quick-check", action="store_true", help="Run a fast SQLite state usability check.")
     parser.add_argument(
         "--dump-one",
         nargs=2,
@@ -1246,6 +1511,8 @@ def main() -> int:
 
     if args.summary:
         return _print_summary()
+    if args.quick_check:
+        return _print_quick_check()
     if args.dump_one:
         return _dump_one(args.dump_one[0], args.dump_one[1])
     if args.self_test_write:

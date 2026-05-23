@@ -7,8 +7,8 @@ from core.filename_utils import (
     expected_audio_name,
     expected_thumb_name,
     expected_video_name,
+    normalize_output_stem,
     sanitize_channel_name,
-    sanitize_video_filename_base,
 )
 from core.state_store import (
     STATUS_DOWNLOADED,
@@ -49,7 +49,7 @@ def build_output_paths(
     video_dir = channel_dir / "video"
     thumb_dir = channel_dir / "thumb"
     audio_dir = channel_dir / "audio"
-    safe_filename_base = sanitize_video_filename_base(filename_base)
+    safe_filename_base = normalize_output_stem(filename_base)
     return OutputPaths(
         channel_dir=channel_dir,
         video_dir=video_dir,

@@ -20,20 +20,19 @@ Dựa theo bản package, ứng dụng yêu cầu các công cụ và thư mục
 ```text
 Youtube Downloader/
 |-- Youtube Downloaderbs.exe
-|-- yt-dlp.exe
-|-- ffmpeg.exe
-|-- deno.exe
-|-- api key.txt
 \-- data/
-    |-- app_settings.json
-    |-- download_state.json
-    \-- download_state.sqlite3
+    |-- api key.txt.example
+    |-- cookies.txt.example
+    \-- bin/
+        |-- yt-dlp.exe
+        |-- ffmpeg.exe
+        \-- deno.exe
 ```
 
-- `api key.txt`: File chỉ đọc (read-only). Ứng dụng không bao giờ sửa đổi file này.
-- `deno.exe`: Có thể dùng để yt-dlp giải quyết các thử thách JavaScript của YouTube. Các công cụ này được để bên ngoài file .exe nhằm mục đích có thể cập nhật độc lập mà không cần build lại app.
+- `data\api key.txt`: File chỉ đọc (read-only). Ứng dụng không bao giờ sửa đổi file này. Package chỉ kèm file ví dụ `data\api key.txt.example`.
+- `data\bin\deno.exe`: Có thể dùng để yt-dlp giải quyết các thử thách JavaScript của YouTube. Các công cụ này được để bên ngoài file .exe nhằm mục đích có thể cập nhật độc lập mà không cần build lại app.
 
-Khi chạy trực tiếp từ mã nguồn, dữ liệu cấu hình ứng dụng được lưu trữ ở `D:\Youtube Downloader Source\data`. Các công cụ chạy ứng dụng (như yt-dlp, ffmpeg) sẽ được ưu tiên đọc từ thư mục mã nguồn nếu có, hoặc đọc fallback từ `D:\Youtube Downloader` trong quá trình phát triển (development).
+Khi chạy trực tiếp từ mã nguồn, dữ liệu cấu hình ứng dụng được lưu trữ ở `D:\Youtube Downloader Source\data`. Các công cụ chạy ứng dụng (như yt-dlp, ffmpeg) sẽ được ưu tiên đọc từ `data\bin`, sau đó fallback về thư mục mã nguồn nếu có, hoặc đọc fallback từ `D:\Youtube Downloader` trong quá trình phát triển (development).
 
 ## Các chế độ tải (Download modes)
 
@@ -90,9 +89,101 @@ python scripts/validate_download_state_migration.py
 Các lệnh bảo trì SQLite runtime:
 
 ```powershell
+python -m core.db_store --quick-check
 python scripts/sqlite_state_health_check.py
 python scripts/backup_sqlite_state.py
 python scripts/export_sqlite_state_to_json.py
+```
+
+## Đóng gói Windows .exe (Packaging)
+
+Runtime state và runtime tools phải nằm bên ngoài file `.exe`, cạnh thư mục app. Không bundle các file này vào executable:
+
+- `data/download_state.sqlite3`
+- `data/download_state.sqlite3-wal`
+- `data/download_state.sqlite3-shm`
+- `data/download_state.json`
+- `data/app_settings.json`
+- `data/bin/yt-dlp.exe`
+- `data/bin/ffmpeg.exe`
+- `data/bin/deno.exe`
+- cookies file do người dùng chọn
+
+Các file DB/runtime state đã được ignore bởi git. Trước khi build, chạy:
+
+```powershell
+python scripts/sqlite_state_health_check.py
+python scripts/backup_sqlite_state.py
+```
+
+Build bằng PyInstaller từ repo root:
+
+```powershell
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name "Youtube Downloaderbs" app.py
+```
+
+Không bundle `data/`, SQLite DB, JSON state, cookies, API key thật, hay runtime tools vào executable; các file runtime cần được đặt cạnh `.exe` trong folder portable sau khi build.
+
+Folder portable sau build nên có cấu trúc:
+
+```text
+Youtube Downloader/
+|-- Youtube Downloaderbs.exe
+\-- data/
+    |-- api key.txt.example
+    |-- cookies.txt.example
+    \-- bin/
+        |-- yt-dlp.exe
+        |-- ffmpeg.exe
+        \-- deno.exe
+```
+
+`download_state.sqlite3` là runtime state mặc định. Với người dùng legacy, có thể chỉ copy `download_state.json`; app sẽ tự migration an toàn sang SQLite trong lần chạy đầu tiên.
+
+Checklist test sau build:
+
+1. Existing SQLite user:
+   - Copy `data/download_state.sqlite3` vào `dist` app folder `data/`.
+   - Mở `.exe`, xác nhận dữ liệu cũ load đúng.
+   - Sửa manual status, đóng/mở lại, xác nhận status vẫn còn.
+
+2. Legacy JSON-only user:
+   - Copy chỉ `data/download_state.json` và `data/app_settings.json`.
+   - Không copy SQLite files.
+   - Mở `.exe`, xác nhận app tạo `data/download_state.sqlite3`.
+   - Xác nhận có `data/backups/download_state.json.bak.*`.
+   - Xác nhận JSON không bị xóa.
+   - Đóng/mở lại, xác nhận migration không chạy lại.
+
+3. Forced JSON rollback:
+   ```powershell
+   $env:YTDL_STATE_BACKEND='json'
+   .\Youtube Downloaderbs.exe
+   Remove-Item Env:YTDL_STATE_BACKEND
+   ```
+   Xác nhận app đọc JSON state.
+
+Manual runtime test nên làm thêm: mở app, load channel/video list, sửa/xóa manual status, tải một video/thumb nhỏ, đóng/mở lại và xác nhận SQLite vẫn lưu đúng.
+
+## Legacy JSON users
+
+Nếu người dùng cũ chỉ có `data/download_state.json` và chưa có `data/download_state.sqlite3`, app sẽ thử migration an toàn ngay lúc startup trong lần chạy đầu tiên:
+
+- Chỉ chạy khi SQLite bị thiếu hoặc chưa có `download_items`.
+- Người dùng đã có SQLite chỉ chạy kiểm tra nhẹ bằng `SELECT 1 FROM download_items LIMIT 1`; startup không scan DB lớn.
+- Backup JSON trước vào `data/backups/download_state.json.bak.YYYYMMDD-HHMMSS`.
+- Không xóa hoặc ghi đè `data/download_state.json`.
+- Nếu migration thành công, app dùng SQLite.
+- Nếu migration lỗi, app fallback về JSON và tiếp tục chạy.
+- Full health check vẫn là lệnh thủ công:
+  ```powershell
+  python scripts/sqlite_state_health_check.py
+  ```
+
+Rollback thủ công về JSON:
+
+```powershell
+$env:YTDL_STATE_BACKEND='json'
 ```
 
 API key cuối cùng được nhập bằng tay sẽ được lưu ở `data\app_settings.json`. Ứng dụng sẽ tự động bỏ qua nếu file cài đặt bị thiếu hoặc bị lỗi (corrupted) và sẽ khởi động với ô nhập API key trống.

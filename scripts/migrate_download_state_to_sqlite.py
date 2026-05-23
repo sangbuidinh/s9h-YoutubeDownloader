@@ -70,6 +70,8 @@ def migrate_json_to_sqlite(
     source_json_path: Path | None = None,
     sqlite_path: Path | None = None,
     force: bool = False,
+    backup: bool = True,
+    backup_dir: Path | None = None,
 ) -> MigrationSummary:
     source_path = source_json_path or state_file()
     target_db_path = init_db(sqlite_path or db_file())
@@ -84,14 +86,13 @@ def migrate_json_to_sqlite(
         raise FileNotFoundError(source_path)
 
     with closing(connect_db(target_db_path)) as conn:
-        existing_items = conn.execute("SELECT COUNT(*) FROM download_items").fetchone()[0]
-        if existing_items and not force:
-            raise MigrationRefused(
-                f"{target_db_path} already contains {existing_items} download_items rows."
-            )
+        existing_item = conn.execute("SELECT 1 FROM download_items LIMIT 1").fetchone()
+        if existing_item is not None and not force:
+            raise MigrationRefused(f"{target_db_path} already contains download_items rows.")
 
-    summary.backup_path = _create_json_backup(source_path)
-    summary.backup_created = True
+    if backup:
+        summary.backup_path = _create_json_backup(source_path, backup_dir=backup_dir)
+        summary.backup_created = True
 
     with source_path.open("r", encoding="utf-8") as state_file_handle:
         state = json.load(state_file_handle)
@@ -623,16 +624,18 @@ def _clear_migrated_rows(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM import_warnings WHERE migration_id LIKE ?", (f"{MIGRATION_ID_PREFIX}_%",))
 
 
-def _create_json_backup(source_path: Path) -> Path:
+def _create_json_backup(source_path: Path, backup_dir: Path | None = None) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup_path = source_path.with_name(f"{source_path.name}.bak.{timestamp}")
+    target_dir = backup_dir or source_path.parent
+    target_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = target_dir / f"{source_path.name}.bak.{timestamp}"
     if not backup_path.exists():
         shutil.copy2(source_path, backup_path)
         return backup_path
 
     suffix = 1
     while True:
-        candidate = source_path.with_name(f"{source_path.name}.bak.{timestamp}.{suffix}")
+        candidate = target_dir / f"{source_path.name}.bak.{timestamp}.{suffix}"
         if not candidate.exists():
             shutil.copy2(source_path, candidate)
             return candidate
