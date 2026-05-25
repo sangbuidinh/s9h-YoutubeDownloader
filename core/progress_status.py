@@ -152,8 +152,6 @@ def _progress_detail_parts(event: ProgressEvent) -> list[str]:
         parts.append(f"Fragment {_compact_text(event.fragment, 24)}")
     if event.speed:
         parts.append(f"yt-dlp {_compact_text(event.speed, 32)}")
-    if event.eta:
-        parts.append(f"ETA {_compact_text(event.eta, 24)}")
     if event.fragment and event.percent:
         parts.append(f"Fragment {_compact_text(event.fragment, 24)}")
     return parts

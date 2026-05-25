@@ -1265,7 +1265,6 @@ class YouTubeDownloaderWindow:
         self._progress_display_key = None
         self._progress_sticky_percent = None
         self._progress_sticky_speed = None
-        self._progress_sticky_eta = None
         self._progress_sticky_fragment = None
 
     def _merge_progress_event_for_display(self, event: ProgressEvent) -> ProgressEvent:
@@ -1282,8 +1281,6 @@ class YouTubeDownloaderWindow:
             self._progress_sticky_percent = event.percent
         if event.speed:
             self._progress_sticky_speed = event.speed
-        if event.eta:
-            self._progress_sticky_eta = event.eta
         if event.fragment:
             self._progress_sticky_fragment = event.fragment
 
@@ -1296,7 +1293,7 @@ class YouTubeDownloaderWindow:
             title=event.title,
             percent=event.percent or self._progress_sticky_percent,
             speed=event.speed or self._progress_sticky_speed,
-            eta=event.eta or self._progress_sticky_eta,
+            eta=None,
             fragment=event.fragment or self._progress_sticky_fragment,
         )
 
