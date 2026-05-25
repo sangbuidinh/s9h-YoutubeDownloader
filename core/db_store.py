@@ -301,9 +301,8 @@ def get_channel_video_entries(
         return {}
 
     where_sql, params = _channel_items_where(channel_id, save_base_folder)
-    videos: dict = {}
-    video_key_norms: dict[str, str] = {}
     item_id_to_entry: dict[int, dict] = {}
+    entries_by_video_id: dict[str, list[dict]] = {}
 
     with closing(_connect_read_only(db_path)) as conn:
         conn.row_factory = sqlite3.Row
@@ -336,30 +335,29 @@ def get_channel_video_entries(
 
         for row in item_rows:
             entry = _row_to_item_entry(row)
-            video_key = _state_video_key(videos, video_key_norms, row["video_id"], row["save_base_folder_norm"])
-            videos[video_key] = entry
             item_id_to_entry[row["id"]] = entry
+            entries_by_video_id.setdefault(row["video_id"], []).append(entry)
 
         if item_id_to_entry:
             file_rows = conn.execute(
                 f"""
-                SELECT df.item_id, df.part, df.status, df.filename_raw, df.path_raw
-                FROM download_files df
-                JOIN download_items di ON di.id = df.item_id
-                WHERE {where_sql}
-                ORDER BY di.id, df.part
+                SELECT item_id, part, status, filename_raw, path_raw
+                FROM download_files
+                WHERE item_id IN ({",".join("?" for _ in item_id_to_entry)})
+                ORDER BY item_id, part
                 """,
-                params,
+                tuple(item_id_to_entry),
             ).fetchall()
             for row in file_rows:
                 entry = item_id_to_entry.get(row["item_id"])
                 if entry is not None:
                     _apply_file_row(entry, row)
 
-    if save_base_folder is None:
-        return videos
-
-    return videos
+    return {
+        video_id: _merge_duplicate_video_entries(entries)
+        for video_id, entries in entries_by_video_id.items()
+        if entries
+    }
 
 
 def get_video_entry(
@@ -377,10 +375,7 @@ def get_video_entry(
 
     with closing(_connect_read_only(db_path)) as conn:
         conn.row_factory = sqlite3.Row
-        item_id = _resolve_item_id_for_read(conn, channel_id, video_id, save_base_folder)
-        if item_id is None:
-            return None
-        entry = _entry_for_item_id(conn, item_id)
+        entry = _merged_entry_for_video(conn, channel_id, video_id)
         return entry if entry else None
 
 
@@ -401,9 +396,11 @@ def update_manual_status(
     db_path = init_db(path or db_file())
     now = _now_iso()
     with closing(connect_db(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
         try:
             conn.execute("BEGIN")
             item_id = _ensure_item(conn, channel_id, video_id, save_base_folder, now=now)
+            _clear_manual_status_for_video(conn, channel_id, video_id, now)
             conn.execute(
                 """
                 UPDATE download_items
@@ -438,23 +435,24 @@ def clear_manual_status(
         conn.row_factory = sqlite3.Row
         try:
             conn.execute("BEGIN")
-            item_id = _resolve_item_id(conn, channel_id, video_id, save_base_folder)
+            item_id = _resolve_canonical_item_id(conn, channel_id, video_id)
             if item_id is None:
                 conn.commit()
                 return
-            old_entry = _entry_for_item_id(conn, item_id)
+            old_entry = _merged_entry_for_video(conn, channel_id, video_id) or {}
             previous_manual_status = old_entry.get("manual_status")
+            duplicate_ids = _item_ids_for_video(conn, channel_id, video_id)
             conn.execute(
-                """
+                f"""
                 UPDATE download_items
                 SET manual_status = NULL,
                     manual_override = NULL,
                     updated_at = ?
-                WHERE id = ?
+                WHERE id IN ({",".join("?" for _ in duplicate_ids)})
                 """,
-                (now, item_id),
+                (now, *duplicate_ids),
             )
-            entry = _entry_for_item_id(conn, item_id)
+            entry = _merged_entry_for_video(conn, channel_id, video_id) or {}
             new_status = _status_after_manual_clear(entry, previous_manual_status)
             conn.execute(
                 "UPDATE download_items SET status = ?, updated_at = ? WHERE id = ?",
@@ -514,17 +512,8 @@ def update_video_part_state(
                 now=now,
             )
             if status == STATUS_DOWNLOADED:
-                conn.execute(
-                    """
-                    UPDATE download_items
-                    SET manual_status = NULL,
-                        manual_override = NULL,
-                        downloaded_at = ?
-                    WHERE id = ?
-                    """,
-                    (now, item_id),
-                )
-            entry = _entry_for_item_id(conn, item_id)
+                _clear_manual_status_for_video(conn, channel_id, video_id, now, downloaded_at=now)
+            entry = _merged_entry_for_video(conn, channel_id, video_id) or _entry_for_item_id(conn, item_id)
             new_status = _get_effective_status(entry, download_mode)
             conn.execute(
                 "UPDATE download_items SET status = ?, updated_at = ? WHERE id = ?",
@@ -557,18 +546,15 @@ def reconcile_downloaded_item_state(
         try:
             conn.execute("BEGIN")
             item_id = _ensure_item(conn, channel_id, video_id, save_base_folder, now=now)
-            old_entry = _entry_for_item_id(conn, item_id)
+            old_entry = _merged_entry_for_video(conn, channel_id, video_id) or _entry_for_item_id(conn, item_id)
             old_status = _get_effective_status(old_entry, mode)
             has_downloaded_required_part = any(
                 part_status_from_entry(old_entry, part) == STATUS_DOWNLOADED
                 for part in required_parts(mode)
             )
             if has_downloaded_required_part:
-                conn.execute(
-                    "UPDATE download_items SET manual_status = NULL, manual_override = NULL WHERE id = ?",
-                    (item_id,),
-                )
-            new_entry = _entry_for_item_id(conn, item_id)
+                _clear_manual_status_for_video(conn, channel_id, video_id, now)
+            new_entry = _merged_entry_for_video(conn, channel_id, video_id) or _entry_for_item_id(conn, item_id)
             new_status = _get_effective_status(new_entry, mode)
             if new_status == STATUS_DOWNLOADED:
                 conn.execute(
@@ -636,6 +622,13 @@ def update_video_state(
                     WHERE id = ?
                     """,
                     (updates.get("downloaded_at") or now, item_id),
+                )
+                _clear_manual_status_for_video(
+                    conn,
+                    channel_id,
+                    video_id,
+                    now,
+                    downloaded_at=updates.get("downloaded_at") or now,
                 )
             elif aggregate_status == STATUS_ERROR:
                 _set_existing_or_updated_part_statuses(
@@ -715,9 +708,6 @@ def _manual_override_counts(conn: sqlite3.Connection) -> dict[str, int]:
 def _channel_items_where(channel_id: str, save_base_folder: str | None = None) -> tuple[str, tuple]:
     clauses = ["di.platform = ?", "di.channel_id = ?"]
     params: list[str] = [PLATFORM_YOUTUBE, channel_id]
-    if save_base_folder is not None:
-        clauses.append("di.save_base_folder_norm = ?")
-        params.append(_normalize_path_text(save_base_folder))
     return " AND ".join(clauses), tuple(params)
 
 
@@ -727,20 +717,7 @@ def _resolve_item_id_for_read(
     video_id: str,
     save_base_folder: str | None = None,
 ) -> int | None:
-    if save_base_folder is not None:
-        return _resolve_item_id(conn, channel_id, video_id, save_base_folder)
-
-    row = conn.execute(
-        """
-        SELECT id
-        FROM download_items
-        WHERE platform = ? AND channel_id = ? AND video_id = ?
-        ORDER BY id
-        LIMIT 1
-        """,
-        (PLATFORM_YOUTUBE, channel_id, video_id),
-    ).fetchone()
-    return int(row["id"] if isinstance(row, sqlite3.Row) else row[0]) if row else None
+    return _resolve_canonical_item_id(conn, channel_id, video_id)
 
 
 def _resolve_item_id(
@@ -749,21 +726,25 @@ def _resolve_item_id(
     video_id: str,
     save_base_folder: str | None = None,
 ) -> int | None:
-    if save_base_folder is not None:
-        row = conn.execute(
-            """
-            SELECT id
-            FROM download_items
-            WHERE platform = ?
-              AND channel_id = ?
-              AND video_id = ?
-              AND save_base_folder_norm = ?
-            """,
-            (PLATFORM_YOUTUBE, channel_id, video_id, _normalize_path_text(save_base_folder)),
-        ).fetchone()
-        return int(row["id"] if isinstance(row, sqlite3.Row) else row[0]) if row else None
+    return _resolve_canonical_item_id(conn, channel_id, video_id)
 
-    rows = conn.execute(
+
+def _resolve_canonical_item_id(conn: sqlite3.Connection, channel_id: str, video_id: str) -> int | None:
+    rows = _item_rows_for_video(conn, channel_id, video_id)
+    if not rows:
+        return None
+
+    ranked = []
+    for row in rows:
+        item_id = int(row["id"] if isinstance(row, sqlite3.Row) else row[0])
+        entry = _entry_for_item_id(conn, item_id)
+        ranked.append((item_id, entry))
+    ranked.sort(key=lambda item: _entry_rank(item[1]))
+    return ranked[0][0]
+
+
+def _item_rows_for_video(conn: sqlite3.Connection, channel_id: str, video_id: str) -> list[sqlite3.Row]:
+    return conn.execute(
         """
         SELECT id, save_base_folder_norm
         FROM download_items
@@ -772,16 +753,36 @@ def _resolve_item_id(
         """,
         (PLATFORM_YOUTUBE, channel_id, video_id),
     ).fetchall()
-    if not rows:
-        return None
-    if len(rows) > 1:
-        folders = [row["save_base_folder_norm"] if isinstance(row, sqlite3.Row) else row[1] for row in rows]
-        raise ValueError(
-            "Multiple SQLite items match channel_id/video_id; pass save_base_folder. "
-            f"save_base_folder_norm values: {folders}"
-        )
-    row = rows[0]
-    return int(row["id"] if isinstance(row, sqlite3.Row) else row[0])
+
+
+def _item_ids_for_video(conn: sqlite3.Connection, channel_id: str, video_id: str) -> list[int]:
+    return [int(row["id"] if isinstance(row, sqlite3.Row) else row[0]) for row in _item_rows_for_video(conn, channel_id, video_id)]
+
+
+def _clear_manual_status_for_video(
+    conn: sqlite3.Connection,
+    channel_id: str,
+    video_id: str,
+    now: str,
+    downloaded_at: str | None = None,
+) -> None:
+    item_ids = _item_ids_for_video(conn, channel_id, video_id)
+    if not item_ids:
+        return
+    assignments = ["manual_status = NULL", "manual_override = NULL", "updated_at = ?"]
+    params: list = [now]
+    if downloaded_at is not None:
+        assignments.append("downloaded_at = COALESCE(?, downloaded_at)")
+        params.append(downloaded_at)
+    params.extend(item_ids)
+    conn.execute(
+        f"""
+        UPDATE download_items
+        SET {", ".join(assignments)}
+        WHERE id IN ({",".join("?" for _ in item_ids)})
+        """,
+        tuple(params),
+    )
 
 
 def _ensure_item(
@@ -792,7 +793,7 @@ def _ensure_item(
     now: str,
     updates: dict | None = None,
 ) -> int:
-    item_id = _resolve_item_id(conn, channel_id, video_id, save_base_folder)
+    item_id = _resolve_canonical_item_id(conn, channel_id, video_id)
     if item_id is not None:
         return item_id
 
@@ -1143,6 +1144,100 @@ def _entry_for_item_id(conn: sqlite3.Connection, item_id: int) -> dict:
     return entry
 
 
+def _merged_entry_for_video(conn: sqlite3.Connection, channel_id: str, video_id: str) -> dict | None:
+    rows = _item_rows_for_video(conn, channel_id, video_id)
+    if not rows:
+        return None
+    entries = []
+    for row in rows:
+        item_id = int(row["id"] if isinstance(row, sqlite3.Row) else row[0])
+        entry = _entry_for_item_id(conn, item_id)
+        if entry:
+            entries.append(entry)
+    if not entries:
+        return None
+    return _merge_duplicate_video_entries(entries)
+
+
+def _merge_duplicate_video_entries(entries: list[dict]) -> dict:
+    from core.state_store import STATUS_DOWNLOADED, STATUS_ERROR, STATUS_NOT_DOWNLOADED, part_status_from_entry
+
+    if not entries:
+        return {}
+
+    sorted_entries = sorted(entries, key=_entry_rank)
+    merged = dict(sorted_entries[0])
+
+    for key in ("manual_status", "manual_override"):
+        merged.pop(key, None)
+
+    manual_entries = [entry for entry in sorted_entries if entry.get("manual_override") is True]
+    if manual_entries:
+        manual_entry = manual_entries[0]
+        manual_status = manual_entry.get("manual_status")
+        if manual_status:
+            merged["manual_status"] = manual_status
+            merged["manual_override"] = True
+
+    for part in FILE_PARTS:
+        statuses = [part_status_from_entry(entry, part) for entry in sorted_entries]
+        if STATUS_DOWNLOADED in statuses:
+            merged_status = STATUS_DOWNLOADED
+        elif STATUS_ERROR in statuses:
+            merged_status = STATUS_ERROR
+        else:
+            merged_status = STATUS_NOT_DOWNLOADED
+
+        merged[f"{part}_status"] = merged_status
+        metadata_entry = _entry_with_part_metadata(sorted_entries, part, merged_status)
+        if metadata_entry is not None:
+            for suffix in ("filename", "path"):
+                key = f"{part}_{suffix}"
+                if metadata_entry.get(key):
+                    merged[key] = metadata_entry[key]
+
+    if "manual_override" not in merged and not merged.get("status"):
+        merged["status"] = _get_effective_status(merged)
+    return merged
+
+
+def _entry_with_part_metadata(entries: list[dict], part: str, status: str) -> dict | None:
+    from core.state_store import part_status_from_entry
+
+    for entry in entries:
+        if part_status_from_entry(entry, part) == status and (entry.get(f"{part}_filename") or entry.get(f"{part}_path")):
+            return entry
+    for entry in entries:
+        if entry.get(f"{part}_filename") or entry.get(f"{part}_path"):
+            return entry
+    return None
+
+
+def _entry_rank(entry: dict) -> tuple:
+    from core.state_store import STATUS_DOWNLOADED, STATUS_ERROR, STATUS_NOT_DOWNLOADED, part_status_from_entry
+
+    status_rank = {
+        STATUS_DOWNLOADED: 0,
+        STATUS_ERROR: 3,
+        STATUS_NOT_DOWNLOADED: 4,
+    }
+    status = _get_effective_status(entry)
+    downloaded_parts = sum(1 for part in FILE_PARTS if part_status_from_entry(entry, part) == STATUS_DOWNLOADED)
+    errored_parts = sum(1 for part in FILE_PARTS if part_status_from_entry(entry, part) == STATUS_ERROR)
+    folder = (entry.get("save_base_folder") or "").strip()
+    updated_at = entry.get("updated_at") or ""
+    return (
+        0 if entry.get("manual_override") is True else 1,
+        status_rank.get(status, 1),
+        -downloaded_parts,
+        -errored_parts,
+        1 if not folder else 0,
+        "" if updated_at else "1",
+        updated_at,
+        folder.casefold(),
+    )
+
+
 def _get_effective_status(entry: dict, download_mode: str | None = None) -> str:
     from core.download_modes import MODE_VIDEO_THUMB
     from core.state_store import get_effective_status
@@ -1433,12 +1528,10 @@ def _self_test_write(test_path: Path) -> int:
         path=test_path,
         save_base_folder="D:/A",
     )
-    try:
-        update_manual_status("channel", "ambiguous-video", STATUS_DOWNLOADED, path=test_path)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("ambiguous update without save_base_folder was not refused")
+    update_manual_status("channel", "ambiguous-video", STATUS_DOWNLOADED, path=test_path)
+    entry = get_video_entry("channel", "ambiguous-video", path=test_path)
+    _assert_self_test(entry.get("manual_override") is True, "video-scoped manual update was not applied")
+    _assert_self_test(get_effective_status(entry) == STATUS_DOWNLOADED, "video-scoped manual status was not effective")
 
     print(f"Write self-test passed: {test_path}")
     return 0

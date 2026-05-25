@@ -93,16 +93,24 @@ def load_state() -> dict:
     return db_store.load_state()
 
 
-def get_channel_video_entries(channel_id: str) -> dict:
+def get_channel_video_entries(channel_id: str, save_base_folder: str | None = None) -> dict:
     from core import db_store
 
+    # save_base_folder is accepted for backward compatibility only.
+    # Status is video-scoped, not folder-scoped.
     initialize_sqlite_state()
     return db_store.get_channel_video_entries(channel_id)
 
 
-def get_video_entry(channel_id: str, video_id: str) -> dict | None:
+def get_video_entry(
+    channel_id: str,
+    video_id: str,
+    save_base_folder: str | None = None,
+) -> dict | None:
     from core import db_store
 
+    # save_base_folder is accepted for backward compatibility only.
+    # Status is video-scoped, not folder-scoped.
     initialize_sqlite_state()
     return db_store.get_video_entry(channel_id, video_id)
 
