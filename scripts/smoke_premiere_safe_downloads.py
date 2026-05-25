@@ -91,6 +91,7 @@ def _test_base_command_flags() -> None:
     }
     for option, value in expected_options.items():
         _assert(_option_value(command, option) == value, f"{option} was not preserved as {value}")
+    _assert("--newline" in command, "--newline missing")
     _assert("--ffmpeg-location" in command, "--ffmpeg-location missing")
     _assert("--js-runtimes" in command, "Deno runtime flags missing")
     _assert(any(str(value).startswith("deno:") for value in command), "Deno executable path missing")

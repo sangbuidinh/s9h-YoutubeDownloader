@@ -1,3 +1,4 @@
+import os
 import re
 import shutil
 import subprocess
@@ -23,6 +24,7 @@ from core.file_status import (
     build_output_paths,
     ensure_output_dirs,
 )
+from core.progress_status import ProgressEvent, parse_ytdlp_progress_line
 from core.error_messages import (
     SHOW_TECHNICAL_WARNINGS,
     batch_blocked_warning,
@@ -62,6 +64,19 @@ class DownloadCancelled(DownloadError):
     pass
 
 
+@dataclass
+class _ProgressContext:
+    callback: object
+    video: object
+    video_index: int
+    video_total: int
+    phase: str
+    last_emit: float = 0.0
+
+
+_PROGRESS_CONTEXT = threading.local()
+
+
 class DownloadController:
     def __init__(self):
         self._cancel_requested = threading.Event()
@@ -90,20 +105,7 @@ class DownloadController:
                 self.current_process = None
 
     def _terminate_process(self, process: subprocess.Popen) -> None:
-        try:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    if process.poll() is None:
-                        process.kill()
-                    try:
-                        process.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        pass
-        except OSError:
-            pass
+        _terminate_process_tree(process)
 
 
 class FileOperationError(DownloadError):
@@ -128,6 +130,7 @@ class YtdlpExecutionError(DownloadError):
         http_403: bool = False,
         missing_js_runtime: bool = False,
         combined_output: str = "",
+        stream_interrupted: bool = False,
     ):
         super().__init__(message)
         self.exit_code = exit_code
@@ -136,6 +139,7 @@ class YtdlpExecutionError(DownloadError):
         self.http_403 = http_403
         self.missing_js_runtime = missing_js_runtime
         self.combined_output = combined_output
+        self.stream_interrupted = stream_interrupted
 
 
 @dataclass
@@ -147,6 +151,167 @@ class DownloadOptions:
     cookies_path: str = ""
     speed_limit: str | None = None
     download_mode: str = MODE_VIDEO_THUMB
+
+
+def _emit_progress_event(progress_callback, event: ProgressEvent) -> None:
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(event)
+    except Exception:
+        pass
+
+
+def _emit_progress(
+    progress_callback,
+    phase: str,
+    video=None,
+    video_index: int | None = None,
+    video_total: int | None = None,
+    message: str = "",
+    kind: str = "phase",
+    percent: str | None = None,
+    speed: str | None = None,
+    eta: str | None = None,
+    fragment: str | None = None,
+) -> None:
+    _emit_progress_event(
+        progress_callback,
+        ProgressEvent(
+            kind=kind,
+            phase=phase,
+            message=message,
+            video_index=video_index,
+            video_total=video_total,
+            title=getattr(video, "sanitized_filename_base", None) or getattr(video, "title", None),
+            percent=percent,
+            speed=speed,
+            eta=eta,
+            fragment=fragment,
+        ),
+    )
+
+
+def _set_progress_context(
+    progress_callback,
+    video,
+    video_index: int,
+    video_total: int,
+    phase: str,
+):
+    previous = getattr(_PROGRESS_CONTEXT, "current", None)
+    if progress_callback is None:
+        _PROGRESS_CONTEXT.current = None
+    else:
+        _PROGRESS_CONTEXT.current = _ProgressContext(progress_callback, video, video_index, video_total, phase)
+    return previous
+
+
+def _restore_progress_context(previous) -> None:
+    _PROGRESS_CONTEXT.current = previous
+
+
+def _current_progress_context() -> _ProgressContext | None:
+    return getattr(_PROGRESS_CONTEXT, "current", None)
+
+
+def _emit_current_progress(phase: str | None = None, message: str = "", **kwargs) -> None:
+    context = _current_progress_context()
+    if context is None:
+        return
+    _emit_progress(
+        context.callback,
+        phase or context.phase,
+        context.video,
+        context.video_index,
+        context.video_total,
+        message=message,
+        **kwargs,
+    )
+
+
+def _emit_general_error_progress(progress_callback, video, index: int, total: int, message: str) -> None:
+    _emit_progress(
+        progress_callback,
+        "Error",
+        video,
+        index,
+        total,
+        message=classify_general_error(message).title,
+        kind="error",
+    )
+
+
+def _emit_ytdlp_error_progress(
+    progress_callback,
+    video,
+    index: int,
+    total: int,
+    exc: YtdlpExecutionError,
+    cookies_enabled: bool,
+) -> None:
+    text = exc.combined_output or "\n".join([str(exc), *exc.output_lines])
+    friendly = classify_ytdlp_error(
+        text,
+        cookies_enabled=cookies_enabled,
+        bot_check=exc.bot_check,
+        http_403=exc.http_403,
+        missing_js_runtime=exc.missing_js_runtime,
+    )
+    _emit_progress(progress_callback, "Error", video, index, total, message=friendly.title, kind="error")
+
+
+def _subprocess_creationflags() -> int:
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
+
+def _terminate_process_tree(process: subprocess.Popen | None) -> None:
+    if process is None:
+        return
+    try:
+        if process.poll() is not None:
+            return
+    except Exception:
+        return
+
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=3,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            return
+        except Exception:
+            pass
+
+    try:
+        process.terminate()
+    except Exception:
+        pass
+
+    if _wait_for_process_exit(process, 2.0) is not None:
+        return
+
+    try:
+        if process.poll() is None:
+            process.kill()
+    except Exception:
+        pass
+    _wait_for_process_exit(process, 2.0)
+
+
+def _wait_for_process_exit(process: subprocess.Popen, timeout: float) -> int | None:
+    try:
+        return process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+    except OSError:
+        return process.poll()
 
 
 def validate_speed_limit(value: str) -> str | None:
@@ -184,6 +349,7 @@ def download_items(
     log,
     status_callback,
     cancel_controller: DownloadController | None = None,
+    progress_callback=None,
 ) -> None:
     validate_download_environment(options)
     ensure_output_dirs(options.base_folder, options.channel_name, options.download_mode)
@@ -194,6 +360,9 @@ def download_items(
     blocking_failure_count = 0
     consecutive_blocking_failures = 0
     mode_parts = required_parts(options.download_mode)
+    video_total = len(videos)
+    cancelled = False
+    stopped_early = False
 
     if options.cookies_enabled:
         log("[INFO] Cookies enabled: yes")
@@ -203,6 +372,7 @@ def download_items(
 
     for index, video in enumerate(videos, start=1):
         if _cancel_requested(cancel_controller):
+            cancelled = True
             break
 
         raw_stem = getattr(video, "sanitized_filename_base", "") or getattr(video, "title", "")
@@ -224,6 +394,7 @@ def download_items(
             entry = get_video_entry(options.channel_id, video.video_id)
             if is_mode_complete(entry, options.download_mode):
                 log(f"[SKIP] {stem} marked as downloaded in SQLite state")
+                _emit_progress(progress_callback, "Skipped", video, index, video_total)
                 skipped_count += 1
                 consecutive_blocking_failures = 0
                 video.status = get_effective_status(entry, options.download_mode)
@@ -232,6 +403,7 @@ def download_items(
 
             missing_parts = missing_parts_for_mode(entry, options.download_mode)
             if not missing_parts:
+                _emit_progress(progress_callback, "Skipped", video, index, video_total)
                 skipped_count += 1
                 consecutive_blocking_failures = 0
                 video.status = get_effective_status(entry, options.download_mode)
@@ -247,32 +419,49 @@ def download_items(
                     if part == PART_VIDEO:
                         log(f"[INFO] Downloading {stem}.mp4")
                         log("[INFO] Premiere-safe mode: MP4 H.264/AAC only, max 1080p.")
-                        _download_video(
-                            video.video_id,
-                            stem,
-                            temp_path,
-                            paths.video_path,
-                            options,
-                            log,
-                            cancel_controller,
+                        _emit_progress(progress_callback, "Video", video, index, video_total, message="Downloading...")
+                        previous_progress = _set_progress_context(
+                            progress_callback, video, index, video_total, "Video"
                         )
+                        try:
+                            _download_video(
+                                video.video_id,
+                                stem,
+                                temp_path,
+                                paths.video_path,
+                                options,
+                                log,
+                                cancel_controller,
+                            )
+                        finally:
+                            _restore_progress_context(previous_progress)
                     elif part == PART_AUDIO:
                         log(f"[INFO] Downloading audio {stem}.mp3")
                         if options.download_mode == MODE_VIDEO_AUDIO_THUMB:
+                            _emit_progress(progress_callback, "Validating MP4", video, index, video_total)
                             if not _premiere_safe_mp4_ready(paths.video_path):
                                 current_part = PART_VIDEO
                                 _remember_run_part(run_parts_current_run, PART_VIDEO)
                                 log(f"[INFO] Local MP4 missing or invalid; downloading {stem}.mp4 for MP3 extraction.")
                                 log("[INFO] Premiere-safe mode: MP4 H.264/AAC only, max 1080p.")
-                                _download_video(
-                                    video.video_id,
-                                    stem,
-                                    temp_path,
-                                    paths.video_path,
-                                    options,
-                                    log,
-                                    cancel_controller,
+                                _emit_progress(
+                                    progress_callback, "Video", video, index, video_total, message="Downloading..."
                                 )
+                                previous_progress = _set_progress_context(
+                                    progress_callback, video, index, video_total, "Video"
+                                )
+                                try:
+                                    _download_video(
+                                        video.video_id,
+                                        stem,
+                                        temp_path,
+                                        paths.video_path,
+                                        options,
+                                        log,
+                                        cancel_controller,
+                                    )
+                                finally:
+                                    _restore_progress_context(previous_progress)
                                 update_video_part_state(
                                     options.channel_id,
                                     options.channel_name,
@@ -288,26 +477,61 @@ def download_items(
                                 status_callback(video)
                                 log(_part_success_message(PART_VIDEO, stem))
                             current_part = PART_AUDIO
-                            _extract_mp3_from_video(
-                                paths.video_path,
-                                temp_path,
-                                paths.audio_path,
-                                log,
-                                cancel_controller,
+                            _emit_progress(
+                                progress_callback,
+                                "MP3",
+                                video,
+                                index,
+                                video_total,
+                                message="Extracting audio from MP4",
                             )
+                            previous_progress = _set_progress_context(
+                                progress_callback, video, index, video_total, "MP3"
+                            )
+                            try:
+                                _extract_mp3_from_video(
+                                    paths.video_path,
+                                    temp_path,
+                                    paths.audio_path,
+                                    log,
+                                    cancel_controller,
+                                )
+                            finally:
+                                _restore_progress_context(previous_progress)
                         else:
-                            _download_audio(
-                                video.video_id,
-                                stem,
-                                temp_path,
-                                paths.audio_path,
-                                options,
-                                log,
-                                cancel_controller,
+                            _emit_progress(progress_callback, "MP3", video, index, video_total, message="Downloading...")
+                            previous_progress = _set_progress_context(
+                                progress_callback, video, index, video_total, "MP3"
                             )
+                            try:
+                                _download_audio(
+                                    video.video_id,
+                                    stem,
+                                    temp_path,
+                                    paths.audio_path,
+                                    options,
+                                    log,
+                                    cancel_controller,
+                                )
+                            finally:
+                                _restore_progress_context(previous_progress)
                     elif part == PART_THUMB:
                         log(f"[INFO] Downloading thumbnail {stem}.jpg")
-                        _download_thumbnail(video, stem, temp_path, paths.thumb_path, options, log, cancel_controller)
+                        _emit_progress(
+                            progress_callback,
+                            "Thumbnail",
+                            video,
+                            index,
+                            video_total,
+                            message="Downloading image",
+                        )
+                        previous_progress = _set_progress_context(
+                            progress_callback, video, index, video_total, "Thumbnail"
+                        )
+                        try:
+                            _download_thumbnail(video, stem, temp_path, paths.thumb_path, options, log, cancel_controller)
+                        finally:
+                            _restore_progress_context(previous_progress)
                     update_video_part_state(
                         options.channel_id,
                         options.channel_name,
@@ -322,6 +546,14 @@ def download_items(
                     video.status = get_effective_status(entry, options.download_mode)
                     status_callback(video)
                     log(_part_success_message(part, stem))
+                    _emit_progress(
+                        progress_callback,
+                        _progress_phase_for_part(part),
+                        video,
+                        index,
+                        video_total,
+                        message="Completed",
+                    )
                     current_part = None
 
             final_status = _reconcile_current_item(
@@ -338,6 +570,15 @@ def download_items(
                 log(f"[SUCCESS] Downloaded {_success_file_list(stem, options.download_mode)}")
             else:
                 failed_count += 1
+                _emit_progress(
+                    progress_callback,
+                    "Error",
+                    video,
+                    index,
+                    video_total,
+                    message="Not fully downloaded",
+                    kind="error",
+                )
         except PermissionError as exc:
             _remember_run_part(run_parts_current_run, current_part)
             _mark_part_error(options, video, paths, current_part)
@@ -364,8 +605,12 @@ def download_items(
                 continue
             failed_count += 1
             consecutive_blocking_failures = 0
+            _emit_general_error_progress(
+                progress_callback, video, index, video_total, f"{type(exc).__name__}: {exc}"
+            )
             _log_friendly_general_error(log, f"{type(exc).__name__}: {exc}", [f"{type(exc).__name__}: {exc}"])
         except DownloadCancelled:
+            cancelled = True
             _remember_run_part(run_parts_current_run, current_part)
             _reconcile_current_item(
                 options,
@@ -401,6 +646,7 @@ def download_items(
                 log(f"[SUCCESS] Downloaded {_success_file_list(stem, options.download_mode)}")
                 continue
             failed_count += 1
+            _emit_ytdlp_error_progress(progress_callback, video, index, video_total, exc, options.cookies_enabled)
             _log_friendly_ytdlp_error(log, exc, options.cookies_enabled)
             if exc.missing_js_runtime and not _deno_runtime_path().exists() and (exc.bot_check or exc.http_403):
                 _log_missing_js_runtime_warning(log, exc.output_lines)
@@ -409,6 +655,7 @@ def download_items(
                 consecutive_blocking_failures += 1
                 if consecutive_blocking_failures >= 3:
                     log(format_friendly_error(batch_blocked_warning()))
+                    stopped_early = True
                     break
             else:
                 consecutive_blocking_failures = 0
@@ -439,8 +686,10 @@ def download_items(
             failed_count += 1
             consecutive_blocking_failures = 0
             if str(exc) == OUTPUT_PATH_TOO_LONG_MESSAGE:
+                _emit_general_error_progress(progress_callback, video, index, video_total, "Path too long")
                 _log_friendly_general_error(log, "Path too long", [str(exc)])
             else:
+                _emit_general_error_progress(progress_callback, video, index, video_total, str(exc))
                 _log_friendly_general_error(log, str(exc), [str(exc)])
         except Exception as exc:
             _remember_run_part(run_parts_current_run, current_part)
@@ -469,6 +718,7 @@ def download_items(
             failed_count += 1
             consecutive_blocking_failures = 0
             technical = f"{type(exc).__name__}: {exc}"
+            _emit_general_error_progress(progress_callback, video, index, video_total, technical)
             _log_friendly_general_error(log, technical, [technical])
 
     log(f"[SUCCESS] Downloaded: {downloaded_count}")
@@ -478,6 +728,10 @@ def download_items(
         log(f"[SKIP] Skipped: {skipped_count}")
     if blocking_failure_count > 0:
         log(f"[WARNING] Bot-check/403 failures: {blocking_failure_count}")
+    if cancelled:
+        _emit_progress_event(progress_callback, ProgressEvent(kind="stop_requested"))
+    elif not stopped_early:
+        _emit_progress_event(progress_callback, ProgressEvent(kind="batch_complete"))
 
 
 def _reconcile_current_item(
@@ -524,6 +778,16 @@ def _part_success_message(part: str, stem: str) -> str:
     return f"[SUCCESS] Downloaded: {stem}"
 
 
+def _progress_phase_for_part(part: str) -> str:
+    if part == PART_VIDEO:
+        return "Video"
+    if part == PART_AUDIO:
+        return "MP3"
+    if part == PART_THUMB:
+        return "Thumbnail"
+    return "Status"
+
+
 def _download_video(
     video_id: str,
     stem: str,
@@ -551,6 +815,7 @@ def _download_video(
     ]
     _run_ytdlp_with_retries(command, options, log, cancel_controller)
     _move_single_file(temp_dir, "*.mp4", final_path, log, replace_existing=True)
+    _emit_current_progress("Validating MP4")
     _validate_premiere_safe_mp4(final_path, log, delete_invalid=True)
 
 
@@ -589,10 +854,12 @@ def _extract_mp3_from_video(
     log=None,
     cancel_controller: DownloadController | None = None,
 ) -> None:
+    _emit_current_progress("Validating MP4")
     _validate_premiere_safe_mp4(source_video_path, log, delete_invalid=False)
     if _final_file_ready(final_audio_path):
         return
 
+    _emit_current_progress("MP3", message="Extracting audio from MP4")
     temp_mp3_path = temp_dir / f"{_safe_temp_stem(final_audio_path.stem)}.mp3"
     command = [
         str(runtime_file("ffmpeg.exe")),
@@ -615,8 +882,10 @@ def _extract_mp3_from_video(
 
 
 def _run_ffmpeg_for_audio(command: list[str], cancel_controller: DownloadController | None = None) -> str:
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    creationflags = _subprocess_creationflags()
     process = None
+    stdout = ""
+    stderr = ""
     try:
         process = subprocess.Popen(
             command,
@@ -629,19 +898,28 @@ def _run_ffmpeg_for_audio(command: list[str], cancel_controller: DownloadControl
         )
         if cancel_controller is not None:
             cancel_controller.set_current_process(process)
-        stdout, stderr = process.communicate()
+        while True:
+            if _cancel_requested(cancel_controller):
+                _terminate_process_tree(process)
+                raise DownloadCancelled("download cancelled/interrupted")
+            try:
+                stdout, stderr = process.communicate(timeout=0.25)
+                break
+            except subprocess.TimeoutExpired:
+                continue
     except FileNotFoundError:
         raise DownloadError("ffmpeg.exe missing")
     except KeyboardInterrupt:
+        _terminate_process_tree(process)
         raise DownloadCancelled("download cancelled/interrupted")
     finally:
         if process is not None and cancel_controller is not None:
             cancel_controller.clear_current_process(process)
 
-    if process.returncode == 0:
-        return f"{stdout}\n{stderr}"
     if _cancel_requested(cancel_controller):
         raise DownloadCancelled("download cancelled/interrupted")
+    if process.returncode == 0:
+        return f"{stdout}\n{stderr}"
     raise DownloadError("audio extraction failed")
 
 
@@ -666,6 +944,7 @@ def _download_thumbnail(
             raise
         except DownloadError:
             log("[WARNING] API thumbnail download failed, falling back to yt-dlp thumbnail.")
+            _emit_current_progress("Thumbnail", message="Using yt-dlp fallback")
 
     command = _base_ytdlp_command(options) + [
         "--skip-download",
@@ -694,6 +973,7 @@ def _base_ytdlp_command(options: DownloadOptions) -> list[str]:
     command = [
         str(runtime_file("yt-dlp.exe")),
         "--no-playlist",
+        "--newline",
         "--no-overwrites",
         "--retries",
         "30",
@@ -1005,7 +1285,9 @@ def _run_ytdlp_with_retries(
                 _sleep_with_cancel(delay, cancel_controller)
                 continue
 
-            if _contains_stream_interrupted_output(exc.combined_output) and not stream_interrupted_retried:
+            if (
+                exc.stream_interrupted or _contains_stream_interrupted_output(exc.combined_output)
+            ) and not stream_interrupted_retried:
                 stream_interrupted_retried = True
                 current_command = _ensure_flag(
                     _replace_option(command, "--http-chunk-size", "512K"),
@@ -1018,13 +1300,21 @@ def _run_ytdlp_with_retries(
 
 
 def _run_ytdlp(command: list[str], cancel_controller: DownloadController | None = None) -> str:
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    creationflags = _subprocess_creationflags()
     process = None
+    output_tail: list[str] = []
+    meaningful_lines: list[str] = []
+    bot_check = False
+    http_403 = False
+    missing_js_runtime = False
+    premiere_safe_format_error = False
+    stream_interrupted = False
+    return_code = 0
     try:
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -1032,34 +1322,129 @@ def _run_ytdlp(command: list[str], cancel_controller: DownloadController | None 
         )
         if cancel_controller is not None:
             cancel_controller.set_current_process(process)
-        stdout, stderr = process.communicate()
+        if _cancel_requested(cancel_controller):
+            _terminate_process_tree(process)
+            raise DownloadCancelled("download cancelled/interrupted")
+        if process.stdout is not None:
+            for line in process.stdout:
+                if _cancel_requested(cancel_controller):
+                    _terminate_process_tree(process)
+                    raise DownloadCancelled("download cancelled/interrupted")
+                line = line.rstrip("\r\n")
+                _append_limited(output_tail, line, 200)
+                sanitized = _sanitize_ytdlp_output_line(line)
+                if _is_meaningful_ytdlp_line(sanitized):
+                    _append_limited(meaningful_lines, sanitized, 50)
+                bot_check = bot_check or _contains_bot_check_error(line)
+                http_403 = http_403 or _contains_http_403_error(line)
+                missing_js_runtime = missing_js_runtime or _contains_missing_js_runtime_error(line)
+                premiere_safe_format_error = premiere_safe_format_error or _contains_premiere_safe_format_error(line)
+                stream_interrupted = stream_interrupted or _contains_stream_interrupted_output(line)
+                _emit_ytdlp_progress_from_line(sanitized)
+                if _cancel_requested(cancel_controller):
+                    _terminate_process_tree(process)
+                    raise DownloadCancelled("download cancelled/interrupted")
+        return_code = _wait_for_process_exit(process, 1.0)
+        if return_code is None:
+            if _cancel_requested(cancel_controller):
+                _terminate_process_tree(process)
+                raise DownloadCancelled("download cancelled/interrupted")
+            _append_limited(output_tail, "yt-dlp process did not exit promptly after output ended", 200)
+            stream_interrupted = True
+            _terminate_process_tree(process)
+            return_code = process.poll()
+            if return_code is None:
+                return_code = -1
     except FileNotFoundError:
         raise DownloadError("yt-dlp.exe missing")
     except KeyboardInterrupt:
-        raise DownloadError("download cancelled/interrupted")
+        _terminate_process_tree(process)
+        raise DownloadCancelled("download cancelled/interrupted")
     finally:
         if process is not None and cancel_controller is not None:
             cancel_controller.clear_current_process(process)
 
-    if process.returncode == 0:
-        return stderr or ""
-
+    output = "\n".join(output_tail)
     if _cancel_requested(cancel_controller):
+        _terminate_process_tree(process)
         raise DownloadCancelled("download cancelled/interrupted")
+    if return_code == 0:
+        return output
 
-    if process.returncode != 0:
-        output = f"{stdout}\n{stderr}"
+    if return_code != 0:
         raise YtdlpExecutionError(
-            process.returncode,
-            _classify_ytdlp_error(output),
-            _last_meaningful_output_lines(stdout, stderr, limit=50),
-            _contains_bot_check_error(output),
-            _contains_http_403_error(output),
-            _contains_missing_js_runtime_error(output),
+            return_code,
+            _classify_ytdlp_error_from_flags(
+                output,
+                bot_check=bot_check,
+                missing_js_runtime=missing_js_runtime,
+                premiere_safe_format_error=premiere_safe_format_error,
+            ),
+            meaningful_lines or _last_meaningful_output_lines("", output, limit=50),
+            bot_check,
+            http_403,
+            missing_js_runtime,
             output,
+            stream_interrupted,
         )
 
-    return stderr or ""
+    return output
+
+
+def _append_limited(items: list[str], value: str, limit: int) -> None:
+    items.append(value)
+    if len(items) > limit:
+        del items[: len(items) - limit]
+
+
+def _emit_ytdlp_progress_from_line(line: str) -> None:
+    context = _current_progress_context()
+    if context is None:
+        return
+    parsed = parse_ytdlp_progress_line(line)
+    if not parsed:
+        return
+
+    now = time.monotonic()
+    message = parsed.get("message") or ""
+    percent = parsed.get("percent")
+    force = percent == "100%" or message in {
+        "Already downloaded",
+        "Extracting audio",
+        "Merging formats",
+        "Post-processing",
+        "Preparing download",
+    }
+    if not force and now - context.last_emit < 0.3:
+        return
+    context.last_emit = now
+    _emit_progress(
+        context.callback,
+        context.phase,
+        context.video,
+        context.video_index,
+        context.video_total,
+        message=message,
+        percent=percent,
+        speed=parsed.get("speed"),
+        eta=parsed.get("eta"),
+        fragment=parsed.get("fragment"),
+    )
+
+
+def _classify_ytdlp_error_from_flags(
+    output: str,
+    bot_check: bool = False,
+    missing_js_runtime: bool = False,
+    premiere_safe_format_error: bool = False,
+) -> str:
+    if bot_check:
+        return "YouTube requires sign-in/bot verification; enable Cookies and select a valid cookies.txt"
+    if missing_js_runtime:
+        return "yt-dlp needs a supported JavaScript runtime for this YouTube extraction"
+    if premiere_safe_format_error:
+        return "no Premiere-safe MP4 H.264/AAC format available"
+    return _classify_ytdlp_error(output)
 
 
 def _classify_ytdlp_error(output: str) -> str:

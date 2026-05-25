@@ -2,6 +2,8 @@
 
 Windows desktop app for fetching a YouTube channel video list with the YouTube Data API and downloading selected videos, thumbnails, and MP3 audio through external runtime tools.
 
+- Shows a lightweight progress status during downloads.
+
 ## Download Latest Release
 
 ⬇️ Download the latest packaged build from [here](https://github.com/sangbuidinh/s9h-YoutubeDownloader/releases/latest).

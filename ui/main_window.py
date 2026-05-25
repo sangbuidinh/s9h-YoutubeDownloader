@@ -17,6 +17,7 @@ from core.downloader import (
 from core.app_settings import load_last_api_key, save_last_api_key
 from core.error_messages import classify_api_error, classify_general_error, format_friendly_error
 from core.file_status import apply_statuses, build_output_paths, should_show_not_downloaded
+from core.progress_status import ProgressEvent, format_progress_event_lines, put_latest_progress_event
 from core.state_store import (
     STATUS_DOWNLOADED,
     STATUS_MISSING_AUDIO,
@@ -63,6 +64,7 @@ class YouTubeDownloaderWindow:
         self.root.minsize(920, 620)
 
         self.events: queue.Queue = queue.Queue()
+        self.progress_queue: queue.Queue = queue.Queue(maxsize=1)
         self.channel_info = None
         self.videos = []
         self.selected_orders: set[int] = set()
@@ -90,6 +92,9 @@ class YouTubeDownloaderWindow:
         self.filter_var = tk.StringVar(value=FILTER_ALL)
         self.search_var = tk.StringVar()
         self.search_status_var = tk.StringVar()
+        self.progress_current_var = tk.StringVar(value="Downloading: Ready")
+        self.progress_detail_var = tk.StringVar(value="Processing: -")
+        self._reset_progress_sticky()
         self.search_match_orders: list[int] = []
         self.current_search_match_index = -1
 
@@ -101,6 +106,7 @@ class YouTubeDownloaderWindow:
         self._update_stop_button_state()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(100, self._process_events)
+        self.root.after(300, self._poll_progress_queue)
 
     def _build_ui(self) -> None:
         self.root.columnconfigure(0, weight=1)
@@ -281,7 +287,15 @@ class YouTubeDownloaderWindow:
         self.stop_button = ttk.Button(main, text="Dừng tải", command=self.stop_download)
         self.stop_button.grid(row=8, column=2, sticky="ew", padx=(8, 0), pady=(4, 8))
 
-        ttk.Label(main, text="Log / progress").grid(row=8, column=0, columnspan=2, sticky="w", pady=(8, 4))
+        progress_frame = ttk.Frame(main)
+        progress_frame.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(8, 4))
+        progress_frame.columnconfigure(0, weight=1)
+        ttk.Label(progress_frame, textvariable=self.progress_current_var, anchor="w").grid(
+            row=0, column=0, sticky="ew"
+        )
+        ttk.Label(progress_frame, textvariable=self.progress_detail_var, anchor="w").grid(
+            row=1, column=0, sticky="ew"
+        )
         log_frame = ttk.Frame(main)
         log_frame.grid(row=9, column=0, columnspan=3, sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
@@ -637,6 +651,10 @@ class YouTubeDownloaderWindow:
         self.close_requested = False
         self.cancel_download = False
         self.download_controller = DownloadController()
+        self._clear_progress_queue()
+        self._reset_progress_sticky()
+        self.progress_current_var.set("Downloading: Ready")
+        self.progress_detail_var.set("Processing: -")
         self._set_download_controls_locked(True)
         worker = threading.Thread(
             target=self._download_worker,
@@ -669,6 +687,7 @@ class YouTubeDownloaderWindow:
         self.download_stop_requested = True
         if first_stop_request or (exit_after and not was_close_requested):
             self._append_log(log_message)
+            self._enqueue_progress_event(ProgressEvent(kind="stop_requested"))
             self._append_log("[INFO] Đang dừng tiến trình tải...")
 
         self._update_stop_button_state()
@@ -683,11 +702,18 @@ class YouTubeDownloaderWindow:
                 self._thread_log,
                 lambda video: self.events.put(("status_update", video.display_order, video.status)),
                 cancel_controller=controller,
+                progress_callback=self._enqueue_progress_event,
             )
             self.events.put(("download_done",))
         except DownloadError as exc:
+            self._enqueue_progress_event(
+                ProgressEvent(kind="error", phase="Error", message=self._friendly_general_message(str(exc)))
+            )
             self.events.put(("download_error", self._friendly_general_message(str(exc))))
         except Exception as exc:
+            self._enqueue_progress_event(
+                ProgressEvent(kind="error", phase="Error", message=self._friendly_general_message(str(exc)))
+            )
             self.events.put(("download_error", self._friendly_general_message(str(exc))))
 
     def apply_filter(self) -> None:
@@ -1210,6 +1236,69 @@ class YouTubeDownloaderWindow:
 
     def _thread_log(self, message: str) -> None:
         self.events.put(("log", sanitize_log_text(message)))
+
+    def _enqueue_progress_event(self, event: ProgressEvent) -> None:
+        put_latest_progress_event(self.progress_queue, event)
+
+    def _clear_progress_queue(self) -> None:
+        try:
+            while True:
+                self.progress_queue.get_nowait()
+        except queue.Empty:
+            pass
+
+    def _poll_progress_queue(self) -> None:
+        latest = None
+        try:
+            while True:
+                latest = self.progress_queue.get_nowait()
+        except queue.Empty:
+            pass
+        if latest is not None:
+            display_event = self._merge_progress_event_for_display(latest)
+            current_line, detail_line = format_progress_event_lines(display_event)
+            self.progress_current_var.set(current_line)
+            self.progress_detail_var.set(detail_line)
+        self.root.after(300, self._poll_progress_queue)
+
+    def _reset_progress_sticky(self) -> None:
+        self._progress_display_key = None
+        self._progress_sticky_percent = None
+        self._progress_sticky_speed = None
+        self._progress_sticky_eta = None
+        self._progress_sticky_fragment = None
+
+    def _merge_progress_event_for_display(self, event: ProgressEvent) -> ProgressEvent:
+        if event.kind in {"batch_complete", "stop_requested", "error"}:
+            self._reset_progress_sticky()
+            return event
+
+        key = (event.video_index, event.video_total, event.phase, event.title)
+        if key != self._progress_display_key:
+            self._reset_progress_sticky()
+            self._progress_display_key = key
+
+        if event.percent:
+            self._progress_sticky_percent = event.percent
+        if event.speed:
+            self._progress_sticky_speed = event.speed
+        if event.eta:
+            self._progress_sticky_eta = event.eta
+        if event.fragment:
+            self._progress_sticky_fragment = event.fragment
+
+        return ProgressEvent(
+            kind=event.kind,
+            phase=event.phase,
+            message=event.message,
+            video_index=event.video_index,
+            video_total=event.video_total,
+            title=event.title,
+            percent=event.percent or self._progress_sticky_percent,
+            speed=event.speed or self._progress_sticky_speed,
+            eta=event.eta or self._progress_sticky_eta,
+            fragment=event.fragment or self._progress_sticky_fragment,
+        )
 
     def _append_log(self, message: str) -> None:
         safe_message = sanitize_log_text(message)
