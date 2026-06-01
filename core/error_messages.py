@@ -204,7 +204,12 @@ def _contains_channel_resolution(text: str) -> bool:
 
 def _contains_cookies_missing(text: str) -> bool:
     lower = (text or "").lower()
-    return "cookies file missing" in lower or "cookies.txt missing" in lower or "chưa chọn cookies" in lower
+    return (
+        "cookies file missing" in lower
+        or "cookies.txt missing" in lower
+        or "no cookies file selected" in lower
+        or "chưa chọn cookies" in lower
+    )
 
 
 def _contains_missing_ytdlp(text: str) -> bool:

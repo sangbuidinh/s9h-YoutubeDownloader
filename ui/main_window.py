@@ -15,7 +15,7 @@ from core.downloader import (
     download_items,
 )
 from core.app_settings import load_last_api_key, save_last_api_key
-from core.error_messages import classify_api_error, classify_general_error, format_friendly_error
+from core.error_messages import classify_api_error, classify_general_error, classify_ytdlp_error, format_friendly_error
 from core.file_status import apply_statuses, build_output_paths, should_show_not_downloaded
 from core.progress_status import ProgressEvent, format_progress_event_lines, put_latest_progress_event
 from core.state_store import (
@@ -41,6 +41,12 @@ from core.youtube_api import (
     mask_api_key,
     sanitize_log_text,
 )
+from core.youtube_no_api import (
+    YoutubeNoApiError,
+    fetch_latest_video_page_no_api,
+    fetch_more_videos_no_api,
+    is_no_api_short_video,
+)
 from ui.dialogs import (
     DialogContext,
     show_app_dialog,
@@ -54,6 +60,9 @@ FILTER_ALL = "Hiển thị tất cả"
 FILTER_NOT_DOWNLOADED = "Chỉ hiển thị video chưa tải"
 SHORT_VIDEO_THRESHOLD_MINUTES = ("1", "2", "3", "5", "10")
 DEFAULT_SHORT_VIDEO_THRESHOLD_MINUTES = str(SHORT_VIDEO_DEFAULT_THRESHOLD_SECONDS // 60)
+FETCH_SOURCE_API = "API"
+FETCH_SOURCE_NONE = "None"
+FETCH_SOURCES = (FETCH_SOURCE_API, FETCH_SOURCE_NONE)
 
 
 class YouTubeDownloaderWindow:
@@ -79,8 +88,10 @@ class YouTubeDownloaderWindow:
         self.close_requested = False
         self.cancel_download = False
         self.status_editor = None
+        self.loaded_fetch_source = FETCH_SOURCE_API
 
         self.api_key_var = tk.StringVar(value=load_last_api_key())
+        self.fetch_source_var = tk.StringVar(value=FETCH_SOURCE_API)
         self.channel_var = tk.StringVar()
         self.save_folder_var = tk.StringVar()
         self.cookies_enabled_var = tk.BooleanVar(value=False)
@@ -100,6 +111,7 @@ class YouTubeDownloaderWindow:
 
         self._build_ui()
         self.search_var.trace_add("write", lambda *_args: self._on_search_text_changed())
+        self._update_fetch_source_ui_state()
         self._update_cookies_state()
         self._update_download_button_text()
         self._update_more_button_state()
@@ -120,7 +132,19 @@ class YouTubeDownloaderWindow:
 
         ttk.Label(main, text="YouTube API Key").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=4)
         self.api_key_entry = ttk.Entry(main, textvariable=self.api_key_var)
-        self.api_key_entry.grid(row=0, column=1, columnspan=2, sticky="ew", pady=4)
+        self.api_key_entry.grid(row=0, column=1, sticky="ew", pady=4)
+        fetch_source_frame = ttk.Frame(main)
+        fetch_source_frame.grid(row=0, column=2, sticky="e", padx=(8, 0), pady=4)
+        ttk.Label(fetch_source_frame, text="Fetch source").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self.fetch_source_box = ttk.Combobox(
+            fetch_source_frame,
+            textvariable=self.fetch_source_var,
+            values=FETCH_SOURCES,
+            state="readonly",
+            width=8,
+        )
+        self.fetch_source_box.grid(row=0, column=1, sticky="e")
+        self.fetch_source_box.bind("<<ComboboxSelected>>", lambda _event: self._on_fetch_source_changed())
 
         ttk.Label(main, text="Channel URL / Channel ID / Handle").grid(
             row=1, column=0, sticky="w", padx=(0, 8), pady=4
@@ -261,7 +285,7 @@ class YouTubeDownloaderWindow:
         self.cookies_check.grid(row=5, column=0, sticky="w", pady=4)
         self.cookies_entry = ttk.Entry(main, textvariable=self.cookies_path_var, state="disabled")
         self.cookies_entry.grid(row=5, column=1, sticky="ew", pady=4)
-        self.cookies_button = ttk.Button(main, text="Chọn cookies.txt", command=self.choose_cookies_file)
+        self.cookies_button = ttk.Button(main, text="Chọn cookies*.txt", command=self.choose_cookies_file)
         self.cookies_button.grid(row=5, column=2, sticky="ew", padx=(8, 0), pady=4)
 
         ttk.Label(main, text="Kiểu tải").grid(row=6, column=0, sticky="w", padx=(0, 8), pady=4)
@@ -322,6 +346,9 @@ class YouTubeDownloaderWindow:
             return
 
         manual_key = self.api_key_var.get().strip()
+        fetch_source = self.fetch_source_var.get() or FETCH_SOURCE_API
+        cookies_enabled = self.cookies_enabled_var.get()
+        cookies_path = self.cookies_path_var.get().strip() if cookies_enabled else ""
         save_folder = self.save_folder_var.get().strip()
         download_mode = self.download_mode_var.get()
         show_short_videos = self.show_short_videos_var.get()
@@ -331,6 +358,7 @@ class YouTubeDownloaderWindow:
         self.loading_more = False
         self.next_page_token = ""
         self.fetch_button.configure(state="disabled")
+        self.fetch_source_box.configure(state="disabled")
         self._update_more_button_state()
         self.selected_orders.clear()
         self.videos = []
@@ -338,7 +366,17 @@ class YouTubeDownloaderWindow:
 
         worker = threading.Thread(
             target=self._fetch_worker,
-            args=(channel_input, manual_key, save_folder, download_mode, show_short_videos, threshold_minutes),
+            args=(
+                channel_input,
+                manual_key,
+                fetch_source,
+                cookies_enabled,
+                cookies_path,
+                save_folder,
+                download_mode,
+                show_short_videos,
+                threshold_minutes,
+            ),
             daemon=True,
         )
         worker.start()
@@ -347,18 +385,31 @@ class YouTubeDownloaderWindow:
         self,
         channel_input: str,
         manual_key: str,
+        fetch_source: str,
+        cookies_enabled: bool,
+        cookies_path: str,
         save_folder: str,
         download_mode: str,
         show_short_videos: bool,
         threshold_minutes: int,
     ) -> None:
         try:
-            channel, videos, next_page_token = fetch_latest_video_page(
-                channel_input,
-                manual_key,
-                progress=self._thread_log,
-                min_visible_duration_seconds=threshold_minutes * 60,
-            )
+            if fetch_source == FETCH_SOURCE_NONE:
+                if cookies_enabled and not cookies_path:
+                    raise YoutubeNoApiError("Cookies enabled but no cookies file selected.")
+                channel, videos, next_page_token = fetch_latest_video_page_no_api(
+                    channel_input,
+                    progress=self._thread_log,
+                    cookies_path=cookies_path,
+                    min_visible_duration_seconds=threshold_minutes * 60,
+                )
+            else:
+                channel, videos, next_page_token = fetch_latest_video_page(
+                    channel_input,
+                    manual_key,
+                    progress=self._thread_log,
+                    min_visible_duration_seconds=threshold_minutes * 60,
+                )
             self._thread_log("[INFO] Checking local files...")
             apply_statuses(
                 videos,
@@ -368,19 +419,21 @@ class YouTubeDownloaderWindow:
                 download_mode=download_mode,
                 warning_callback=self._thread_log,
             )
-            if manual_key.strip():
+            if fetch_source == FETCH_SOURCE_API and manual_key.strip():
                 if save_last_api_key(manual_key):
                     self._thread_log(f"[INFO] Saved last API key: {mask_api_key(manual_key)}")
                 else:
                     self._thread_log("[WARNING] Could not save last API key.")
-            hidden_short_videos = self._short_video_count(videos, threshold_minutes)
+            hidden_short_videos = self._short_video_count(videos, threshold_minutes, fetch_source)
             if not show_short_videos and hidden_short_videos:
                 self._thread_log(
                     f"[INFO] Hidden short videos: {hidden_short_videos} under {threshold_minutes} minutes."
                 )
-            self.events.put(("fetch_done", channel, videos, next_page_token))
+            self.events.put(("fetch_done", channel, videos, next_page_token, fetch_source))
             visible_count = len(videos) if show_short_videos else len(videos) - hidden_short_videos
             self._thread_log(f"[SUCCESS] Loaded {visible_count} videos after filtering short videos.")
+        except YoutubeNoApiError as exc:
+            self.events.put(("fetch_error", self._friendly_no_api_message(exc, cookies_enabled)))
         except YoutubeApiError as exc:
             self.events.put(("fetch_error", self._friendly_api_message(exc)))
         except Exception as exc:
@@ -395,6 +448,9 @@ class YouTubeDownloaderWindow:
             self._update_more_button_state()
             return
 
+        fetch_source = self.loaded_fetch_source or FETCH_SOURCE_API
+        cookies_enabled = self.cookies_enabled_var.get()
+        cookies_path = self.cookies_path_var.get().strip() if cookies_enabled else ""
         self.loading_more = True
         self._update_more_button_state()
         worker = threading.Thread(
@@ -404,6 +460,9 @@ class YouTubeDownloaderWindow:
                 self.next_page_token,
                 len(self.videos) + 1,
                 self.api_key_var.get().strip(),
+                fetch_source,
+                cookies_enabled,
+                cookies_path,
                 self.show_short_videos_var.get(),
                 self._short_video_threshold_minutes(),
             ),
@@ -417,21 +476,36 @@ class YouTubeDownloaderWindow:
         page_token: str,
         start_order: int,
         manual_key: str,
+        fetch_source: str,
+        cookies_enabled: bool,
+        cookies_path: str,
         show_short_videos: bool,
         threshold_minutes: int,
     ) -> None:
         try:
             self._thread_log("[INFO] Loading next 100 videos...")
-            videos, next_page_token = fetch_more_videos(
-                uploads_playlist_id,
-                page_token,
-                start_order,
-                manual_key,
-                progress=self._thread_log,
-                min_visible_duration_seconds=threshold_minutes * 60,
-            )
+            if fetch_source == FETCH_SOURCE_NONE:
+                if cookies_enabled and not cookies_path:
+                    raise YoutubeNoApiError("Cookies enabled but no cookies file selected.")
+                videos, next_page_token = fetch_more_videos_no_api(
+                    uploads_playlist_id,
+                    page_token,
+                    start_order,
+                    progress=self._thread_log,
+                    cookies_path=cookies_path,
+                    min_visible_duration_seconds=threshold_minutes * 60,
+                )
+            else:
+                videos, next_page_token = fetch_more_videos(
+                    uploads_playlist_id,
+                    page_token,
+                    start_order,
+                    manual_key,
+                    progress=self._thread_log,
+                    min_visible_duration_seconds=threshold_minutes * 60,
+                )
             self.events.put(("load_more_done", videos, next_page_token))
-            hidden_short_videos = self._short_video_count(videos, threshold_minutes)
+            hidden_short_videos = self._short_video_count(videos, threshold_minutes, fetch_source)
             if not show_short_videos and hidden_short_videos:
                 self._thread_log(
                     f"[INFO] Hidden short videos: {hidden_short_videos} under {threshold_minutes} minutes."
@@ -441,6 +515,8 @@ class YouTubeDownloaderWindow:
                 self._thread_log(f"[SUCCESS] Loaded {visible_count} more videos after filtering short videos.")
             if not next_page_token:
                 self._thread_log("[INFO] No more videos.")
+        except YoutubeNoApiError as exc:
+            self.events.put(("load_more_error", self._friendly_no_api_message(exc, cookies_enabled)))
         except YoutubeApiError as exc:
             self.events.put(("load_more_error", self._friendly_api_message(exc)))
         except Exception as exc:
@@ -469,8 +545,8 @@ class YouTubeDownloaderWindow:
         if self.downloading:
             return
         path = filedialog.askopenfilename(
-            title="Choose cookies.txt",
-            filetypes=(("Cookies file", "cookies.txt"), ("Text files", "*.txt"), ("All files", "*.*")),
+            title="Choose cookies*.txt",
+            filetypes=(("Cookies files", "cookies*.txt"), ("Text files", "*.txt"), ("All files", "*.*")),
         )
         if path:
             self.cookies_path_var.set(path)
@@ -493,6 +569,21 @@ class YouTubeDownloaderWindow:
         if self.downloading:
             return
         self.apply_filter()
+
+    def _on_fetch_source_changed(self) -> None:
+        self._update_fetch_source_ui_state()
+
+    def _update_fetch_source_ui_state(self) -> None:
+        if self.fetching or self.downloading:
+            return
+        self.api_key_entry.configure(state=self._api_key_entry_state(False))
+
+    def _api_key_entry_state(self, locked: bool = False) -> str:
+        if locked:
+            return "disabled"
+        if self.fetch_source_var.get() == FETCH_SOURCE_NONE:
+            return "disabled"
+        return "normal"
 
     def open_select_by_date_dialog(self) -> None:
         if self.downloading:
@@ -992,14 +1083,26 @@ class YouTubeDownloaderWindow:
         self.selected_orders.intersection_update(loaded_orders)
 
     def _video_allowed_by_short_video_setting(self, video) -> bool:
-        return self.show_short_videos_var.get() or not is_short_video(
+        return self.show_short_videos_var.get() or not self._is_short_video_for_fetch_source(
             video,
             self._short_video_threshold_seconds(),
+            self.loaded_fetch_source,
         )
 
-    def _short_video_count(self, videos: list, threshold_minutes: int | None = None) -> int:
+    def _short_video_count(
+        self,
+        videos: list,
+        threshold_minutes: int | None = None,
+        fetch_source: str | None = None,
+    ) -> int:
         threshold_seconds = (threshold_minutes or self._short_video_threshold_minutes()) * 60
-        return sum(1 for video in videos if is_short_video(video, threshold_seconds))
+        source = fetch_source or self.loaded_fetch_source
+        return sum(1 for video in videos if self._is_short_video_for_fetch_source(video, threshold_seconds, source))
+
+    def _is_short_video_for_fetch_source(self, video, threshold_seconds: int, fetch_source: str) -> bool:
+        if fetch_source == FETCH_SOURCE_NONE:
+            return is_no_api_short_video(video, threshold_seconds)
+        return is_short_video(video, threshold_seconds)
 
     def _short_video_threshold_minutes(self) -> int:
         try:
@@ -1171,7 +1274,8 @@ class YouTubeDownloaderWindow:
     def _set_download_controls_locked(self, locked: bool) -> None:
         normal_state = "disabled" if locked else "normal"
         readonly_state = "disabled" if locked else "readonly"
-        self.api_key_entry.configure(state=normal_state)
+        self.api_key_entry.configure(state=self._api_key_entry_state(locked))
+        self.fetch_source_box.configure(state="disabled" if locked else "readonly")
         self.channel_entry.configure(state=normal_state)
         self.fetch_button.configure(state=normal_state if not self.fetching else "disabled")
         self.select_by_date_button.configure(state=normal_state)
@@ -1322,6 +1426,15 @@ class YouTubeDownloaderWindow:
     def _friendly_api_message(self, exc: YoutubeApiError) -> str:
         return format_friendly_error(classify_api_error(exc.code, exc.message), [exc.message])
 
+    def _friendly_no_api_message(self, exc: YoutubeNoApiError, cookies_enabled: bool | None = None) -> str:
+        message = str(exc) or "Network error"
+        if cookies_enabled is None:
+            cookies_enabled = self.cookies_enabled_var.get()
+        return format_friendly_error(
+            classify_ytdlp_error(message, cookies_enabled=cookies_enabled),
+            [message],
+        )
+
     def _friendly_general_message(self, message: str) -> str:
         return format_friendly_error(classify_general_error(message), [message])
 
@@ -1342,8 +1455,11 @@ class YouTubeDownloaderWindow:
             self.channel_info = event[1]
             self.videos = event[2]
             self.next_page_token = event[3]
+            self.loaded_fetch_source = event[4]
             self.fetching = False
             self.fetch_button.configure(state="normal")
+            self.fetch_source_box.configure(state="readonly")
+            self._update_fetch_source_ui_state()
             self.apply_filter()
             self._update_more_button_state()
             if not self.next_page_token:
@@ -1353,6 +1469,8 @@ class YouTubeDownloaderWindow:
             self.next_page_token = ""
             self.fetching = False
             self.fetch_button.configure(state="normal")
+            self.fetch_source_box.configure(state="readonly")
+            self._update_fetch_source_ui_state()
             self._update_more_button_state()
         elif kind == "load_more_done":
             more_videos = event[1]
