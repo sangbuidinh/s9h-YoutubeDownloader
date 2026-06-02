@@ -1,162 +1,191 @@
 # YouTube Downloaderbs
 
-A portable Windows desktop app for fetching YouTube channel videos through the YouTube Data API and downloading selected videos, thumbnails, and MP3 audio with yt-dlp and ffmpeg.
+Ứng dụng desktop portable cho Windows giúp lấy danh sách video từ kênh YouTube bằng YouTube Data API và tải video, thumbnail hoặc MP3 thông qua yt-dlp và ffmpeg.
 
-## Key Features
+<p align="center">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-blue">
+  <img alt="Portable" src="https://img.shields.io/badge/app-portable-success">
+  <img alt="Runtime" src="https://img.shields.io/badge/runtime-yt--dlp-lightgrey">
+  <img alt="Database" src="https://img.shields.io/badge/state-SQLite-informational">
+  <img alt="Latest release" src="https://img.shields.io/github/v/release/sangbuidinh/s9h-YoutubeDownloader?label=release">
+</p>
 
-- Fetch channel videos with YouTube Data API
-- Download selected videos instead of entire channels
-- Premiere-friendly MP4 download mode: H.264/AAC, max 1080p
-- Thumbnail download
-- MP3 audio extraction/download
-- SQLite download history/manual status
-- Optional cookies support for sign-in/bot-check cases
-- Lightweight two-line progress display
-- Portable runtime tools in `data/bin`
+> [!IMPORTANT]
+> Ứng dụng cần YouTube Data API key để lấy danh sách video từ kênh. Một số video có thể cần cookies hợp lệ nếu YouTube yêu cầu đăng nhập hoặc xác minh bot.
 
-## Download
+## ✨ Tính năng chính
 
-Download the latest packaged build from [here](https://github.com/sangbuidinh/s9h-YoutubeDownloader/releases/latest).
+- Lấy danh sách video từ kênh YouTube bằng YouTube Data API.
+- Chọn từng video cần tải thay vì tải toàn bộ kênh.
+- Tải video MP4 thân thiện với Premiere: H.264/AAC, tối đa 1080p.
+- Tải thumbnail JPG.
+- Tải hoặc trích xuất audio MP3.
+- Lưu lịch sử tải và trạng thái thủ công bằng SQLite.
+- Hỗ trợ `cookies*.txt` cho trường hợp YouTube yêu cầu đăng nhập hoặc xác minh bot.
+- Hiển thị tiến trình tải nhẹ, 2 dòng, không làm rối log.
+- Dạng portable: runtime tools nằm trong `data/bin`.
 
-## Quick Start
+## ⬇️ Tải bản mới nhất
 
-1. Download the latest release zip.
-2. Extract the whole folder.
-3. Run `Youtube Downloaderbs.exe`.
-4. Enter a YouTube Data API key.
-5. Paste a channel URL, channel ID, or handle.
-6. Click `Lấy danh sách Video`.
-7. Select videos.
-8. Choose a save folder and download mode.
-9. Click download.
+⬇️ Tải bản đóng gói mới nhất [tại đây](https://github.com/sangbuidinh/s9h-YoutubeDownloader/releases/latest).
 
-## Portable Folder Structure
+> [!NOTE]
+> Giải nén toàn bộ file zip trước khi chạy. Không chỉ kéo riêng file `.exe` ra ngoài vì app cần thư mục `data/bin`.
 
-Extract the whole release package and keep the executable with its `data` folder:
+## 🚀 Hướng dẫn nhanh
+
+1. Tải bản release mới nhất.
+2. Giải nén toàn bộ thư mục.
+3. Chạy `Youtube Downloaderbs.exe`.
+4. Nhập YouTube Data API key.
+5. Dán Channel URL / Channel ID / Handle.
+6. Bấm `Lấy danh sách Video`.
+7. Chọn video cần tải.
+8. Chọn thư mục lưu và kiểu tải.
+9. Bấm tải.
+
+## 📁 Cấu trúc portable
 
 ```text
 Youtube Downloader/
 |-- Youtube Downloaderbs.exe
-\-- data/
+`-- data/
     |-- api key.txt.example
     |-- cookies.txt.example
     |-- app_settings.example.json
-    \-- bin/
+    `-- bin/
         |-- yt-dlp.exe
         |-- ffmpeg.exe
-        \-- deno.exe
+        `-- deno.exe
 ```
 
-Do not move only the `.exe` away from the folder. Runtime tools are external and must remain available in `data/bin`.
+Runtime tools được đặt ngoài file `.exe` để có thể cập nhật riêng. Hãy giữ nguyên cấu trúc thư mục khi sử dụng bản portable.
 
-## Requirements
+## ✅ Yêu cầu
 
-- Windows
-- YouTube Data API key
-- `yt-dlp.exe` in `data/bin`
-- `ffmpeg.exe` in `data/bin`
-- `deno.exe` in `data/bin` for optional YouTube JavaScript challenge handling
-- Optional `cookies*.txt` file for sign-in, bot-check, age-restricted, private, or session-gated downloads
+| Thành phần | Bắt buộc | Ghi chú |
+|---|---:|---|
+| Windows | Có | Ứng dụng desktop cho Windows |
+| YouTube Data API key | Có | Dùng để lấy danh sách video từ kênh |
+| `yt-dlp.exe` | Có | Đặt trong `data/bin` |
+| `ffmpeg.exe` | Có | Đặt trong `data/bin`, dùng để merge và trích xuất MP3 |
+| `deno.exe` | Không | Hỗ trợ một số YouTube JavaScript challenge |
+| `cookies*.txt` | Không | Dùng khi YouTube yêu cầu đăng nhập hoặc xác minh bot |
 
-## YouTube API Key
+## 🔑 YouTube Data API key
 
-A YouTube Data API key is required to fetch channel video lists. Enter the key in the app before loading a channel.
+YouTube Data API key là bắt buộc để lấy danh sách video từ kênh. Bạn có thể nhập API key trực tiếp trong app trước khi tải danh sách video.
 
-The last entered key is stored locally in `data/app_settings.json`. The app can also read additional keys from `data/api key.txt`, one key per line. The packaged `data/api key.txt.example` file is only a template.
+API key nhập gần nhất được lưu cục bộ trong:
 
-Do not commit or publish real API keys.
+```text
+data/app_settings.json
+```
 
-## Cookies
+App cũng có thể đọc thêm API key từ `data/api key.txt`, mỗi dòng một key. File `data/api key.txt.example` trong bản đóng gói chỉ là mẫu.
 
-Cookies are optional. Use cookies when YouTube requires sign-in, bot verification, age/private access, or session-specific access.
+> [!WARNING]
+> Không commit, upload hoặc chia sẻ API key thật.
 
-The app supports selecting `cookies*.txt` files. Cookie exports should use Netscape cookies format.
+## 🍪 Cookies
 
-Do not upload real cookies to GitHub or include them in release packages.
+Cookies là tùy chọn. Hãy dùng cookies khi YouTube yêu cầu đăng nhập, xác minh bot, truy cập video giới hạn tuổi, video riêng tư hoặc nội dung phụ thuộc phiên đăng nhập.
 
-## Download Modes
+App hỗ trợ chọn file `cookies*.txt` hoặc `cookies.txt`. File cookies nên được xuất theo Netscape cookies format.
 
-| Mode | Output |
+> [!WARNING]
+> Không upload cookies thật lên GitHub và không đưa cookies thật vào release package.
+
+## 🎞️ Kiểu tải
+
+| Kiểu tải | Kết quả |
 |---|---|
 | Video + Thumb | `.mp4` + `.jpg` |
 | Audio MP3 + Thumb | `.mp3` + `.jpg` |
 | Video + Audio MP3 + Thumb | `.mp4` + `.mp3` + `.jpg` |
 
-## Output Folder Structure
+## 📦 Cấu trúc thư mục đầu ra
 
-For the save folder selected in the app, downloads are organized by channel and output type:
+Khi chọn thư mục lưu, app tạo cấu trúc theo tên kênh và loại file:
 
 ```text
 <Save folder>/
-\-- <Channel name>/
+`-- <Channel name>/
     |-- video/
-    |   \-- Example Title.mp4
+    |   `-- Example Title.mp4
     |-- thumb/
-    |   \-- Example Title.jpg
-    \-- audio/
-        \-- Example Title.mp3
+    |   `-- Example Title.jpg
+    `-- audio/
+        `-- Example Title.mp3
 ```
 
-The `audio` folder is used only when an audio download mode is selected.
+Thư mục `audio` chỉ được dùng khi chọn kiểu tải có MP3.
 
-## Download History / SQLite State
+## 🗃️ Lịch sử tải / SQLite state
 
-Download and manual status are stored in:
+Trạng thái tải và trạng thái chỉnh thủ công được lưu trong SQLite:
 
 ```text
 data/download_state.sqlite3
 ```
 
-SQLite is the source of truth for app status. Download status is stored by channel/video identity in SQLite and is not determined only by scanning output folders. This matters because users may rename or move downloaded files after download.
+SQLite là nguồn dữ liệu chính cho trạng thái trong app. Trạng thái tải được lưu theo định danh kênh/video trong SQLite và không chỉ dựa vào việc quét thư mục đầu ra. Cách này giúp trạng thái ổn định hơn khi người dùng đổi tên hoặc di chuyển file đã tải.
 
-SQLite sidecar files may exist next to the database:
+Các file sidecar của SQLite có thể xuất hiện bên cạnh database:
 
 ```text
 data/download_state.sqlite3-wal
 data/download_state.sqlite3-shm
 ```
 
-Do not delete `.sqlite3`, `.wal`, or `.shm` files if you want to keep download history and manual statuses.
+> [!IMPORTANT]
+> Không xóa các file `.sqlite3`, `.wal` hoặc `.shm` nếu bạn muốn giữ lịch sử tải và trạng thái thủ công.
 
-## Troubleshooting
+## 🧰 Khắc phục sự cố
 
-| Problem | Likely cause | Fix |
+| Vấn đề | Nguyên nhân thường gặp | Cách xử lý |
 |---|---|---|
-| Invalid API key | Wrong or disabled API key | Create/enter a valid YouTube Data API key |
-| API quota exceeded | Daily quota used | Wait for quota reset or use another valid key |
-| `yt-dlp.exe` missing | Runtime file missing | Keep `yt-dlp.exe` in `data/bin` |
-| `ffmpeg.exe` missing | Runtime file missing | Keep `ffmpeg.exe` in `data/bin` |
-| YouTube asks for sign-in/bot verification | YouTube anti-bot/session challenge | Enable cookies and select a valid `cookies*.txt` file |
-| Download is slow or interrupted | Network/CDN/YouTube throttling | Retry later, update yt-dlp, or use valid cookies |
-| MP3 extraction fails | ffmpeg missing or source MP4 invalid | Check `ffmpeg.exe` and retry |
+| API key không hợp lệ | Key sai, bị tắt hoặc chưa bật YouTube Data API | Tạo hoặc nhập YouTube Data API key hợp lệ |
+| Hết quota API | Quota hằng ngày đã dùng hết | Chờ quota reset hoặc dùng API key hợp lệ khác |
+| Thiếu `yt-dlp.exe` | Runtime file không nằm trong `data/bin` | Giữ `yt-dlp.exe` trong `data/bin` |
+| Thiếu `ffmpeg.exe` | Runtime file không nằm trong `data/bin` | Giữ `ffmpeg.exe` trong `data/bin` |
+| YouTube yêu cầu đăng nhập / xác minh bot | YouTube yêu cầu phiên đăng nhập hoặc chặn bot | Bật cookies và chọn file `cookies*.txt` hợp lệ |
+| Tải chậm hoặc bị ngắt | Mạng, CDN hoặc YouTube throttling | Thử lại sau, cập nhật yt-dlp hoặc dùng cookies hợp lệ |
+| Lỗi trích xuất MP3 | Thiếu ffmpeg hoặc file MP4 nguồn không hợp lệ | Kiểm tra `ffmpeg.exe` và thử tải lại |
 
-## Run From Source
+<details>
+<summary><strong>▶️ Chạy từ source</strong></summary>
 
 ```powershell
 python app.py
 ```
 
-When running from source, app data is stored in this repository's `data` folder. Runtime tools are read from `data/bin`.
+Khi chạy từ source, dữ liệu app nằm trong thư mục `data` của repository. Runtime tools được đọc từ `data/bin`.
 
-## Packaging
+</details>
 
-Build the Windows executable from the repository root:
+<details>
+<summary><strong>🛠️ Đóng gói bằng PyInstaller</strong></summary>
+
+Chạy từ thư mục gốc của repository:
 
 ```powershell
 python -m PyInstaller --noconfirm --clean --onefile --windowed --name "Youtube Downloaderbs" app.py
 ```
 
-Expected output:
+Output dự kiến:
 
 ```text
 dist/Youtube Downloaderbs.exe
 ```
 
-Release packages must keep user data and runtime tools outside the executable.
+Release package phải giữ user data và runtime tools ở ngoài file `.exe`.
 
-## Security Notes
+</details>
 
-Do not commit or upload:
+## 🔒 Ghi chú bảo mật
+
+Không commit hoặc upload:
 
 - `data/download_state.sqlite3`
 - `data/download_state.sqlite3-wal`
@@ -167,12 +196,12 @@ Do not commit or upload:
 - generated `.exe`
 - release archives
 
-Only example files such as `data/app_settings.example.json`, `data/api key.txt.example`, and `data/cookies.txt.example` are safe to include.
+Chỉ các file mẫu như `data/app_settings.example.json`, `data/api key.txt.example` và `data/cookies.txt.example` là phù hợp để đưa vào release package.
 
-## Limitations
+## ⚠️ Giới hạn hiện tại
 
-- Requires a YouTube Data API key to fetch channel videos.
-- Some downloads may require valid cookies.
-- Runtime tools must be updated manually in `data/bin`.
-- YouTube behavior can change and may require updating yt-dlp.
-- Download status is maintained in SQLite, not by full filesystem scanning.
+- Cần YouTube Data API key để lấy danh sách video từ kênh.
+- Một số lượt tải có thể cần cookies hợp lệ.
+- Runtime tools cần được cập nhật thủ công trong `data/bin`.
+- Hành vi của YouTube có thể thay đổi và có thể cần cập nhật yt-dlp.
+- Trạng thái tải được duy trì trong SQLite, không dựa vào việc quét toàn bộ filesystem.
