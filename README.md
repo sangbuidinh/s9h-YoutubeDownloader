@@ -1,16 +1,38 @@
 # YouTube Downloaderbs
 
-Windows desktop app for fetching a YouTube channel video list with the YouTube Data API and downloading selected videos, thumbnails, and MP3 audio through external runtime tools.
+A portable Windows desktop app for fetching YouTube channel videos through the YouTube Data API and downloading selected videos, thumbnails, and MP3 audio with yt-dlp and ffmpeg.
 
-- Shows a lightweight progress status during downloads.
+## Key Features
 
-## Download Latest Release
+- Fetch channel videos with YouTube Data API
+- Download selected videos instead of entire channels
+- Premiere-friendly MP4 download mode: H.264/AAC, max 1080p
+- Thumbnail download
+- MP3 audio extraction/download
+- SQLite download history/manual status
+- Optional cookies support for sign-in/bot-check cases
+- Lightweight two-line progress display
+- Portable runtime tools in `data/bin`
 
-⬇️ Download the latest packaged build from [here](https://github.com/sangbuidinh/s9h-YoutubeDownloader/releases/latest).
+## Download
+
+Download the latest packaged build from [here](https://github.com/sangbuidinh/s9h-YoutubeDownloader/releases/latest).
+
+## Quick Start
+
+1. Download the latest release zip.
+2. Extract the whole folder.
+3. Run `Youtube Downloaderbs.exe`.
+4. Enter a YouTube Data API key.
+5. Paste a channel URL, channel ID, or handle.
+6. Click `Lấy danh sách Video`.
+7. Select videos.
+8. Choose a save folder and download mode.
+9. Click download.
 
 ## Portable Folder Structure
 
-The portable package should be extracted with this structure:
+Extract the whole release package and keep the executable with its `data` folder:
 
 ```text
 Youtube Downloader/
@@ -25,48 +47,44 @@ Youtube Downloader/
         \-- deno.exe
 ```
 
-Runtime files stay outside the executable so they can be updated without rebuilding the app.
+Do not move only the `.exe` away from the folder. Runtime tools are external and must remain available in `data/bin`.
 
-## Run From Source
+## Requirements
 
-```powershell
-cd "D:\Youtube Downloader Source"
-python app.py
-```
-
-When running from source, app data is stored in this repository's `data` folder. Runtime tools are read from `data\bin` first, then from the source root, then from `D:\Youtube Downloader` during local development.
-
-## Required Runtime Tools
-
-- `data\bin\yt-dlp.exe`: required for video and thumbnail downloads.
-- `data\bin\ffmpeg.exe`: required for merging video/audio and MP3 extraction.
-- `data\bin\deno.exe`: optional helper for YouTube JavaScript challenge handling.
+- Windows
+- YouTube Data API key
+- `yt-dlp.exe` in `data/bin`
+- `ffmpeg.exe` in `data/bin`
+- `deno.exe` in `data/bin` for optional YouTube JavaScript challenge handling
+- Optional `cookies*.txt` file for sign-in, bot-check, age-restricted, private, or session-gated downloads
 
 ## YouTube API Key
 
-You can enter an API key directly in the app. The last entered key is stored in `data\app_settings.json`.
+A YouTube Data API key is required to fetch channel video lists. Enter the key in the app before loading a channel.
 
-You can also create `data\api key.txt` and put one API key per line. The packaged app includes only `data\api key.txt.example`; rename or copy it locally before adding real keys.
+The last entered key is stored locally in `data/app_settings.json`. The app can also read additional keys from `data/api key.txt`, one key per line. The packaged `data/api key.txt.example` file is only a template.
 
-## Cookies Format
+Do not commit or publish real API keys.
 
-Cookies are optional. If YouTube asks for sign-in or bot verification, export cookies in Netscape `cookies.txt` format and select that file in the app.
+## Cookies
+
+Cookies are optional. Use cookies when YouTube requires sign-in, bot verification, age/private access, or session-specific access.
+
+The app supports selecting `cookies*.txt` files. Cookie exports should use Netscape cookies format.
 
 Do not upload real cookies to GitHub or include them in release packages.
 
 ## Download Modes
 
-The download mode selector controls which files are created for selected videos:
-
-1. `Video + Thumb`
-2. `Audio MP3 + Thumb`
-3. `Video + Audio MP3 + Thumb`
-
-The default mode is `Video + Thumb`. MP3 extraction requires `ffmpeg.exe`.
+| Mode | Output |
+|---|---|
+| Video + Thumb | `.mp4` + `.jpg` |
+| Audio MP3 + Thumb | `.mp3` + `.jpg` |
+| Video + Audio MP3 + Thumb | `.mp4` + `.mp3` + `.jpg` |
 
 ## Output Folder Structure
 
-For the save folder selected in the UI, downloads are organized by channel:
+For the save folder selected in the app, downloads are organized by channel and output type:
 
 ```text
 <Save folder>/
@@ -79,30 +97,50 @@ For the save folder selected in the UI, downloads are organized by channel:
         \-- Example Title.mp3
 ```
 
-The `audio` folder is created only when an audio download mode is used.
+The `audio` folder is used only when an audio download mode is selected.
 
-## SQLite State Storage
+## Download History / SQLite State
 
-The app stores download status in:
+Download and manual status are stored in:
 
 ```text
 data/download_state.sqlite3
 ```
 
-This file is the only source of truth for downloaded, skipped, and manual statuses. The app does not depend on real output filenames when deciding old download status because users may rename downloaded files after download.
+SQLite is the source of truth for app status. Download status is stored by channel/video identity in SQLite and is not determined only by scanning output folders. This matters because users may rename or move downloaded files after download.
 
-SQLite sidecar files may exist next to it:
+SQLite sidecar files may exist next to the database:
 
 ```text
 data/download_state.sqlite3-wal
 data/download_state.sqlite3-shm
 ```
 
-Do not delete these files if you want to keep download history and manual statuses.
+Do not delete `.sqlite3`, `.wal`, or `.shm` files if you want to keep download history and manual statuses.
 
-## Packaging .exe
+## Troubleshooting
 
-Build from the repository root:
+| Problem | Likely cause | Fix |
+|---|---|---|
+| Invalid API key | Wrong or disabled API key | Create/enter a valid YouTube Data API key |
+| API quota exceeded | Daily quota used | Wait for quota reset or use another valid key |
+| `yt-dlp.exe` missing | Runtime file missing | Keep `yt-dlp.exe` in `data/bin` |
+| `ffmpeg.exe` missing | Runtime file missing | Keep `ffmpeg.exe` in `data/bin` |
+| YouTube asks for sign-in/bot verification | YouTube anti-bot/session challenge | Enable cookies and select a valid `cookies*.txt` file |
+| Download is slow or interrupted | Network/CDN/YouTube throttling | Retry later, update yt-dlp, or use valid cookies |
+| MP3 extraction fails | ffmpeg missing or source MP4 invalid | Check `ffmpeg.exe` and retry |
+
+## Run From Source
+
+```powershell
+python app.py
+```
+
+When running from source, app data is stored in this repository's `data` folder. Runtime tools are read from `data/bin`.
+
+## Packaging
+
+Build the Windows executable from the repository root:
 
 ```powershell
 python -m PyInstaller --noconfirm --clean --onefile --windowed --name "Youtube Downloaderbs" app.py
@@ -114,7 +152,7 @@ Expected output:
 dist/Youtube Downloaderbs.exe
 ```
 
-Build and release packages must keep user data and runtime tools outside the executable.
+Release packages must keep user data and runtime tools outside the executable.
 
 ## Security Notes
 
@@ -126,14 +164,15 @@ Do not commit or upload:
 - `data/app_settings.json`
 - cookies files
 - API key files
-- generated `.exe` files
+- generated `.exe`
 - release archives
 
 Only example files such as `data/app_settings.example.json`, `data/api key.txt.example`, and `data/cookies.txt.example` are safe to include.
 
-## Current Limitations
+## Limitations
 
-- The app requires a YouTube Data API key to fetch channel videos.
-- Some YouTube downloads may require valid cookies.
-- Runtime tools must be updated manually in `data\bin`.
-- Download status is stored by channel/video identity and selected save folder, not by scanning old output folders.
+- Requires a YouTube Data API key to fetch channel videos.
+- Some downloads may require valid cookies.
+- Runtime tools must be updated manually in `data/bin`.
+- YouTube behavior can change and may require updating yt-dlp.
+- Download status is maintained in SQLite, not by full filesystem scanning.
