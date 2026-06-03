@@ -3,11 +3,24 @@
 Ứng dụng desktop portable cho Windows giúp lấy danh sách video từ kênh YouTube bằng YouTube Data API và tải video, thumbnail hoặc MP3 thông qua yt-dlp và ffmpeg.
 
 <p align="center">
-  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-blue">
-  <img alt="Portable" src="https://img.shields.io/badge/app-portable-success">
-  <img alt="Runtime" src="https://img.shields.io/badge/runtime-yt--dlp-lightgrey">
-  <img alt="Database" src="https://img.shields.io/badge/state-SQLite-informational">
-  <img alt="Latest release" src="https://img.shields.io/github/v/release/sangbuidinh/s9h-YoutubeDownloader?label=release">
+  <a href="https://github.com/sangbuidinh/s9h-YoutubeDownloader/releases/latest">
+    <img alt="Latest Release" src="https://img.shields.io/github/v/release/sangbuidinh/s9h-YoutubeDownloader?label=latest%20release">
+  </a>
+  <a href="https://github.com/sangbuidinh/s9h-YoutubeDownloader/releases">
+    <img alt="Total Downloads" src="https://img.shields.io/github/downloads/sangbuidinh/s9h-YoutubeDownloader/total?label=downloads">
+  </a>
+  <a href="https://github.com/yt-dlp/yt-dlp">
+    <img alt="yt-dlp" src="https://img.shields.io/badge/runtime-yt--dlp-lightgrey">
+  </a>
+  <a href="https://ffmpeg.org/">
+    <img alt="ffmpeg" src="https://img.shields.io/badge/media-ffmpeg-green">
+  </a>
+  <a href="https://www.sqlite.org/index.html">
+    <img alt="SQLite" src="https://img.shields.io/badge/state-SQLite-informational">
+  </a>
+  <a href="https://github.com/sangbuidinh/s9h-YoutubeDownloader/releases/latest">
+    <img alt="Windows Portable" src="https://img.shields.io/badge/Windows-portable-blue">
+  </a>
 </p>
 
 > [!IMPORTANT]
