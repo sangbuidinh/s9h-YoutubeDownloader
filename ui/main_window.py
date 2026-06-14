@@ -54,6 +54,16 @@ FILTER_ALL = "Hiển thị tất cả"
 FILTER_NOT_DOWNLOADED = "Chỉ hiển thị video chưa tải"
 SHORT_VIDEO_THRESHOLD_MINUTES = ("1", "2", "3", "5", "10")
 DEFAULT_SHORT_VIDEO_THRESHOLD_MINUTES = str(SHORT_VIDEO_DEFAULT_THRESHOLD_SECONDS // 60)
+TREE_COLUMN_IDS = ("selected", "title", "duration", "published", "status")
+TREE_DATA_COLUMNS = ("title", "duration", "published", "status")
+TREE_FIXED_COLUMNS = ("selected",)
+TREE_COLUMN_DEFAULTS = {
+    "selected": {"width": 42, "minwidth": 35, "stretch": False, "anchor": "center"},
+    "title": {"width": 560, "minwidth": 240, "stretch": False, "anchor": "w"},
+    "duration": {"width": 110, "minwidth": 90, "stretch": False, "anchor": "center"},
+    "published": {"width": 130, "minwidth": 110, "stretch": False, "anchor": "center"},
+    "status": {"width": 150, "minwidth": 130, "stretch": False, "anchor": "center"},
+}
 
 
 class YouTubeDownloaderWindow:
@@ -97,6 +107,10 @@ class YouTubeDownloaderWindow:
         self._reset_progress_sticky()
         self.search_match_orders: list[int] = []
         self.current_search_match_index = -1
+        self.tree_column_drag: dict | None = None
+        self.tree_column_ratios: dict[str, float] = self._default_tree_column_ratios()
+        self.tree_column_fit_after_id = None
+        self.tree_column_fit_in_progress = False
 
         self._build_ui()
         self.search_var.trace_add("write", lambda *_args: self._on_search_text_changed())
@@ -175,23 +189,23 @@ class YouTubeDownloaderWindow:
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
-        columns = ("selected", "title", "duration", "published", "status")
-        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
+        self.tree = ttk.Treeview(table_frame, columns=TREE_COLUMN_IDS, show="headings", selectmode="browse")
         self.tree.heading("selected", text="[ ]", anchor="center")
         self.tree.heading("title", text="Video title")
         self.tree.heading("duration", text="Duration")
         self.tree.heading("published", text="Upload date")
         self.tree.heading("status", text="Status")
-        self.tree.column("selected", width=42, minwidth=35, stretch=False, anchor="center")
-        self.tree.column("title", width=560, minwidth=240, stretch=True)
-        self.tree.column("duration", width=110, minwidth=90, stretch=False, anchor="center")
-        self.tree.column("published", width=130, minwidth=110, stretch=False, anchor="center")
-        self.tree.column("status", width=150, minwidth=130, stretch=False, anchor="center")
+        for column_id in TREE_COLUMN_IDS:
+            self.tree.column(column_id, **TREE_COLUMN_DEFAULTS[column_id])
         self.tree.grid(row=0, column=0, sticky="nsew")
         self.tree.bind("<Button-1>", self._on_tree_click)
         self.tree.bind("<Double-1>", self._on_tree_double_click)
         self.tree.bind("<Button-3>", self._on_tree_right_click)
         self.tree.bind("<space>", self._on_tree_space)
+        self.tree.bind("<B1-Motion>", self._on_tree_drag_motion, add="+")
+        self.tree.bind("<ButtonRelease-1>", self._on_tree_button_release, add="+")
+        self.tree.bind("<Configure>", self._on_tree_configure, add="+")
+        self._schedule_tree_column_fit()
         self.status_menu = tk.Menu(self.root, tearoff=0)
         self.status_menu.add_command(
             label="Đánh dấu là Đã tải",
@@ -750,6 +764,296 @@ class YouTubeDownloaderWindow:
         self._update_header_checkbox()
         self._update_download_button_text()
         self._refresh_search_matches(keep_current=True)
+        self._schedule_tree_column_fit()
+
+    def _default_tree_column_ratios(self) -> dict[str, float]:
+        data_total = sum(int(TREE_COLUMN_DEFAULTS[column]["width"]) for column in TREE_DATA_COLUMNS)
+        if data_total <= 0:
+            equal_ratio = 1 / len(TREE_DATA_COLUMNS)
+            return {column: equal_ratio for column in TREE_DATA_COLUMNS}
+        return {
+            column: int(TREE_COLUMN_DEFAULTS[column]["width"]) / data_total
+            for column in TREE_DATA_COLUMNS
+        }
+
+    def _on_tree_configure(self, _event=None):
+        if self.tree_column_drag:
+            return None
+        self._schedule_tree_column_fit()
+        return None
+
+    def _cancel_tree_column_fit(self) -> None:
+        if self.tree_column_fit_after_id is None:
+            return
+        try:
+            self.root.after_cancel(self.tree_column_fit_after_id)
+        except tk.TclError:
+            pass
+        self.tree_column_fit_after_id = None
+
+    def _schedule_tree_column_fit(self) -> None:
+        if self.tree_column_drag:
+            return
+        self._cancel_tree_column_fit()
+        self.tree_column_fit_after_id = self.root.after_idle(self._fit_tree_columns_to_table)
+
+    def _tree_available_data_width(self) -> int:
+        tree_width = int(self.tree.winfo_width() or 0)
+        if tree_width <= 1:
+            tree_width = sum(int(TREE_COLUMN_DEFAULTS[column]["width"]) for column in TREE_COLUMN_IDS)
+
+        fixed_width = 0
+        for column in TREE_FIXED_COLUMNS:
+            try:
+                fixed_width += int(self.tree.column(column, "width") or TREE_COLUMN_DEFAULTS[column]["width"])
+            except (tk.TclError, ValueError):
+                fixed_width += int(TREE_COLUMN_DEFAULTS[column]["width"])
+
+        return max(0, tree_width - fixed_width - 4)
+
+    def _tree_data_minwidths(self) -> dict[str, int]:
+        return {column: int(TREE_COLUMN_DEFAULTS[column]["minwidth"]) for column in TREE_DATA_COLUMNS}
+
+    def _remember_tree_column_ratios_from_current_widths(self) -> None:
+        widths = {}
+        for column in TREE_DATA_COLUMNS:
+            try:
+                width = int(self.tree.column(column, "width"))
+            except (tk.TclError, ValueError):
+                width = int(TREE_COLUMN_DEFAULTS[column]["width"])
+            minwidth = int(TREE_COLUMN_DEFAULTS[column]["minwidth"])
+            widths[column] = max(minwidth, width)
+
+        fitted = self._fit_widths_to_available_space(widths, self._tree_available_data_width())
+        total = sum(fitted.values())
+        if total > 0:
+            self.tree_column_ratios = {column: fitted[column] / total for column in TREE_DATA_COLUMNS}
+
+    def _fit_widths_to_available_space(self, desired_widths: dict[str, int], available_width: int) -> dict[str, int]:
+        minwidths = self._tree_data_minwidths()
+        min_total = sum(minwidths.values())
+        if available_width <= min_total:
+            return dict(minwidths)
+
+        extra_space = available_width - min_total
+        desired_extra = {
+            column: max(0, int(desired_widths.get(column, minwidths[column])) - minwidths[column])
+            for column in TREE_DATA_COLUMNS
+        }
+        total_desired_extra = sum(desired_extra.values())
+        if total_desired_extra <= 0:
+            ratios = self.tree_column_ratios or self._default_tree_column_ratios()
+            weights = {column: max(0.0, float(ratios.get(column, 0.0))) for column in TREE_DATA_COLUMNS}
+        else:
+            weights = desired_extra
+
+        total_weight = sum(weights.values())
+        if total_weight <= 0:
+            weights = {column: 1 for column in TREE_DATA_COLUMNS}
+            total_weight = len(TREE_DATA_COLUMNS)
+
+        fitted = {}
+        for column in TREE_DATA_COLUMNS:
+            extra = int(extra_space * weights[column] / total_weight)
+            fitted[column] = minwidths[column] + extra
+
+        remainder = available_width - sum(fitted.values())
+        if remainder > 0:
+            fitted["title"] += remainder
+
+        while sum(fitted.values()) > available_width:
+            shrinkable = [
+                column for column in TREE_DATA_COLUMNS
+                if fitted[column] > minwidths[column]
+            ]
+            if not shrinkable:
+                break
+            column = max(shrinkable, key=lambda item: fitted[item])
+            fitted[column] -= 1
+
+        return {column: max(minwidths[column], fitted[column]) for column in TREE_DATA_COLUMNS}
+
+    def _tree_separator_at_x(self, x: int) -> tuple[str, tuple[str, ...]] | None:
+        boundary = 0
+        hit_width = 6
+        for index, column in enumerate(TREE_COLUMN_IDS):
+            try:
+                boundary += int(self.tree.column(column, "width"))
+            except (tk.TclError, ValueError):
+                boundary += int(TREE_COLUMN_DEFAULTS[column]["width"])
+
+            if abs(x - boundary) > hit_width:
+                continue
+
+            left_column = column
+            if left_column in TREE_FIXED_COLUMNS:
+                return None
+
+            right_columns = tuple(
+                candidate
+                for candidate in TREE_COLUMN_IDS[index + 1:]
+                if candidate in TREE_DATA_COLUMNS
+            )
+            if not right_columns:
+                return None
+            return left_column, right_columns
+
+        return None
+
+    def _begin_tree_column_resize(self, event):
+        separator = self._tree_separator_at_x(event.x)
+        if separator is None:
+            return None
+
+        left_column, right_columns = separator
+        self._cancel_tree_column_fit()
+        self._destroy_status_editor()
+
+        start_widths = {}
+        for column in TREE_COLUMN_IDS:
+            try:
+                start_widths[column] = int(self.tree.column(column, "width"))
+            except (tk.TclError, ValueError):
+                start_widths[column] = int(TREE_COLUMN_DEFAULTS[column]["width"])
+
+        self.tree_column_drag = {
+            "start_x": event.x,
+            "left_column": left_column,
+            "right_columns": right_columns,
+            "start_widths": start_widths,
+            "available_width": self._tree_available_data_width(),
+        }
+
+        return "break"
+
+    def _on_tree_drag_motion(self, event):
+        if not self.tree_column_drag:
+            return None
+        self._apply_tree_column_drag(event.x)
+        return "break"
+
+    def _apply_tree_column_drag(self, current_x: int) -> None:
+        drag = self.tree_column_drag
+        if not drag:
+            return
+
+        start_widths = drag["start_widths"]
+        left_column = drag["left_column"]
+        right_columns = drag["right_columns"]
+        delta = current_x - int(drag["start_x"])
+
+        left_start = int(start_widths[left_column])
+        left_min = int(TREE_COLUMN_DEFAULTS[left_column]["minwidth"])
+        left_shrink_capacity = max(0, left_start - left_min)
+        right_shrink_capacity = sum(
+            max(0, int(start_widths[column]) - int(TREE_COLUMN_DEFAULTS[column]["minwidth"]))
+            for column in right_columns
+        )
+        delta = max(-left_shrink_capacity, min(delta, right_shrink_capacity))
+
+        new_left_width = left_start + delta
+        right_total_start = sum(int(start_widths[column]) for column in right_columns)
+        new_right_total = right_total_start - delta
+        right_widths = self._distribute_columns_to_total(right_columns, start_widths, new_right_total)
+
+        selected_defaults = TREE_COLUMN_DEFAULTS["selected"]
+        self.tree.column(
+            "selected",
+            width=selected_defaults["width"],
+            minwidth=selected_defaults["minwidth"],
+            stretch=False,
+            anchor=selected_defaults.get("anchor", "w"),
+        )
+        self.tree.column(left_column, width=new_left_width, stretch=False)
+        for column, width in right_widths.items():
+            self.tree.column(column, width=width, stretch=False)
+
+    def _distribute_columns_to_total(
+        self,
+        columns: tuple[str, ...],
+        start_widths: dict[str, int],
+        target_total: int,
+    ) -> dict[str, int]:
+        minwidths = {column: int(TREE_COLUMN_DEFAULTS[column]["minwidth"]) for column in columns}
+        min_total = sum(minwidths.values())
+        if target_total <= min_total:
+            return dict(minwidths)
+
+        extra_total = target_total - min_total
+        start_extras = {
+            column: max(0, int(start_widths.get(column, minwidths[column])) - minwidths[column])
+            for column in columns
+        }
+        total_extra = sum(start_extras.values())
+        if total_extra <= 0:
+            weights = {column: 1 for column in columns}
+            total_weight = len(columns)
+        else:
+            weights = start_extras
+            total_weight = total_extra
+
+        widths = {}
+        for column in columns:
+            extra = int(extra_total * weights[column] / total_weight)
+            widths[column] = minwidths[column] + extra
+
+        remainder = target_total - sum(widths.values())
+        if remainder > 0:
+            target_column = max(columns, key=lambda item: int(start_widths.get(item, 0)))
+            widths[target_column] += remainder
+
+        while sum(widths.values()) > target_total:
+            shrinkable = [column for column in columns if widths[column] > minwidths[column]]
+            if not shrinkable:
+                break
+            target_column = max(shrinkable, key=lambda item: widths[item])
+            widths[target_column] -= 1
+
+        return {column: max(minwidths[column], widths[column]) for column in columns}
+
+    def _fit_tree_columns_to_table(self) -> None:
+        if self.tree_column_drag:
+            return
+        if self.tree_column_fit_in_progress:
+            return
+
+        self.tree_column_fit_after_id = None
+        self.tree_column_fit_in_progress = True
+
+        try:
+            for column in TREE_FIXED_COLUMNS:
+                defaults = TREE_COLUMN_DEFAULTS[column]
+                self.tree.column(
+                    column,
+                    width=defaults["width"],
+                    minwidth=defaults["minwidth"],
+                    stretch=False,
+                    anchor=defaults.get("anchor", "w"),
+                )
+
+            available = self._tree_available_data_width()
+            minwidths = self._tree_data_minwidths()
+            if not self.tree_column_ratios:
+                self.tree_column_ratios = self._default_tree_column_ratios()
+
+            desired_widths = {}
+            for column in TREE_DATA_COLUMNS:
+                ratio = max(0.0, float(self.tree_column_ratios.get(column, 0.0)))
+                desired_widths[column] = max(minwidths[column], int(round(available * ratio)))
+
+            fitted_widths = self._fit_widths_to_available_space(desired_widths, available)
+
+            for column in TREE_DATA_COLUMNS:
+                defaults = TREE_COLUMN_DEFAULTS[column]
+                self.tree.column(
+                    column,
+                    width=fitted_widths[column],
+                    minwidth=defaults["minwidth"],
+                    stretch=False,
+                    anchor=defaults.get("anchor", "w"),
+                )
+        finally:
+            self.tree_column_fit_in_progress = False
 
     def _on_search_text_changed(self) -> None:
         if not self.search_var.get().strip():
@@ -847,6 +1151,13 @@ class YouTubeDownloaderWindow:
         region = self.tree.identify_region(event.x, event.y)
         column = self.tree.identify_column(event.x)
 
+        if region == "separator":
+            return self._begin_tree_column_resize(event) or "break"
+
+        drag_result = self._begin_tree_column_resize(event)
+        if drag_result == "break":
+            return drag_result
+
         self._destroy_status_editor()
 
         if region == "heading" and column == "#1":
@@ -865,6 +1176,19 @@ class YouTubeDownloaderWindow:
             return "break"
 
         return None
+
+    def _on_tree_button_release(self, _event=None):
+        if not self.tree_column_drag:
+            return None
+        self._finish_tree_column_drag()
+        return "break"
+
+    def _finish_tree_column_drag(self) -> None:
+        if not self.tree_column_drag:
+            return
+        self.tree_column_drag = None
+        self._remember_tree_column_ratios_from_current_widths()
+        self._schedule_tree_column_fit()
 
     def _on_tree_double_click(self, event):
         region = self.tree.identify_region(event.x, event.y)
