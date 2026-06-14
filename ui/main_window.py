@@ -600,11 +600,17 @@ class YouTubeDownloaderWindow:
 
     def _update_cookies_state(self) -> None:
         if self.downloading:
-            state = "disabled"
+            entry_state = "disabled"
+            button_state = "disabled"
+        elif self.cookies_enabled_var.get():
+            entry_state = "readonly"
+            button_state = "normal"
         else:
-            state = "normal" if self.cookies_enabled_var.get() else "disabled"
-        self.cookies_entry.configure(state=state)
-        self.cookies_button.configure(state=state)
+            entry_state = "disabled"
+            button_state = "disabled"
+
+        self.cookies_entry.configure(state=entry_state)
+        self.cookies_button.configure(state=button_state)
 
     def start_download(self) -> None:
         if self.downloading:

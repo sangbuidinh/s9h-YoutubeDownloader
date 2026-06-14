@@ -57,6 +57,7 @@ def show_app_dialog(
     modal: bool = True,
 ):
     dialog = tk.Toplevel(parent)
+    dialog.withdraw()
     dialog.title(title)
     dialog.transient(parent)
     dialog.resizable(False, False)
@@ -130,6 +131,7 @@ def show_app_dialog(
         dialog.bind("<Return>", lambda _event: button_widgets[default_button].invoke())
 
     center_dialog_over_parent(dialog, parent)
+    dialog.deiconify()
     dialog.lift()
     if modal:
         dialog.grab_set()
