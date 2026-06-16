@@ -54,6 +54,12 @@ MAX_FINAL_PATH_LENGTH = 240
 OUTPUT_PATH_TOO_LONG_MESSAGE = (
     "Output path too long. Please choose a shorter save folder or shorten filename limit."
 )
+COOKIE_SOURCE_FILE = "file"
+COOKIE_SOURCE_BRIDGE = "bridge"
+BRIDGE_COOKIE_FILE_MISSING_MESSAGE = (
+    "Local Cookie Bridge cookie file not found. Open the bridge extension and click "
+    "Export YouTube Cookies, then try again."
+)
 
 
 class DownloadError(Exception):
@@ -151,6 +157,8 @@ class DownloadOptions:
     cookies_path: str = ""
     speed_limit: str | None = None
     download_mode: str = MODE_VIDEO_THUMB
+    cookie_source: str = COOKIE_SOURCE_FILE
+    bridge_cookie_path: str = ""
 
 
 def _emit_progress_event(progress_callback, event: ProgressEvent) -> None:
@@ -337,10 +345,30 @@ def validate_download_environment(options: DownloadOptions) -> None:
         raise DownloadError("yt-dlp.exe missing")
     if not ffmpeg_path.exists():
         raise DownloadError("ffmpeg.exe missing")
-    if options.cookies_enabled:
-        cookies_path = Path(options.cookies_path)
-        if not options.cookies_path or not cookies_path.exists() or not cookies_path.is_file():
-            raise DownloadError("Cookies file missing")
+    effective_cookies_path(options)
+
+
+def effective_cookies_path(options: DownloadOptions) -> str:
+    if not options.cookies_enabled:
+        return ""
+    source = options.cookie_source if options.cookie_source in {COOKIE_SOURCE_FILE, COOKIE_SOURCE_BRIDGE} else COOKIE_SOURCE_FILE
+    if source == COOKIE_SOURCE_BRIDGE:
+        path_text = (options.bridge_cookie_path or "").strip()
+        error_message = BRIDGE_COOKIE_FILE_MISSING_MESSAGE
+    else:
+        path_text = (options.cookies_path or "").strip()
+        error_message = "Cookies file missing"
+    if not path_text:
+        raise DownloadError(error_message)
+    path = Path(path_text)
+    try:
+        if not path.exists() or not path.is_file():
+            raise OSError
+        with path.open("rb"):
+            pass
+    except OSError as exc:
+        raise DownloadError(error_message) from exc
+    return str(path)
 
 
 def download_items(
@@ -997,8 +1025,9 @@ def _base_ytdlp_command(options: DownloadOptions) -> list[str]:
             "--remote-components",
             "ejs:github",
         ])
-    if options.cookies_enabled:
-        command.extend(["--cookies", options.cookies_path])
+    cookies_path = effective_cookies_path(options)
+    if cookies_path:
+        command.extend(["--cookies", cookies_path])
     if options.speed_limit:
         command.extend(["--limit-rate", options.speed_limit])
     return command

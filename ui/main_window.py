@@ -1,12 +1,14 @@
 import queue
 import threading
 import tkinter as tk
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from tkinter import filedialog, ttk
 
 from core.download_modes import DOWNLOAD_MODES, MODE_VIDEO_THUMB
 from core.downloader import (
+    COOKIE_SOURCE_BRIDGE,
+    COOKIE_SOURCE_FILE,
     DownloadController,
     DownloadError,
     DownloadOptions,
@@ -14,7 +16,14 @@ from core.downloader import (
     validate_speed_limit,
     download_items,
 )
-from core.app_settings import load_last_api_key, save_last_api_key
+from core.app_settings import (
+    load_bridge_cookie_path,
+    load_cookie_source,
+    load_last_api_key,
+    save_bridge_cookie_path,
+    save_cookie_source,
+    save_last_api_key,
+)
 from core.error_messages import classify_api_error, classify_general_error, format_friendly_error
 from core.file_status import apply_statuses, build_output_paths, should_show_not_downloaded
 from core.progress_status import ProgressEvent, format_progress_event_lines, put_latest_progress_event
@@ -64,6 +73,11 @@ TREE_COLUMN_DEFAULTS = {
     "published": {"width": 130, "minwidth": 110, "stretch": False, "anchor": "center"},
     "status": {"width": 150, "minwidth": 130, "stretch": False, "anchor": "center"},
 }
+COOKIE_SOURCE_LABELS = {
+    COOKIE_SOURCE_FILE: "File cookies.txt",
+    COOKIE_SOURCE_BRIDGE: "Local Cookie Bridge",
+}
+COOKIE_SOURCE_VALUES_BY_LABEL = {label: value for value, label in COOKIE_SOURCE_LABELS.items()}
 
 
 class YouTubeDownloaderWindow:
@@ -95,6 +109,9 @@ class YouTubeDownloaderWindow:
         self.save_folder_var = tk.StringVar()
         self.cookies_enabled_var = tk.BooleanVar(value=False)
         self.cookies_path_var = tk.StringVar()
+        self.cookie_source_var = tk.StringVar(value=COOKIE_SOURCE_LABELS[load_cookie_source()])
+        self.bridge_cookie_path_var = tk.StringVar(value=load_bridge_cookie_path())
+        self.bridge_cookie_status_var = tk.StringVar()
         self.speed_limit_var = tk.StringVar()
         self.download_mode_var = tk.StringVar(value=MODE_VIDEO_THUMB)
         self.show_short_videos_var = tk.BooleanVar(value=False)
@@ -114,7 +131,9 @@ class YouTubeDownloaderWindow:
 
         self._build_ui()
         self.search_var.trace_add("write", lambda *_args: self._on_search_text_changed())
+        self.bridge_cookie_path_var.trace_add("write", lambda *_args: self._update_bridge_cookie_status())
         self._update_cookies_state()
+        self._update_bridge_cookie_status()
         self._update_download_button_text()
         self._update_more_button_state()
         self._update_stop_button_state()
@@ -130,7 +149,7 @@ class YouTubeDownloaderWindow:
         main.grid(row=0, column=0, sticky="nsew")
         main.columnconfigure(1, weight=1)
         main.rowconfigure(3, weight=1)
-        main.rowconfigure(9, weight=1)
+        main.rowconfigure(12, weight=1)
 
         ttk.Label(main, text="YouTube API Key").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=4)
         self.api_key_entry = ttk.Entry(main, textvariable=self.api_key_var)
@@ -278,7 +297,32 @@ class YouTubeDownloaderWindow:
         self.cookies_button = ttk.Button(main, text="Chọn cookies*.txt", command=self.choose_cookies_file)
         self.cookies_button.grid(row=5, column=2, sticky="ew", padx=(8, 0), pady=4)
 
-        ttk.Label(main, text="Kiểu tải").grid(row=6, column=0, sticky="w", padx=(0, 8), pady=4)
+        ttk.Label(main, text="Cookies source").grid(row=6, column=0, sticky="w", padx=(0, 8), pady=4)
+        self.cookie_source_box = ttk.Combobox(
+            main,
+            textvariable=self.cookie_source_var,
+            values=tuple(COOKIE_SOURCE_LABELS.values()),
+            state="readonly",
+            width=24,
+        )
+        self.cookie_source_box.grid(row=6, column=1, sticky="w", pady=4)
+        self.cookie_source_box.bind("<<ComboboxSelected>>", lambda _event: self._on_cookie_source_changed())
+        self.bridge_check_button = ttk.Button(main, text="Check", command=self.check_bridge_cookie_file)
+        self.bridge_check_button.grid(row=6, column=2, sticky="ew", padx=(8, 0), pady=4)
+
+        ttk.Label(main, text="Bridge cookie path").grid(row=7, column=0, sticky="w", padx=(0, 8), pady=4)
+        self.bridge_cookie_entry = ttk.Entry(main, textvariable=self.bridge_cookie_path_var, state="disabled")
+        self.bridge_cookie_entry.grid(row=7, column=1, sticky="ew", pady=4)
+        self.bridge_cookie_button = ttk.Button(
+            main,
+            text="Chọn youtube_cookies.txt",
+            command=self.choose_bridge_cookie_file,
+        )
+        self.bridge_cookie_button.grid(row=7, column=2, sticky="ew", padx=(8, 0), pady=4)
+        self.bridge_cookie_status_label = ttk.Label(main, textvariable=self.bridge_cookie_status_var)
+        self.bridge_cookie_status_label.grid(row=8, column=1, columnspan=2, sticky="w", pady=(0, 4))
+
+        ttk.Label(main, text="Kiểu tải").grid(row=9, column=0, sticky="w", padx=(0, 8), pady=4)
         self.mode_box = ttk.Combobox(
             main,
             textvariable=self.download_mode_var,
@@ -286,23 +330,23 @@ class YouTubeDownloaderWindow:
             state="readonly",
             width=30,
         )
-        self.mode_box.grid(row=6, column=1, sticky="w", pady=4)
+        self.mode_box.grid(row=9, column=1, sticky="w", pady=4)
         self.mode_box.bind("<<ComboboxSelected>>", lambda _event: self._on_download_mode_changed())
 
-        ttk.Label(main, text="Download limit").grid(row=7, column=0, sticky="w", padx=(0, 8), pady=4)
+        ttk.Label(main, text="Download limit").grid(row=10, column=0, sticky="w", padx=(0, 8), pady=4)
         speed_frame = ttk.Frame(main)
-        speed_frame.grid(row=7, column=1, sticky="w", pady=4)
+        speed_frame.grid(row=10, column=1, sticky="w", pady=4)
         self.speed_limit_entry = ttk.Entry(speed_frame, textvariable=self.speed_limit_var, width=18)
         self.speed_limit_entry.grid(row=0, column=0, sticky="w")
         ttk.Label(speed_frame, text="MB/s").grid(row=0, column=1, sticky="w", padx=(6, 0))
 
         self.download_button = ttk.Button(main, command=self.start_download)
-        self.download_button.grid(row=7, column=2, sticky="ew", padx=(8, 0), pady=4)
+        self.download_button.grid(row=10, column=2, sticky="ew", padx=(8, 0), pady=4)
         self.stop_button = ttk.Button(main, text="Dừng tải", command=self.stop_download)
-        self.stop_button.grid(row=8, column=2, sticky="ew", padx=(8, 0), pady=(4, 8))
+        self.stop_button.grid(row=11, column=2, sticky="ew", padx=(8, 0), pady=(4, 8))
 
         progress_frame = ttk.Frame(main)
-        progress_frame.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(8, 4))
+        progress_frame.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(8, 4))
         progress_frame.columnconfigure(0, weight=1)
         ttk.Label(progress_frame, textvariable=self.progress_current_var, anchor="w").grid(
             row=0, column=0, sticky="ew"
@@ -311,7 +355,7 @@ class YouTubeDownloaderWindow:
             row=1, column=0, sticky="ew"
         )
         log_frame = ttk.Frame(main)
-        log_frame.grid(row=9, column=0, columnspan=3, sticky="nsew")
+        log_frame.grid(row=12, column=0, columnspan=3, sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
         self.log_text = tk.Text(log_frame, height=9, wrap="word", state="disabled")
@@ -489,6 +533,49 @@ class YouTubeDownloaderWindow:
         if path:
             self.cookies_path_var.set(path)
 
+    def choose_bridge_cookie_file(self) -> None:
+        if self.downloading:
+            return
+        path = filedialog.askopenfilename(
+            title="Choose youtube_cookies.txt",
+            filetypes=(("YouTube cookies", "youtube_cookies.txt"), ("Text files", "*.txt"), ("All files", "*.*")),
+        )
+        if path:
+            self.bridge_cookie_path_var.set(path)
+            save_bridge_cookie_path(path)
+            self._update_bridge_cookie_status()
+
+    def check_bridge_cookie_file(self) -> None:
+        self._update_bridge_cookie_status()
+
+    def _current_cookie_source(self) -> str:
+        return COOKIE_SOURCE_VALUES_BY_LABEL.get(self.cookie_source_var.get(), COOKIE_SOURCE_FILE)
+
+    def _on_cookie_source_changed(self) -> None:
+        save_cookie_source(self._current_cookie_source())
+        self._update_cookies_state()
+        self._update_bridge_cookie_status()
+
+    def _update_bridge_cookie_status(self) -> None:
+        path_text = self.bridge_cookie_path_var.get().strip()
+        if not path_text:
+            self.bridge_cookie_status_var.set("Missing")
+            return
+
+        path = Path(path_text)
+        try:
+            stat = path.stat()
+            if not path.is_file():
+                raise OSError
+            with path.open("rb"):
+                pass
+        except OSError:
+            self.bridge_cookie_status_var.set("Missing")
+            return
+
+        modified = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        self.bridge_cookie_status_var.set(f"Found | {stat.st_size} bytes | modified {modified}")
+
     def _on_download_mode_changed(self) -> None:
         if self.downloading:
             return
@@ -613,18 +700,28 @@ class YouTubeDownloaderWindow:
             return None
 
     def _update_cookies_state(self) -> None:
-        if self.downloading:
-            entry_state = "disabled"
-            button_state = "disabled"
-        elif self.cookies_enabled_var.get():
-            entry_state = "readonly"
-            button_state = "normal"
-        else:
-            entry_state = "disabled"
-            button_state = "disabled"
+        source = self._current_cookie_source()
+        cookies_enabled = self.cookies_enabled_var.get()
 
-        self.cookies_entry.configure(state=entry_state)
-        self.cookies_button.configure(state=button_state)
+        if self.downloading or not cookies_enabled:
+            source_state = "disabled"
+            manual_entry_state = "disabled"
+            manual_button_state = "disabled"
+            bridge_entry_state = "disabled"
+            bridge_button_state = "disabled"
+        else:
+            source_state = "readonly"
+            manual_entry_state = "readonly" if source == COOKIE_SOURCE_FILE else "disabled"
+            manual_button_state = "normal" if source == COOKIE_SOURCE_FILE else "disabled"
+            bridge_entry_state = "readonly" if source == COOKIE_SOURCE_BRIDGE else "disabled"
+            bridge_button_state = "normal" if source == COOKIE_SOURCE_BRIDGE else "disabled"
+
+        self.cookies_entry.configure(state=manual_entry_state)
+        self.cookies_button.configure(state=manual_button_state)
+        self.cookie_source_box.configure(state=source_state)
+        self.bridge_cookie_entry.configure(state=bridge_entry_state)
+        self.bridge_cookie_button.configure(state=bridge_button_state)
+        self.bridge_check_button.configure(state=bridge_button_state)
 
     def start_download(self) -> None:
         if self.downloading:
@@ -655,7 +752,11 @@ class YouTubeDownloaderWindow:
             cookies_path=self.cookies_path_var.get().strip(),
             speed_limit=speed_limit,
             download_mode=self.download_mode_var.get(),
+            cookie_source=self._current_cookie_source(),
+            bridge_cookie_path=self.bridge_cookie_path_var.get().strip(),
         )
+        save_cookie_source(options.cookie_source)
+        save_bridge_cookie_path(options.bridge_cookie_path)
 
         try:
             validate_download_environment(options)

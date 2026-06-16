@@ -1,3 +1,5 @@
 {
-  "last_api_key": ""
+  "last_api_key": "",
+  "cookie_source": "file",
+  "bridge_cookie_path": "D:\\s9h-youtube-cookie-bridge\\data\\runtime\\youtube_cookies.txt"
 }

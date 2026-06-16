@@ -61,6 +61,8 @@ def _test_base_command_flags() -> None:
         }
         for path in runtime_paths.values():
             path.write_bytes(b"")
+        cookies_path = root / "cookies.txt"
+        cookies_path.write_text("# placeholder\n", encoding="utf-8")
 
         old_runtime_file = downloader.runtime_file
         try:
@@ -71,7 +73,7 @@ def _test_base_command_flags() -> None:
                     channel_id=CHANNEL_ID,
                     channel_name=CHANNEL_NAME,
                     cookies_enabled=True,
-                    cookies_path=str(root / "cookies.txt"),
+                    cookies_path=str(cookies_path),
                     speed_limit="2M",
                     download_mode=MODE_VIDEO_AUDIO_THUMB,
                 )
@@ -86,7 +88,7 @@ def _test_base_command_flags() -> None:
         "--socket-timeout": "60",
         "--http-chunk-size": "1M",
         "-N": "4",
-        "--cookies": str(root / "cookies.txt"),
+        "--cookies": str(cookies_path),
         "--limit-rate": "2M",
     }
     for option, value in expected_options.items():

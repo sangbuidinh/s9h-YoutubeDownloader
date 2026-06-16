@@ -5,6 +5,12 @@ from pathlib import Path
 from core.runtime_paths import data_dir
 
 
+COOKIE_SOURCE_FILE = "file"
+COOKIE_SOURCE_BRIDGE = "bridge"
+COOKIE_SOURCE_VALUES = {COOKIE_SOURCE_FILE, COOKIE_SOURCE_BRIDGE}
+DEFAULT_BRIDGE_COOKIE_PATH = r"D:\s9h-youtube-cookie-bridge\data\runtime\youtube_cookies.txt"
+
+
 def app_settings_file() -> Path:
     return data_dir() / "app_settings.json"
 
@@ -33,6 +39,28 @@ def save_last_api_key(api_key: str) -> bool:
 
     settings = load_app_settings()
     settings["last_api_key"] = key
+    return _save_app_settings(settings)
+
+
+def load_cookie_source() -> str:
+    source = load_app_settings().get("cookie_source", COOKIE_SOURCE_FILE)
+    return source if isinstance(source, str) and source in COOKIE_SOURCE_VALUES else COOKIE_SOURCE_FILE
+
+
+def save_cookie_source(source: str) -> bool:
+    settings = load_app_settings()
+    settings["cookie_source"] = source if isinstance(source, str) and source in COOKIE_SOURCE_VALUES else COOKIE_SOURCE_FILE
+    return _save_app_settings(settings)
+
+
+def load_bridge_cookie_path() -> str:
+    path = load_app_settings().get("bridge_cookie_path", DEFAULT_BRIDGE_COOKIE_PATH)
+    return path.strip() if isinstance(path, str) and path.strip() else DEFAULT_BRIDGE_COOKIE_PATH
+
+
+def save_bridge_cookie_path(path: str) -> bool:
+    settings = load_app_settings()
+    settings["bridge_cookie_path"] = (path or "").strip() or DEFAULT_BRIDGE_COOKIE_PATH
     return _save_app_settings(settings)
 
 
