@@ -60,6 +60,14 @@ BRIDGE_COOKIE_FILE_MISSING_MESSAGE = (
     "Local Cookie Bridge cookie file not found. Open the bridge extension and click "
     "Export YouTube Cookies, then try again."
 )
+BRIDGE_COOKIE_SESSION_ERROR_MESSAGE = (
+    "Local Cookie Bridge cookies may be expired. Open the bridge extension and click "
+    "Export YouTube Cookies, then retry the failed download."
+)
+FILE_COOKIE_SESSION_ERROR_MESSAGE = (
+    "Cookies may be expired. Export a fresh cookies.txt file, select it again if needed, "
+    "then retry the failed download."
+)
 
 
 class DownloadError(Exception):
@@ -675,7 +683,7 @@ def download_items(
                 continue
             failed_count += 1
             _emit_ytdlp_error_progress(progress_callback, video, index, video_total, exc, options.cookies_enabled)
-            _log_friendly_ytdlp_error(log, exc, options.cookies_enabled)
+            _log_friendly_ytdlp_error(log, exc, options)
             if exc.missing_js_runtime and not _deno_runtime_path().exists() and (exc.bot_check or exc.http_403):
                 _log_missing_js_runtime_warning(log, exc.output_lines)
             if exc.bot_check or exc.http_403:
@@ -1502,9 +1510,77 @@ def _contains_bot_check_error(stderr: str) -> bool:
     return (
         "sign in to confirm" in lower
         or "not a bot" in lower
+        or "confirm you're not a bot" in lower
+        or "this helps protect our community" in lower
         or "use --cookies" in lower
         or "use --cookies-from-browser" in lower
     )
+
+
+def is_cookie_session_error(text: str) -> bool:
+    lower = (text or "").lower()
+    if not lower:
+        return False
+    direct_markers = (
+        "sign in",
+        "sign in to confirm",
+        "confirm you're not a bot",
+        "not a bot",
+        "this helps protect our community",
+        "use --cookies",
+        "use --cookies-from-browser",
+        "login required",
+        "please log in",
+        "authentication required",
+        "account authentication",
+    )
+    if any(marker in lower for marker in direct_markers):
+        return True
+
+    has_cookie_marker = "cookie" in lower or "cookies" in lower
+    cookie_problem_markers = (
+        "expired",
+        "invalid",
+        "required",
+        "not valid",
+        "no longer valid",
+        "requires",
+        "require",
+    )
+    if has_cookie_marker and any(marker in lower for marker in cookie_problem_markers):
+        return True
+
+    has_http_marker = (
+        "http error 403" in lower
+        or "403: forbidden" in lower
+        or "http error 429" in lower
+        or "429: too many requests" in lower
+    )
+    http_context_markers = (
+        "sign in",
+        "login required",
+        "please log in",
+        "authentication required",
+        "bot",
+        "not a bot",
+        "cookie",
+        "cookies",
+        "use --cookies",
+        "use --cookies-from-browser",
+        "protect our community",
+    )
+    return has_http_marker and any(marker in lower for marker in http_context_markers)
+
+
+def cookie_session_error_message(options: DownloadOptions) -> str:
+    source = (
+        options.cookie_source
+        if options.cookie_source in {COOKIE_SOURCE_FILE, COOKIE_SOURCE_BRIDGE}
+        else COOKIE_SOURCE_FILE
+    )
+    if source == COOKIE_SOURCE_BRIDGE:
+        return BRIDGE_COOKIE_SESSION_ERROR_MESSAGE
+    return FILE_COOKIE_SESSION_ERROR_MESSAGE
 
 
 def _contains_http_403_error(stderr: str) -> bool:
@@ -1710,16 +1786,18 @@ def _is_meaningful_ytdlp_line(line: str) -> bool:
     return True
 
 
-def _log_friendly_ytdlp_error(log, exc: YtdlpExecutionError, cookies_enabled: bool) -> None:
+def _log_friendly_ytdlp_error(log, exc: YtdlpExecutionError, options: DownloadOptions) -> None:
     text = exc.combined_output or "\n".join([str(exc), *exc.output_lines])
     friendly = classify_ytdlp_error(
         text,
-        cookies_enabled=cookies_enabled,
+        cookies_enabled=options.cookies_enabled,
         bot_check=exc.bot_check,
         http_403=exc.http_403,
         missing_js_runtime=exc.missing_js_runtime,
     )
     log(format_friendly_error(friendly, _technical_lines_for_ytdlp(exc)))
+    if options.cookies_enabled and (exc.bot_check or is_cookie_session_error(text)):
+        log(cookie_session_error_message(options))
 
 
 def _log_missing_js_runtime_warning(log, output_lines: list[str]) -> None:
