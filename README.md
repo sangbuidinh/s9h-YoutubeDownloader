@@ -34,7 +34,7 @@
 - Tải thumbnail JPG.
 - Tải hoặc trích xuất audio MP3.
 - Lưu lịch sử tải và trạng thái thủ công bằng SQLite.
-- Hỗ trợ `cookies*.txt` cho trường hợp YouTube yêu cầu đăng nhập hoặc xác minh bot.
+- Hỗ trợ `cookies*.txt` và tùy chọn `Local Cookie Bridge` cho trường hợp YouTube yêu cầu đăng nhập hoặc xác minh bot.
 - Hiển thị tiến trình tải nhẹ, 2 dòng, không làm rối log.
 - Dạng portable: runtime tools nằm trong `data/bin`.
 
@@ -83,7 +83,7 @@ Runtime tools được đặt ngoài file `.exe` để có thể cập nhật ri
 | `yt-dlp.exe` | Có | Đặt trong `data/bin` |
 | `ffmpeg.exe` | Có | Đặt trong `data/bin`, dùng để merge và trích xuất MP3 |
 | `deno.exe` | Không | Hỗ trợ một số YouTube JavaScript challenge |
-| `cookies*.txt` | Không | Dùng khi YouTube yêu cầu đăng nhập hoặc xác minh bot |
+| `cookies*.txt` / Local Cookie Bridge | Không | Dùng khi YouTube yêu cầu đăng nhập, phiên trình duyệt hoặc xác minh bot |
 
 ## 🔑 YouTube Data API key
 
@@ -108,6 +108,29 @@ App hỗ trợ chọn file `cookies*.txt` hoặc `cookies.txt`. File cookies nê
 
 > [!WARNING]
 > Không upload cookies thật lên GitHub và không đưa cookies thật vào release package.
+
+### Local Cookie Bridge v1.1.0-pre
+
+YouTube Downloaderbs v1.1.0-pre supports an optional `Local Cookie Bridge`.
+
+Cookie Bridge repository:
+https://github.com/sangbuidinh/s9h-youtube-cookie-bridge
+
+Use this only when YouTube/yt-dlp requires browser cookies or reports session/bot-check related errors. Normal downloads do not require Cookie Bridge.
+
+The bridge exports browser cookies locally to:
+
+```text
+data/runtime/youtube_cookies.txt
+```
+
+In the app:
+
+1. Enable `Sử dụng Cookies`.
+2. Choose `Local Cookie Bridge`.
+3. Set the bridge cookie path to `data/runtime/youtube_cookies.txt` if needed.
+
+Never share `data/runtime/youtube_cookies.txt`.
 
 ## 🎞️ Kiểu tải
 
@@ -162,7 +185,7 @@ data/download_state.sqlite3-shm
 | Hết quota API | Quota hằng ngày đã dùng hết | Chờ quota reset hoặc dùng API key hợp lệ khác |
 | Thiếu `yt-dlp.exe` | Runtime file không nằm trong `data/bin` | Giữ `yt-dlp.exe` trong `data/bin` |
 | Thiếu `ffmpeg.exe` | Runtime file không nằm trong `data/bin` | Giữ `ffmpeg.exe` trong `data/bin` |
-| YouTube yêu cầu đăng nhập / xác minh bot | YouTube yêu cầu phiên đăng nhập hoặc chặn bot | Bật cookies và chọn file `cookies*.txt` hợp lệ |
+| YouTube yêu cầu đăng nhập / xác minh bot | YouTube yêu cầu phiên đăng nhập hoặc chặn bot | Bật cookies và chọn file `cookies*.txt` hợp lệ, hoặc dùng tùy chọn `Local Cookie Bridge` |
 | Tải chậm hoặc bị ngắt | Mạng, CDN hoặc YouTube throttling | Thử lại sau, cập nhật yt-dlp hoặc dùng cookies hợp lệ |
 | Lỗi trích xuất MP3 | Thiếu ffmpeg hoặc file MP4 nguồn không hợp lệ | Kiểm tra `ffmpeg.exe` và thử tải lại |
 

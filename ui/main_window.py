@@ -85,7 +85,7 @@ class YouTubeDownloaderWindow:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("YouTube Downloaderbs")
-        self.root.geometry("1240x760")
+        self.root.geometry("1440x640")
         self.root.minsize(1000, 640)
 
         self.events: queue.Queue = queue.Queue()
