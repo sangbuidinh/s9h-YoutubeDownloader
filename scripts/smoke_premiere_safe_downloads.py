@@ -133,7 +133,7 @@ def _test_thumbnail_url_first_and_jpeg_only() -> None:
                 calls.append("url")
                 raise downloader.DownloadError("thumbnail download failed")
 
-            def ytdlp_fallback(command, _options, _log, _cancel_controller=None):
+            def ytdlp_fallback(command, _options, _log, _cancel_controller=None, _cookie_retry_state=None):
                 calls.append("yt-dlp")
                 output_template = Path(command[command.index("-o") + 1])
                 output_template.with_name(output_template.name.replace("%(ext)s", "jpg")).write_bytes(b"\xff\xd8\xffjpg")
@@ -322,7 +322,16 @@ def _test_video_audio_mode_extracts_from_local_mp4() -> None:
                     if not Path(path).exists():
                         raise downloader.DownloadError("premiere_safe_mp4_validation_failed: file does not exist")
 
-                def download_video(_video_id, _stem, _temp_dir, final_path, _options, _log, _cancel_controller=None):
+                def download_video(
+                    _video_id,
+                    _stem,
+                    _temp_dir,
+                    final_path,
+                    _options,
+                    _log,
+                    _cancel_controller=None,
+                    _cookie_retry_state=None,
+                ):
                     calls.append("video")
                     final_path.parent.mkdir(parents=True, exist_ok=True)
                     final_path.write_bytes(b"mp4")

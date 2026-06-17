@@ -154,12 +154,30 @@ def _patch_downloader_for_dry_run(data_dir: Path) -> dict:
     def validate_download_environment(_options):
         return None
 
-    def download_video(_video_id, _stem, _temp_path, final_path, _options, _log, _cancel_controller):
+    def download_video(
+        _video_id,
+        _stem,
+        _temp_path,
+        final_path,
+        _options,
+        _log,
+        _cancel_controller=None,
+        _cookie_retry_state=None,
+    ):
         final_path.parent.mkdir(parents=True, exist_ok=True)
         final_path.write_bytes(b"video")
         calls["video_path"] = final_path
 
-    def download_thumbnail(_video, _stem, _temp_path, final_path, _options, _log, _cancel_controller):
+    def download_thumbnail(
+        _video,
+        _stem,
+        _temp_path,
+        final_path,
+        _options,
+        _log,
+        _cancel_controller=None,
+        _cookie_retry_state=None,
+    ):
         final_path.parent.mkdir(parents=True, exist_ok=True)
         final_path.write_bytes(b"thumb")
         calls["thumb_path"] = final_path

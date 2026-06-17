@@ -254,12 +254,30 @@ def _patched_downloader_transfers(calls: dict[str, int]):
     old_log_runtime_tool_summary = downloader._log_runtime_tool_summary
     old_validate_download_environment = downloader.validate_download_environment
 
-    def fake_download_video(_video_id, _stem, _temp_dir, final_path, _options, _log, _cancel_controller=None):
+    def fake_download_video(
+        _video_id,
+        _stem,
+        _temp_dir,
+        final_path,
+        _options,
+        _log,
+        _cancel_controller=None,
+        _cookie_retry_state=None,
+    ):
         calls["video"] += 1
         final_path.parent.mkdir(parents=True, exist_ok=True)
         final_path.write_bytes(b"mp4")
 
-    def fake_download_thumbnail(_video, _stem, _temp_dir, final_path, _options, _log, _cancel_controller=None):
+    def fake_download_thumbnail(
+        _video,
+        _stem,
+        _temp_dir,
+        final_path,
+        _options,
+        _log,
+        _cancel_controller=None,
+        _cookie_retry_state=None,
+    ):
         calls["thumb"] += 1
         final_path.parent.mkdir(parents=True, exist_ok=True)
         final_path.write_bytes(b"jpg")

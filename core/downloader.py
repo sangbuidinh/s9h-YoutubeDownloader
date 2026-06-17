@@ -68,6 +68,8 @@ FILE_COOKIE_SESSION_ERROR_MESSAGE = (
     "Cookies may be expired. Export a fresh cookies.txt file, select it again if needed, "
     "then retry the failed download."
 )
+COOKIE_BRIDGE_REFRESH_TIMEOUT_SECONDS = 45
+COOKIE_BRIDGE_REFRESH_POLL_SECONDS = 0.5
 
 
 class DownloadError(Exception):
@@ -167,6 +169,19 @@ class DownloadOptions:
     download_mode: str = MODE_VIDEO_THUMB
     cookie_source: str = COOKIE_SOURCE_FILE
     bridge_cookie_path: str = ""
+
+
+@dataclass
+class _CookieFileMetadata:
+    exists: bool
+    size: int
+    mtime_ns: int | None
+
+
+@dataclass
+class _CookieRefreshRetryState:
+    fresh_retry_used: bool = False
+    refreshed_rejected_logged: bool = False
 
 
 def _emit_progress_event(progress_callback, event: ProgressEvent) -> None:
@@ -421,6 +436,7 @@ def download_items(
         )
         current_part = None
         run_parts_current_run: list[str] = []
+        cookie_retry_state = _CookieRefreshRetryState()
 
         log(f"[INFO] Starting download: {index}/{len(videos)}")
         log(f"[INFO] Mode: {options.download_mode}")
@@ -468,6 +484,7 @@ def download_items(
                                 options,
                                 log,
                                 cancel_controller,
+                                cookie_retry_state,
                             )
                         finally:
                             _restore_progress_context(previous_progress)
@@ -495,6 +512,7 @@ def download_items(
                                         options,
                                         log,
                                         cancel_controller,
+                                        cookie_retry_state,
                                     )
                                 finally:
                                     _restore_progress_context(previous_progress)
@@ -548,6 +566,7 @@ def download_items(
                                     options,
                                     log,
                                     cancel_controller,
+                                    cookie_retry_state,
                                 )
                             finally:
                                 _restore_progress_context(previous_progress)
@@ -565,7 +584,16 @@ def download_items(
                             progress_callback, video, index, video_total, "Thumbnail"
                         )
                         try:
-                            _download_thumbnail(video, stem, temp_path, paths.thumb_path, options, log, cancel_controller)
+                            _download_thumbnail(
+                                video,
+                                stem,
+                                temp_path,
+                                paths.thumb_path,
+                                options,
+                                log,
+                                cancel_controller,
+                                cookie_retry_state,
+                            )
                         finally:
                             _restore_progress_context(previous_progress)
                     update_video_part_state(
@@ -832,6 +860,7 @@ def _download_video(
     options: DownloadOptions,
     log,
     cancel_controller: DownloadController | None = None,
+    cookie_retry_state: _CookieRefreshRetryState | None = None,
 ) -> None:
     url = f"https://www.youtube.com/watch?v={video_id}"
     if final_path.exists() and _premiere_safe_mp4_ready(final_path):
@@ -849,7 +878,7 @@ def _download_video(
         output_template,
         url,
     ]
-    _run_ytdlp_with_retries(command, options, log, cancel_controller)
+    _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
     _move_single_file(temp_dir, "*.mp4", final_path, log, replace_existing=True)
     _emit_current_progress("Validating MP4")
     _validate_premiere_safe_mp4(final_path, log, delete_invalid=True)
@@ -863,6 +892,7 @@ def _download_audio(
     options: DownloadOptions,
     log,
     cancel_controller: DownloadController | None = None,
+    cookie_retry_state: _CookieRefreshRetryState | None = None,
 ) -> None:
     url = f"https://www.youtube.com/watch?v={video_id}"
     output_template = str(temp_dir / f"{_safe_temp_stem(video_id)}.%(ext)s")
@@ -879,7 +909,7 @@ def _download_audio(
         output_template,
         url,
     ]
-    _run_ytdlp_with_retries(command, options, log, cancel_controller)
+    _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
     _move_single_file(temp_dir, "*.mp3", final_path, log)
 
 
@@ -967,6 +997,7 @@ def _download_thumbnail(
     options: DownloadOptions,
     log,
     cancel_controller: DownloadController | None = None,
+    cookie_retry_state: _CookieRefreshRetryState | None = None,
 ) -> None:
     url = f"https://www.youtube.com/watch?v={video.video_id}"
     output_template = str(temp_dir / f"{_safe_temp_stem(video.video_id)}.%(ext)s")
@@ -993,7 +1024,7 @@ def _download_thumbnail(
     ]
 
     try:
-        _run_ytdlp_with_retries(command, options, log, cancel_controller)
+        _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
         _move_single_file(temp_dir, "*.jpg", final_path, log)
         return
     except YtdlpExecutionError as exc:
@@ -1275,15 +1306,125 @@ def _sleep_with_cancel(seconds: int | float, cancel_controller: DownloadControll
         time.sleep(min(0.25, remaining))
 
 
+def _cookie_file_metadata(path: Path) -> _CookieFileMetadata:
+    try:
+        stat = path.stat()
+        if not path.is_file():
+            return _CookieFileMetadata(False, 0, None)
+        return _CookieFileMetadata(True, stat.st_size, stat.st_mtime_ns)
+    except OSError:
+        return _CookieFileMetadata(False, 0, None)
+
+
+def _metadata_mtime_text(metadata: _CookieFileMetadata) -> str:
+    if metadata.mtime_ns is None:
+        return "-"
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(metadata.mtime_ns / 1_000_000_000))
+
+
+def _metadata_log_text(metadata: _CookieFileMetadata) -> str:
+    return f"exists={metadata.exists}, size={metadata.size}, mtime={_metadata_mtime_text(metadata)}"
+
+
+def _is_fresh_cookie_file(
+    current: _CookieFileMetadata,
+    old: _CookieFileMetadata,
+    error_detected_ns: int,
+) -> bool:
+    if not current.exists or current.size <= 0 or current.mtime_ns is None:
+        return False
+    old_mtime_ns = old.mtime_ns or 0
+    return current.mtime_ns > old_mtime_ns and current.mtime_ns >= error_detected_ns
+
+
+def _wait_for_fresh_cookie_file(
+    path: Path,
+    old_metadata: _CookieFileMetadata,
+    error_detected_ns: int,
+    timeout_seconds: int | float,
+    poll_seconds: int | float,
+    cancel_controller: DownloadController | None,
+) -> _CookieFileMetadata | None:
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    while True:
+        _raise_if_cancelled(cancel_controller)
+        current = _cookie_file_metadata(path)
+        if _is_fresh_cookie_file(current, old_metadata, error_detected_ns):
+            return current
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        _sleep_with_cancel(min(float(poll_seconds), remaining), cancel_controller)
+
+
+def _is_cookie_refresh_error(exc: YtdlpExecutionError) -> bool:
+    text = exc.combined_output or "\n".join([str(exc), *exc.output_lines])
+    return exc.bot_check or is_cookie_session_error(text)
+
+
+def _maybe_retry_after_bridge_cookie_refresh(
+    exc: YtdlpExecutionError,
+    options: DownloadOptions,
+    log,
+    cancel_controller: DownloadController | None,
+    retry_state: _CookieRefreshRetryState,
+) -> bool:
+    if not options.cookies_enabled or not _is_cookie_refresh_error(exc):
+        return False
+    if options.cookie_source != COOKIE_SOURCE_BRIDGE:
+        return False
+    if retry_state.fresh_retry_used:
+        if not retry_state.refreshed_rejected_logged:
+            log(
+                "[ERROR] Cookie file was refreshed, but YouTube still rejected the browser session. "
+                "Open YouTube in the same browser profile, sign in again, then let the bridge export cookies again."
+            )
+            retry_state.refreshed_rejected_logged = True
+        return False
+
+    log("[INFO] Cookie/session error detected while using Local Cookie Bridge.")
+    error_detected_ns = time.time_ns()
+    try:
+        cookie_path = Path(effective_cookies_path(options))
+    except DownloadError:
+        log("[WARNING] Cookie Bridge file was not available for refresh check. Retry skipped.")
+        return False
+
+    old_metadata = _cookie_file_metadata(cookie_path)
+    log(f"[INFO] Cookie Bridge path: {cookie_path}")
+    log(f"[INFO] Cookie Bridge old metadata: {_metadata_log_text(old_metadata)}")
+    log("[INFO] Waiting for Cookie Bridge to refresh the cookie file...")
+    new_metadata = _wait_for_fresh_cookie_file(
+        cookie_path,
+        old_metadata,
+        error_detected_ns,
+        COOKIE_BRIDGE_REFRESH_TIMEOUT_SECONDS,
+        COOKIE_BRIDGE_REFRESH_POLL_SECONDS,
+        cancel_controller,
+    )
+    if new_metadata is None:
+        current_metadata = _cookie_file_metadata(cookie_path)
+        log(f"[WARNING] Cookie Bridge timeout metadata: {_metadata_log_text(current_metadata)}")
+        log("[WARNING] Cookie Bridge file was not updated before timeout. Retry skipped.")
+        log("[ERROR] Cookie Bridge did not provide a refreshed cookie file in time.")
+        return False
+
+    retry_state.fresh_retry_used = True
+    log(f"[INFO] Cookie Bridge new metadata: {_metadata_log_text(new_metadata)}")
+    log("[INFO] Cookie Bridge file updated. Retrying once with refreshed cookies.")
+    return True
+
+
 def _run_ytdlp_with_retries(
     command: list[str],
     options: DownloadOptions,
     log,
     cancel_controller: DownloadController | None = None,
+    cookie_retry_state: _CookieRefreshRetryState | None = None,
 ) -> None:
     http_403_delays = [10, 30]
     http_403_retries = 0
-    bot_check_retries = 0
+    cookie_retry_state = cookie_retry_state or _CookieRefreshRetryState()
     stream_interrupted_retried = False
     current_command = list(command)
 
@@ -1300,16 +1441,17 @@ def _run_ytdlp_with_retries(
                 _log_missing_js_runtime_warning(log, [stderr])
             return
         except YtdlpExecutionError as exc:
-            if exc.bot_check:
-                if options.cookies_enabled and bot_check_retries < 1:
-                    bot_check_retries += 1
-                    delay = 10
-                    log(
-                        "[WARNING] YouTube bot-check from yt-dlp. "
-                        f"Retrying in {delay} seconds (retry {bot_check_retries}/1)."
-                    )
-                    _sleep_with_cancel(delay, cancel_controller)
-                    continue
+            if _maybe_retry_after_bridge_cookie_refresh(
+                exc,
+                options,
+                log,
+                cancel_controller,
+                cookie_retry_state,
+            ):
+                current_command = list(command)
+                continue
+
+            if exc.bot_check or (options.cookies_enabled and _is_cookie_refresh_error(exc)):
                 raise
 
             if exc.http_403 and http_403_retries < len(http_403_delays):
