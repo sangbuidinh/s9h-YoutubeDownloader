@@ -85,7 +85,7 @@ class YouTubeDownloaderWindow:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("YouTube Downloaderbs")
-        self.root.geometry("1440x640")
+        self.root.geometry("1440x680")
         self.root.minsize(1000, 640)
 
         self.events: queue.Queue = queue.Queue()
@@ -120,8 +120,8 @@ class YouTubeDownloaderWindow:
         self.filter_var = tk.StringVar(value=FILTER_ALL)
         self.search_var = tk.StringVar()
         self.search_status_var = tk.StringVar()
-        self.progress_current_var = tk.StringVar(value="Downloading: Ready")
-        self.progress_detail_var = tk.StringVar(value="Processing: -")
+        self.progress_current_var = tk.StringVar(value="Đang tải: Sẵn sàng")
+        self.progress_detail_var = tk.StringVar(value="Đang xử lý: -")
         self._reset_progress_sticky()
         self.search_match_orders: list[int] = []
         self.current_search_match_index = -1
@@ -171,6 +171,8 @@ class YouTubeDownloaderWindow:
         muted = "#5f6b7a"
         primary = "#0a66c2"
         primary_active = "#0858a8"
+        danger = "#b42318"
+        danger_active = "#941b12"
         secondary_bg = "#eaf3ff"
         secondary_active = "#dbeafe"
         secondary_fg = "#175f9f"
@@ -188,7 +190,7 @@ class YouTubeDownloaderWindow:
             bordercolor=border,
             lightcolor=border,
             darkcolor=border,
-            padding=(5, 3),
+            padding=(6, 4),
         )
         style.map(
             "TEntry",
@@ -205,7 +207,7 @@ class YouTubeDownloaderWindow:
             bordercolor=border,
             lightcolor=border,
             darkcolor=border,
-            padding=(4, 2),
+            padding=(5, 3),
         )
         style.map(
             "TCombobox",
@@ -214,7 +216,7 @@ class YouTubeDownloaderWindow:
             arrowcolor=[("disabled", "#9aa4b2")],
             bordercolor=[("focus", "#8fc5f5")],
         )
-        style.configure("TButton", padding=(9, 4), background="#f8fafc", foreground=text, bordercolor=border)
+        style.configure("TButton", padding=(10, 5), background="#f8fafc", foreground=text, bordercolor=border)
         style.map(
             "TButton",
             background=[("active", "#eef2f7"), ("disabled", "#eef2f7")],
@@ -244,7 +246,7 @@ class YouTubeDownloaderWindow:
             foreground="#ffffff",
             bordercolor=primary,
             focuscolor="#bfdbfe",
-            padding=(12, 5),
+            padding=(13, 6),
             font=self._button_font,
         )
         style.map(
@@ -259,7 +261,7 @@ class YouTubeDownloaderWindow:
             foreground=secondary_fg,
             bordercolor="#b6d7f7",
             focuscolor="#d7ebff",
-            padding=(10, 4),
+            padding=(11, 5),
             font=self._button_font,
         )
         style.map(
@@ -267,6 +269,21 @@ class YouTubeDownloaderWindow:
             background=[("active", secondary_active), ("pressed", "#cfe4ff"), ("disabled", "#eef2f7")],
             foreground=[("active", "#0f4f85"), ("disabled", "#7a8796")],
             bordercolor=[("active", "#8fc5f5"), ("disabled", "#d8dee6")],
+        )
+        style.configure(
+            "Danger.TButton",
+            background=danger,
+            foreground="#ffffff",
+            bordercolor=danger,
+            focuscolor="#fecaca",
+            padding=(11, 5),
+            font=self._button_font,
+        )
+        style.map(
+            "Danger.TButton",
+            background=[("active", danger_active), ("pressed", "#7f1d1d"), ("disabled", "#eef2f7")],
+            foreground=[("disabled", "#8a95a3")],
+            bordercolor=[("active", danger_active), ("disabled", "#d8dee6")],
         )
         style.configure("CookieStatus.TLabel", foreground=muted, background=app_bg, font=(ui_family, 8))
         style.configure(
@@ -322,7 +339,7 @@ class YouTubeDownloaderWindow:
         right.rowconfigure(0, weight=5)
         right.rowconfigure(1, weight=1)
 
-        source_frame = ttk.LabelFrame(left, text="Source", padding=(12, 10), style="Grouped.TLabelframe")
+        source_frame = ttk.LabelFrame(left, text="Nguồn", padding=(12, 10), style="Grouped.TLabelframe")
         source_frame.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         source_frame.columnconfigure(1, weight=1)
 
@@ -330,7 +347,7 @@ class YouTubeDownloaderWindow:
         self.api_key_entry = ttk.Entry(source_frame, textvariable=self.api_key_var)
         self.api_key_entry.grid(row=0, column=1, columnspan=2, sticky="ew", pady=2)
 
-        ttk.Label(source_frame, text="Channel URL / Channel ID / Handle").grid(
+        ttk.Label(source_frame, text="URL kênh / ID kênh / Handle").grid(
             row=1, column=0, sticky="w", padx=(0, 8), pady=2
         )
         self.channel_entry = ttk.Entry(source_frame, textvariable=self.channel_var)
@@ -343,10 +360,10 @@ class YouTubeDownloaderWindow:
         )
         self.fetch_button.grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=2)
 
-        filter_frame = ttk.LabelFrame(left, text="Filters", padding=(12, 10), style="Grouped.TLabelframe")
+        filter_frame = ttk.LabelFrame(left, text="Bộ lọc", padding=(12, 10), style="Grouped.TLabelframe")
         filter_frame.grid(row=1, column=0, sticky="ew", pady=(0, 12))
         filter_frame.columnconfigure(1, weight=1)
-        ttk.Label(filter_frame, text="Filter").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=2)
+        ttk.Label(filter_frame, text="Bộ lọc").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=2)
         self.filter_box = ttk.Combobox(
             filter_frame,
             textvariable=self.filter_var,
@@ -357,7 +374,7 @@ class YouTubeDownloaderWindow:
         self.filter_box.grid(row=0, column=1, sticky="ew", pady=2)
         self.filter_box.bind("<<ComboboxSelected>>", lambda _event: self.apply_filter())
 
-        ttk.Label(filter_frame, text="Tìm kiếm").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=2)
+        ttk.Label(filter_frame, text="Tìm kiếm tiêu đề").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=2)
         search_frame = ttk.Frame(filter_frame)
         search_frame.grid(row=1, column=1, sticky="ew", pady=2)
         search_frame.columnconfigure(0, weight=1)
@@ -391,7 +408,7 @@ class YouTubeDownloaderWindow:
         self.threshold_box.bind("<<ComboboxSelected>>", lambda _event: self._on_short_video_filter_changed())
         ttk.Label(threshold_frame, text="phút").grid(row=0, column=2, sticky="w", padx=(4, 0))
 
-        table_group = ttk.LabelFrame(right, text="Video list", padding=(12, 10), style="Grouped.TLabelframe")
+        table_group = ttk.LabelFrame(right, text="Danh sách video", padding=(12, 10), style="Grouped.TLabelframe")
         table_group.grid(row=0, column=0, sticky="nsew", pady=(0, 12))
         table_group.columnconfigure(0, weight=1)
         table_group.rowconfigure(0, weight=1)
@@ -403,10 +420,10 @@ class YouTubeDownloaderWindow:
 
         self.tree = ttk.Treeview(table_frame, columns=TREE_COLUMN_IDS, show="headings", selectmode="browse")
         self.tree.heading("selected", text="[ ]", anchor="center")
-        self.tree.heading("title", text="Video title")
-        self.tree.heading("duration", text="Duration")
-        self.tree.heading("published", text="Upload date")
-        self.tree.heading("status", text="Status")
+        self.tree.heading("title", text="Tiêu đề video")
+        self.tree.heading("duration", text="Thời lượng")
+        self.tree.heading("published", text="Ngày đăng")
+        self.tree.heading("status", text="Trạng thái")
         for column_id in TREE_COLUMN_IDS:
             self.tree.column(column_id, **TREE_COLUMN_DEFAULTS[column_id])
         self.tree.grid(row=0, column=0, sticky="nsew")
@@ -471,11 +488,11 @@ class YouTubeDownloaderWindow:
         )
         self.select_by_date_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
 
-        output_frame = ttk.LabelFrame(left, text="Output & Cookies", padding=(10, 8), style="Grouped.TLabelframe")
+        output_frame = ttk.LabelFrame(left, text="Đầu ra & Cookies", padding=(10, 8), style="Grouped.TLabelframe")
         output_frame.grid(row=2, column=0, sticky="ew", pady=(0, 12))
         output_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(output_frame, text="Save folder").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=2)
+        ttk.Label(output_frame, text="Thư mục lưu").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=2)
         ttk.Entry(output_frame, textvariable=self.save_folder_var, state="readonly").grid(
             row=0, column=1, sticky="ew", pady=2
         )
@@ -495,7 +512,7 @@ class YouTubeDownloaderWindow:
         )
         self.cookies_check.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 2))
 
-        ttk.Label(output_frame, text="Cookies source").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=2)
+        ttk.Label(output_frame, text="Nguồn cookie").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=2)
         self.cookie_source_box = ttk.Combobox(
             output_frame,
             textvariable=self.cookie_source_var,
@@ -506,7 +523,7 @@ class YouTubeDownloaderWindow:
         self.cookie_source_box.grid(row=2, column=1, sticky="w", pady=2)
         self.cookie_source_box.bind("<<ComboboxSelected>>", lambda _event: self._on_cookie_source_changed())
 
-        self.cookies_path_label = ttk.Label(output_frame, text="Cookie file path")
+        self.cookies_path_label = ttk.Label(output_frame, text="Đường dẫn file cookie")
         self.cookies_path_label.grid(row=3, column=0, sticky="w", padx=(0, 8), pady=2)
         self.cookies_entry = ttk.Entry(output_frame, textvariable=self.cookies_path_var, state="disabled")
         self.cookies_entry.grid(row=3, column=1, sticky="ew", pady=2)
@@ -514,7 +531,7 @@ class YouTubeDownloaderWindow:
         self.cookies_button.configure(style="SecondaryAccent.TButton")
         self.cookies_button.grid(row=3, column=2, sticky="ew", padx=(8, 0), pady=2)
 
-        self.bridge_cookie_path_label = ttk.Label(output_frame, text="Bridge cookie path")
+        self.bridge_cookie_path_label = ttk.Label(output_frame, text="Đường dẫn cookie bridge")
         self.bridge_cookie_path_label.grid(row=3, column=0, sticky="w", padx=(0, 8), pady=2)
         self.bridge_cookie_entry = ttk.Entry(output_frame, textvariable=self.bridge_cookie_path_var, state="disabled")
         self.bridge_cookie_entry.grid(row=3, column=1, sticky="ew", pady=2)
@@ -532,7 +549,7 @@ class YouTubeDownloaderWindow:
         )
         self.cookie_status_label.grid(row=4, column=1, columnspan=2, sticky="w", pady=(0, 2))
 
-        download_frame = ttk.LabelFrame(left, text="Download", padding=(12, 10), style="Grouped.TLabelframe")
+        download_frame = ttk.LabelFrame(left, text="Tải xuống", padding=(12, 10), style="Grouped.TLabelframe")
         download_frame.grid(row=3, column=0, sticky="ew")
         download_frame.columnconfigure(1, weight=1)
 
@@ -547,7 +564,7 @@ class YouTubeDownloaderWindow:
         self.mode_box.grid(row=0, column=1, columnspan=2, sticky="ew", pady=2)
         self.mode_box.bind("<<ComboboxSelected>>", lambda _event: self._on_download_mode_changed())
 
-        ttk.Label(download_frame, text="Download limit").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=2)
+        ttk.Label(download_frame, text="Giới hạn tốc độ").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=2)
         speed_frame = ttk.Frame(download_frame)
         speed_frame.grid(row=1, column=1, columnspan=2, sticky="ew", pady=2)
         self.speed_limit_entry = ttk.Entry(speed_frame, textvariable=self.speed_limit_var, width=18)
@@ -558,10 +575,15 @@ class YouTubeDownloaderWindow:
         download_actions.grid(row=2, column=0, columnspan=3, sticky="e", pady=(8, 0))
         self.download_button = ttk.Button(download_actions, command=self.start_download, style="Primary.TButton")
         self.download_button.grid(row=0, column=0, sticky="e")
-        self.stop_button = ttk.Button(download_actions, text="Dừng tải", command=self.stop_download)
+        self.stop_button = ttk.Button(
+            download_actions,
+            text="Dừng tải",
+            command=self.stop_download,
+            style="Danger.TButton",
+        )
         self.stop_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
 
-        progress_frame = ttk.LabelFrame(right, text="Progress / Logs", padding=(12, 10), style="Grouped.TLabelframe")
+        progress_frame = ttk.LabelFrame(right, text="Tiến trình / Nhật ký", padding=(12, 10), style="Grouped.TLabelframe")
         progress_frame.grid(row=1, column=0, sticky="nsew")
         progress_frame.columnconfigure(0, weight=1)
         progress_frame.rowconfigure(1, weight=1)
@@ -1047,8 +1069,8 @@ class YouTubeDownloaderWindow:
         self.download_controller = DownloadController()
         self._clear_progress_queue()
         self._reset_progress_sticky()
-        self.progress_current_var.set("Downloading: Ready")
-        self.progress_detail_var.set("Processing: -")
+        self.progress_current_var.set("Đang tải: Sẵn sàng")
+        self.progress_detail_var.set("Đang xử lý: -")
         self._set_download_controls_locked(True)
         worker = threading.Thread(
             target=self._download_worker,
@@ -1960,10 +1982,30 @@ class YouTubeDownloaderWindow:
             pass
         if latest is not None:
             display_event = self._merge_progress_event_for_display(latest)
-            current_line, detail_line = format_progress_event_lines(display_event)
+            current_line, detail_line = self._localized_progress_lines(display_event)
             self.progress_current_var.set(current_line)
             self.progress_detail_var.set(detail_line)
         self.root.after(300, self._poll_progress_queue)
+
+    def _localized_progress_lines(self, event: ProgressEvent) -> tuple[str, str]:
+        current_line, detail_line = format_progress_event_lines(event)
+        return self._localize_progress_line(current_line), self._localize_progress_line(detail_line)
+
+    def _localize_progress_line(self, line: str) -> str:
+        replacements = {
+            "Downloading: Ready": "Đang tải: Sẵn sàng",
+            "Downloading: Batch completed": "Đang tải: Hoàn tất danh sách",
+            "Downloading: Stop requested": "Đang tải: Đã yêu cầu dừng",
+            "Processing: Cancelling current process...": "Đang xử lý: Đang hủy tiến trình hiện tại...",
+            "Processing: -": "Đang xử lý: -",
+        }
+        if line in replacements:
+            return replacements[line]
+        if line.startswith("Downloading:"):
+            return "Đang tải:" + line[len("Downloading:") :]
+        if line.startswith("Processing:"):
+            return "Đang xử lý:" + line[len("Processing:") :]
+        return line
 
     def _reset_progress_sticky(self) -> None:
         self._progress_display_key = None
