@@ -3,7 +3,7 @@ import threading
 import tkinter as tk
 from datetime import date, datetime
 from pathlib import Path
-from tkinter import filedialog, ttk
+from tkinter import filedialog, font, ttk
 
 from core.download_modes import DOWNLOAD_MODES, MODE_VIDEO_THUMB
 from core.downloader import (
@@ -63,15 +63,16 @@ FILTER_ALL = "Hiển thị tất cả"
 FILTER_NOT_DOWNLOADED = "Chỉ hiển thị video chưa tải"
 SHORT_VIDEO_THRESHOLD_MINUTES = ("1", "2", "3", "5", "10")
 DEFAULT_SHORT_VIDEO_THRESHOLD_MINUTES = str(SHORT_VIDEO_DEFAULT_THRESHOLD_SECONDS // 60)
+COOKIE_STATUS_POLL_MS = 4000
 TREE_COLUMN_IDS = ("selected", "title", "duration", "published", "status")
 TREE_DATA_COLUMNS = ("title", "duration", "published", "status")
 TREE_FIXED_COLUMNS = ("selected",)
 TREE_COLUMN_DEFAULTS = {
     "selected": {"width": 42, "minwidth": 35, "stretch": False, "anchor": "center"},
-    "title": {"width": 560, "minwidth": 240, "stretch": False, "anchor": "w"},
-    "duration": {"width": 110, "minwidth": 90, "stretch": False, "anchor": "center"},
-    "published": {"width": 130, "minwidth": 110, "stretch": False, "anchor": "center"},
-    "status": {"width": 150, "minwidth": 130, "stretch": False, "anchor": "center"},
+    "title": {"width": 720, "minwidth": 300, "stretch": False, "anchor": "w"},
+    "duration": {"width": 115, "minwidth": 90, "stretch": False, "anchor": "center"},
+    "published": {"width": 140, "minwidth": 115, "stretch": False, "anchor": "center"},
+    "status": {"width": 165, "minwidth": 140, "stretch": False, "anchor": "center"},
 }
 COOKIE_SOURCE_LABELS = {
     COOKIE_SOURCE_FILE: "File cookies.txt",
@@ -84,8 +85,8 @@ class YouTubeDownloaderWindow:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("YouTube Downloaderbs")
-        self.root.geometry("1100x760")
-        self.root.minsize(920, 620)
+        self.root.geometry("1240x760")
+        self.root.minsize(1000, 640)
 
         self.events: queue.Queue = queue.Queue()
         self.progress_queue: queue.Queue = queue.Queue(maxsize=1)
@@ -111,7 +112,7 @@ class YouTubeDownloaderWindow:
         self.cookies_path_var = tk.StringVar()
         self.cookie_source_var = tk.StringVar(value=COOKIE_SOURCE_LABELS[load_cookie_source()])
         self.bridge_cookie_path_var = tk.StringVar(value=load_bridge_cookie_path())
-        self.bridge_cookie_status_var = tk.StringVar()
+        self.cookie_status_var = tk.StringVar()
         self.speed_limit_var = tk.StringVar()
         self.download_mode_var = tk.StringVar(value=MODE_VIDEO_THUMB)
         self.show_short_videos_var = tk.BooleanVar(value=False)
@@ -131,42 +132,221 @@ class YouTubeDownloaderWindow:
 
         self._build_ui()
         self.search_var.trace_add("write", lambda *_args: self._on_search_text_changed())
-        self.bridge_cookie_path_var.trace_add("write", lambda *_args: self._update_bridge_cookie_status())
+        self.cookies_path_var.trace_add("write", lambda *_args: self._refresh_cookie_status())
+        self.bridge_cookie_path_var.trace_add("write", lambda *_args: self._refresh_cookie_status())
         self._update_cookies_state()
-        self._update_bridge_cookie_status()
+        self._refresh_cookie_status()
         self._update_download_button_text()
         self._update_more_button_state()
         self._update_stop_button_state()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(100, self._process_events)
         self.root.after(300, self._poll_progress_queue)
+        self.root.after(COOKIE_STATUS_POLL_MS, self._poll_cookie_status)
+
+    def _configure_ui_styles(self) -> None:
+        style = ttk.Style(self.root)
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+
+        available_fonts = set(font.families(self.root))
+        ui_family = "Segoe UI" if "Segoe UI" in available_fonts else font.nametofont("TkDefaultFont").actual("family")
+        mono_family = next(
+            (candidate for candidate in ("Cascadia Mono", "Consolas", "Courier New") if candidate in available_fonts),
+            font.nametofont("TkFixedFont").actual("family"),
+        )
+        font.nametofont("TkDefaultFont").configure(family=ui_family, size=9)
+        font.nametofont("TkTextFont").configure(family=ui_family, size=9)
+        font.nametofont("TkMenuFont").configure(family=ui_family, size=9)
+        font.nametofont("TkFixedFont").configure(family=mono_family, size=9)
+        self._ui_font = (ui_family, 9)
+        self._ui_font_bold = (ui_family, 9, "bold")
+        self._button_font = (ui_family, 9, "bold")
+        self._log_font = (mono_family, 9)
+
+        app_bg = "#f4f7fb"
+        panel_bg = "#ffffff"
+        border = "#d7dee8"
+        text = "#1f2937"
+        muted = "#5f6b7a"
+        primary = "#0a66c2"
+        primary_active = "#0858a8"
+        secondary_bg = "#eaf3ff"
+        secondary_active = "#dbeafe"
+        secondary_fg = "#175f9f"
+
+        self.root.configure(background=app_bg)
+        style.configure(".", font=self._ui_font, background=app_bg, foreground=text)
+        style.configure("TFrame", background=app_bg)
+        style.configure("TLabel", background=app_bg, foreground=text)
+        style.configure("TCheckbutton", background=app_bg, foreground=text)
+        style.configure(
+            "TEntry",
+            fieldbackground=panel_bg,
+            foreground=text,
+            insertcolor=text,
+            bordercolor=border,
+            lightcolor=border,
+            darkcolor=border,
+            padding=(5, 3),
+        )
+        style.map(
+            "TEntry",
+            fieldbackground=[("readonly", "#f8fafc"), ("disabled", "#eef2f7")],
+            foreground=[("disabled", muted)],
+            bordercolor=[("focus", "#8fc5f5")],
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground=panel_bg,
+            foreground=text,
+            background=panel_bg,
+            arrowcolor=muted,
+            bordercolor=border,
+            lightcolor=border,
+            darkcolor=border,
+            padding=(4, 2),
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", panel_bg), ("disabled", "#eef2f7")],
+            foreground=[("disabled", muted)],
+            arrowcolor=[("disabled", "#9aa4b2")],
+            bordercolor=[("focus", "#8fc5f5")],
+        )
+        style.configure("TButton", padding=(9, 4), background="#f8fafc", foreground=text, bordercolor=border)
+        style.map(
+            "TButton",
+            background=[("active", "#eef2f7"), ("disabled", "#eef2f7")],
+            foreground=[("disabled", "#8a95a3")],
+        )
+        style.configure(
+            "TScrollbar",
+            background="#e5ebf2",
+            troughcolor=app_bg,
+            bordercolor=border,
+            arrowcolor=muted,
+        )
+        style.map("TScrollbar", background=[("active", "#d7dee8")], arrowcolor=[("disabled", "#9aa4b2")])
+        style.configure(
+            "Grouped.TLabelframe",
+            background=app_bg,
+            bordercolor=border,
+            lightcolor=border,
+            darkcolor=border,
+            relief="solid",
+            padding=(10, 8),
+        )
+        style.configure("Grouped.TLabelframe.Label", background=app_bg, foreground="#334155", font=self._ui_font_bold)
+        style.configure(
+            "Primary.TButton",
+            background=primary,
+            foreground="#ffffff",
+            bordercolor=primary,
+            focuscolor="#bfdbfe",
+            padding=(12, 5),
+            font=self._button_font,
+        )
+        style.map(
+            "Primary.TButton",
+            background=[("active", primary_active), ("pressed", "#074a8f"), ("disabled", "#d8dee6")],
+            foreground=[("disabled", "#758195")],
+            bordercolor=[("active", primary_active), ("disabled", "#d8dee6")],
+        )
+        style.configure(
+            "SecondaryAccent.TButton",
+            background=secondary_bg,
+            foreground=secondary_fg,
+            bordercolor="#b6d7f7",
+            focuscolor="#d7ebff",
+            padding=(10, 4),
+            font=self._button_font,
+        )
+        style.map(
+            "SecondaryAccent.TButton",
+            background=[("active", secondary_active), ("pressed", "#cfe4ff"), ("disabled", "#eef2f7")],
+            foreground=[("active", "#0f4f85"), ("disabled", "#7a8796")],
+            bordercolor=[("active", "#8fc5f5"), ("disabled", "#d8dee6")],
+        )
+        style.configure("CookieStatus.TLabel", foreground=muted, background=app_bg, font=(ui_family, 8))
+        style.configure(
+            "Treeview",
+            background=panel_bg,
+            fieldbackground=panel_bg,
+            foreground=text,
+            font=self._ui_font,
+            bordercolor=border,
+            lightcolor=border,
+            darkcolor=border,
+            borderwidth=1,
+            rowheight=28,
+        )
+        style.configure(
+            "Treeview.Heading",
+            background="#eef3f8",
+            foreground="#334155",
+            font=self._ui_font_bold,
+            relief="flat",
+            bordercolor=border,
+            lightcolor=border,
+            darkcolor=border,
+            padding=(8, 6),
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", "#d7eaff")],
+            foreground=[("selected", "#102a43")],
+        )
+        style.map("Treeview.Heading", background=[("active", "#e3ebf4")])
 
     def _build_ui(self) -> None:
+        self._configure_ui_styles()
+
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-        main = ttk.Frame(self.root, padding=10)
+        main = ttk.Frame(self.root, padding=(14, 12))
         main.grid(row=0, column=0, sticky="nsew")
+        main.columnconfigure(0, minsize=380, weight=0)
         main.columnconfigure(1, weight=1)
-        main.rowconfigure(3, weight=1)
-        main.rowconfigure(12, weight=1)
+        main.rowconfigure(0, weight=1)
 
-        ttk.Label(main, text="YouTube API Key").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=4)
-        self.api_key_entry = ttk.Entry(main, textvariable=self.api_key_var)
-        self.api_key_entry.grid(row=0, column=1, columnspan=2, sticky="ew", pady=4)
+        left = ttk.Frame(main)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
+        left.columnconfigure(0, weight=1)
+        left.rowconfigure(4, weight=1)
 
-        ttk.Label(main, text="Channel URL / Channel ID / Handle").grid(
-            row=1, column=0, sticky="w", padx=(0, 8), pady=4
+        right = ttk.Frame(main)
+        right.grid(row=0, column=1, sticky="nsew")
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(0, weight=5)
+        right.rowconfigure(1, weight=1)
+
+        source_frame = ttk.LabelFrame(left, text="Source", padding=(12, 10), style="Grouped.TLabelframe")
+        source_frame.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        source_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(source_frame, text="YouTube API Key").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=2)
+        self.api_key_entry = ttk.Entry(source_frame, textvariable=self.api_key_var)
+        self.api_key_entry.grid(row=0, column=1, columnspan=2, sticky="ew", pady=2)
+
+        ttk.Label(source_frame, text="Channel URL / Channel ID / Handle").grid(
+            row=1, column=0, sticky="w", padx=(0, 8), pady=2
         )
-        self.channel_entry = ttk.Entry(main, textvariable=self.channel_var)
-        self.channel_entry.grid(row=1, column=1, sticky="ew", pady=4)
-        self.fetch_button = ttk.Button(main, text="Lấy danh sách Video", command=self.start_fetch)
-        self.fetch_button.grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=4)
+        self.channel_entry = ttk.Entry(source_frame, textvariable=self.channel_var)
+        self.channel_entry.grid(row=1, column=1, sticky="ew", pady=2)
+        self.fetch_button = ttk.Button(
+            source_frame,
+            text="Lấy danh sách Video",
+            command=self.start_fetch,
+            style="Primary.TButton",
+        )
+        self.fetch_button.grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=2)
 
-        filter_frame = ttk.Frame(main)
-        filter_frame.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(8, 4))
-        filter_frame.columnconfigure(3, weight=1)
-        ttk.Label(filter_frame, text="Filter").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        filter_frame = ttk.LabelFrame(left, text="Filters", padding=(12, 10), style="Grouped.TLabelframe")
+        filter_frame.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        filter_frame.columnconfigure(1, weight=1)
+        ttk.Label(filter_frame, text="Filter").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=2)
         self.filter_box = ttk.Combobox(
             filter_frame,
             textvariable=self.filter_var,
@@ -174,37 +354,50 @@ class YouTubeDownloaderWindow:
             state="readonly",
             width=32,
         )
-        self.filter_box.grid(row=0, column=1, sticky="w")
+        self.filter_box.grid(row=0, column=1, sticky="ew", pady=2)
         self.filter_box.bind("<<ComboboxSelected>>", lambda _event: self.apply_filter())
-        ttk.Label(filter_frame, text="Tìm kiếm").grid(row=0, column=2, sticky="w", padx=(18, 8))
-        search_entry = ttk.Entry(filter_frame, textvariable=self.search_var, width=38)
-        search_entry.grid(row=0, column=3, sticky="ew")
+
+        ttk.Label(filter_frame, text="Tìm kiếm").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=2)
+        search_frame = ttk.Frame(filter_frame)
+        search_frame.grid(row=1, column=1, sticky="ew", pady=2)
+        search_frame.columnconfigure(0, weight=1)
+        search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=24)
+        search_entry.grid(row=0, column=0, sticky="ew")
         search_entry.bind("<Return>", lambda _event: self._find_next_match())
         search_entry.bind("<Shift-Return>", lambda _event: self._find_previous_match())
-        ttk.Label(filter_frame, textvariable=self.search_status_var, width=16).grid(
-            row=0, column=4, sticky="w", padx=(8, 0)
+        ttk.Label(search_frame, textvariable=self.search_status_var, width=12).grid(
+            row=0, column=1, sticky="w", padx=(8, 0)
         )
+
         self.short_videos_check = ttk.Checkbutton(
             filter_frame,
             text="Hiển thị video ngắn",
             variable=self.show_short_videos_var,
             command=self._on_short_video_filter_changed,
         )
-        self.short_videos_check.grid(row=0, column=5, sticky="w", padx=(12, 0))
-        ttk.Label(filter_frame, text="Ẩn video dưới:").grid(row=0, column=6, sticky="w", padx=(12, 4))
+        self.short_videos_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 2))
+
+        threshold_frame = ttk.Frame(filter_frame)
+        threshold_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=2)
+        ttk.Label(threshold_frame, text="Ẩn video dưới:").grid(row=0, column=0, sticky="w", padx=(0, 4))
         self.threshold_box = ttk.Combobox(
-            filter_frame,
+            threshold_frame,
             textvariable=self.short_video_threshold_var,
             values=SHORT_VIDEO_THRESHOLD_MINUTES,
             state="readonly",
             width=4,
         )
-        self.threshold_box.grid(row=0, column=7, sticky="w")
+        self.threshold_box.grid(row=0, column=1, sticky="w")
         self.threshold_box.bind("<<ComboboxSelected>>", lambda _event: self._on_short_video_filter_changed())
-        ttk.Label(filter_frame, text="phút").grid(row=0, column=8, sticky="w", padx=(4, 0))
+        ttk.Label(threshold_frame, text="phút").grid(row=0, column=2, sticky="w", padx=(4, 0))
 
-        table_frame = ttk.Frame(main)
-        table_frame.grid(row=3, column=0, columnspan=3, sticky="nsew", pady=(0, 8))
+        table_group = ttk.LabelFrame(right, text="Video list", padding=(12, 10), style="Grouped.TLabelframe")
+        table_group.grid(row=0, column=0, sticky="nsew", pady=(0, 12))
+        table_group.columnconfigure(0, weight=1)
+        table_group.rowconfigure(0, weight=1)
+
+        table_frame = ttk.Frame(table_group)
+        table_frame.grid(row=0, column=0, sticky="nsew")
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
@@ -268,7 +461,7 @@ class YouTubeDownloaderWindow:
         yscroll.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=yscroll.set)
         table_actions = ttk.Frame(table_frame)
-        table_actions.grid(row=1, column=0, sticky="e", pady=(6, 0))
+        table_actions.grid(row=1, column=0, sticky="e", pady=(8, 0))
         self.more_button = ttk.Button(table_actions, text="Xem thêm video", command=self.start_load_more)
         self.more_button.grid(row=0, column=0, sticky="e")
         self.select_by_date_button = ttk.Button(
@@ -278,87 +471,134 @@ class YouTubeDownloaderWindow:
         )
         self.select_by_date_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
 
-        ttk.Label(main, text="Save folder").grid(row=4, column=0, sticky="w", padx=(0, 8), pady=4)
-        ttk.Entry(main, textvariable=self.save_folder_var, state="readonly").grid(
-            row=4, column=1, sticky="ew", pady=4
+        output_frame = ttk.LabelFrame(left, text="Output & Cookies", padding=(10, 8), style="Grouped.TLabelframe")
+        output_frame.grid(row=2, column=0, sticky="ew", pady=(0, 12))
+        output_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(output_frame, text="Save folder").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=2)
+        ttk.Entry(output_frame, textvariable=self.save_folder_var, state="readonly").grid(
+            row=0, column=1, sticky="ew", pady=2
         )
-        self.choose_folder_button = ttk.Button(main, text="Chọn thư mục", command=self.choose_save_folder)
-        self.choose_folder_button.grid(row=4, column=2, sticky="ew", padx=(8, 0), pady=4)
+        self.choose_folder_button = ttk.Button(
+            output_frame,
+            text="Chọn thư mục",
+            command=self.choose_save_folder,
+            style="SecondaryAccent.TButton",
+        )
+        self.choose_folder_button.grid(row=0, column=2, sticky="ew", padx=(8, 0), pady=2)
 
         self.cookies_check = ttk.Checkbutton(
-            main,
+            output_frame,
             text="Sử dụng Cookies",
             variable=self.cookies_enabled_var,
             command=self._update_cookies_state,
         )
-        self.cookies_check.grid(row=5, column=0, sticky="w", pady=4)
-        self.cookies_entry = ttk.Entry(main, textvariable=self.cookies_path_var, state="disabled")
-        self.cookies_entry.grid(row=5, column=1, sticky="ew", pady=4)
-        self.cookies_button = ttk.Button(main, text="Chọn cookies*.txt", command=self.choose_cookies_file)
-        self.cookies_button.grid(row=5, column=2, sticky="ew", padx=(8, 0), pady=4)
+        self.cookies_check.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 2))
 
-        ttk.Label(main, text="Cookies source").grid(row=6, column=0, sticky="w", padx=(0, 8), pady=4)
+        ttk.Label(output_frame, text="Cookies source").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=2)
         self.cookie_source_box = ttk.Combobox(
-            main,
+            output_frame,
             textvariable=self.cookie_source_var,
             values=tuple(COOKIE_SOURCE_LABELS.values()),
             state="readonly",
             width=24,
         )
-        self.cookie_source_box.grid(row=6, column=1, sticky="w", pady=4)
+        self.cookie_source_box.grid(row=2, column=1, sticky="w", pady=2)
         self.cookie_source_box.bind("<<ComboboxSelected>>", lambda _event: self._on_cookie_source_changed())
-        self.bridge_check_button = ttk.Button(main, text="Check", command=self.check_bridge_cookie_file)
-        self.bridge_check_button.grid(row=6, column=2, sticky="ew", padx=(8, 0), pady=4)
 
-        ttk.Label(main, text="Bridge cookie path").grid(row=7, column=0, sticky="w", padx=(0, 8), pady=4)
-        self.bridge_cookie_entry = ttk.Entry(main, textvariable=self.bridge_cookie_path_var, state="disabled")
-        self.bridge_cookie_entry.grid(row=7, column=1, sticky="ew", pady=4)
+        self.cookies_path_label = ttk.Label(output_frame, text="Cookie file path")
+        self.cookies_path_label.grid(row=3, column=0, sticky="w", padx=(0, 8), pady=2)
+        self.cookies_entry = ttk.Entry(output_frame, textvariable=self.cookies_path_var, state="disabled")
+        self.cookies_entry.grid(row=3, column=1, sticky="ew", pady=2)
+        self.cookies_button = ttk.Button(output_frame, text="Chọn cookies*.txt", command=self.choose_cookies_file)
+        self.cookies_button.configure(style="SecondaryAccent.TButton")
+        self.cookies_button.grid(row=3, column=2, sticky="ew", padx=(8, 0), pady=2)
+
+        self.bridge_cookie_path_label = ttk.Label(output_frame, text="Bridge cookie path")
+        self.bridge_cookie_path_label.grid(row=3, column=0, sticky="w", padx=(0, 8), pady=2)
+        self.bridge_cookie_entry = ttk.Entry(output_frame, textvariable=self.bridge_cookie_path_var, state="disabled")
+        self.bridge_cookie_entry.grid(row=3, column=1, sticky="ew", pady=2)
         self.bridge_cookie_button = ttk.Button(
-            main,
+            output_frame,
             text="Chọn youtube_cookies.txt",
             command=self.choose_bridge_cookie_file,
         )
-        self.bridge_cookie_button.grid(row=7, column=2, sticky="ew", padx=(8, 0), pady=4)
-        self.bridge_cookie_status_label = ttk.Label(main, textvariable=self.bridge_cookie_status_var)
-        self.bridge_cookie_status_label.grid(row=8, column=1, columnspan=2, sticky="w", pady=(0, 4))
+        self.bridge_cookie_button.configure(style="SecondaryAccent.TButton")
+        self.bridge_cookie_button.grid(row=3, column=2, sticky="ew", padx=(8, 0), pady=2)
+        self.cookie_status_label = ttk.Label(
+            output_frame,
+            textvariable=self.cookie_status_var,
+            style="CookieStatus.TLabel",
+        )
+        self.cookie_status_label.grid(row=4, column=1, columnspan=2, sticky="w", pady=(0, 2))
 
-        ttk.Label(main, text="Kiểu tải").grid(row=9, column=0, sticky="w", padx=(0, 8), pady=4)
+        download_frame = ttk.LabelFrame(left, text="Download", padding=(12, 10), style="Grouped.TLabelframe")
+        download_frame.grid(row=3, column=0, sticky="ew")
+        download_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(download_frame, text="Kiểu tải").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=2)
         self.mode_box = ttk.Combobox(
-            main,
+            download_frame,
             textvariable=self.download_mode_var,
             values=DOWNLOAD_MODES,
             state="readonly",
             width=30,
         )
-        self.mode_box.grid(row=9, column=1, sticky="w", pady=4)
+        self.mode_box.grid(row=0, column=1, columnspan=2, sticky="ew", pady=2)
         self.mode_box.bind("<<ComboboxSelected>>", lambda _event: self._on_download_mode_changed())
 
-        ttk.Label(main, text="Download limit").grid(row=10, column=0, sticky="w", padx=(0, 8), pady=4)
-        speed_frame = ttk.Frame(main)
-        speed_frame.grid(row=10, column=1, sticky="w", pady=4)
+        ttk.Label(download_frame, text="Download limit").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=2)
+        speed_frame = ttk.Frame(download_frame)
+        speed_frame.grid(row=1, column=1, columnspan=2, sticky="ew", pady=2)
         self.speed_limit_entry = ttk.Entry(speed_frame, textvariable=self.speed_limit_var, width=18)
         self.speed_limit_entry.grid(row=0, column=0, sticky="w")
         ttk.Label(speed_frame, text="MB/s").grid(row=0, column=1, sticky="w", padx=(6, 0))
 
-        self.download_button = ttk.Button(main, command=self.start_download)
-        self.download_button.grid(row=10, column=2, sticky="ew", padx=(8, 0), pady=4)
-        self.stop_button = ttk.Button(main, text="Dừng tải", command=self.stop_download)
-        self.stop_button.grid(row=11, column=2, sticky="ew", padx=(8, 0), pady=(4, 8))
+        download_actions = ttk.Frame(download_frame)
+        download_actions.grid(row=2, column=0, columnspan=3, sticky="e", pady=(8, 0))
+        self.download_button = ttk.Button(download_actions, command=self.start_download, style="Primary.TButton")
+        self.download_button.grid(row=0, column=0, sticky="e")
+        self.stop_button = ttk.Button(download_actions, text="Dừng tải", command=self.stop_download)
+        self.stop_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
 
-        progress_frame = ttk.Frame(main)
-        progress_frame.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(8, 4))
+        progress_frame = ttk.LabelFrame(right, text="Progress / Logs", padding=(12, 10), style="Grouped.TLabelframe")
+        progress_frame.grid(row=1, column=0, sticky="nsew")
         progress_frame.columnconfigure(0, weight=1)
-        ttk.Label(progress_frame, textvariable=self.progress_current_var, anchor="w").grid(
+        progress_frame.rowconfigure(1, weight=1)
+        progress_status_frame = ttk.Frame(progress_frame)
+        progress_status_frame.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        progress_status_frame.columnconfigure(0, weight=1)
+        ttk.Label(progress_status_frame, textvariable=self.progress_current_var, anchor="w").grid(
             row=0, column=0, sticky="ew"
         )
-        ttk.Label(progress_frame, textvariable=self.progress_detail_var, anchor="w").grid(
+        ttk.Label(progress_status_frame, textvariable=self.progress_detail_var, anchor="w").grid(
             row=1, column=0, sticky="ew"
         )
-        log_frame = ttk.Frame(main)
-        log_frame.grid(row=12, column=0, columnspan=3, sticky="nsew")
+        log_frame = ttk.Frame(progress_frame)
+        log_frame.grid(row=1, column=0, sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
-        self.log_text = tk.Text(log_frame, height=9, wrap="word", state="disabled")
+        self.log_text = tk.Text(
+            log_frame,
+            height=6,
+            wrap="word",
+            state="disabled",
+            font=self._log_font,
+            background="#ffffff",
+            foreground="#1f2937",
+            insertbackground="#1f2937",
+            selectbackground="#d7eaff",
+            selectforeground="#102a43",
+            relief="solid",
+            borderwidth=1,
+            highlightthickness=1,
+            highlightbackground="#d7dee8",
+            highlightcolor="#8fc5f5",
+            padx=8,
+            pady=6,
+            spacing1=1,
+            spacing3=2,
+        )
         self.log_text.grid(row=0, column=0, sticky="nsew")
         self.log_text.tag_configure("success", foreground="green")
         self.log_text.tag_configure("error", foreground="red")
@@ -532,6 +772,7 @@ class YouTubeDownloaderWindow:
         )
         if path:
             self.cookies_path_var.set(path)
+            self._refresh_cookie_status()
 
     def choose_bridge_cookie_file(self) -> None:
         if self.downloading:
@@ -543,10 +784,7 @@ class YouTubeDownloaderWindow:
         if path:
             self.bridge_cookie_path_var.set(path)
             save_bridge_cookie_path(path)
-            self._update_bridge_cookie_status()
-
-    def check_bridge_cookie_file(self) -> None:
-        self._update_bridge_cookie_status()
+            self._refresh_cookie_status()
 
     def _current_cookie_source(self) -> str:
         return COOKIE_SOURCE_VALUES_BY_LABEL.get(self.cookie_source_var.get(), COOKIE_SOURCE_FILE)
@@ -554,27 +792,44 @@ class YouTubeDownloaderWindow:
     def _on_cookie_source_changed(self) -> None:
         save_cookie_source(self._current_cookie_source())
         self._update_cookies_state()
-        self._update_bridge_cookie_status()
+        self._refresh_cookie_status()
 
     def _update_bridge_cookie_status(self) -> None:
-        path_text = self.bridge_cookie_path_var.get().strip()
-        if not path_text:
-            self.bridge_cookie_status_var.set("Missing")
+        self._refresh_cookie_status()
+
+    def _poll_cookie_status(self) -> None:
+        self._refresh_cookie_status()
+        self.root.after(COOKIE_STATUS_POLL_MS, self._poll_cookie_status)
+
+    def _refresh_cookie_status(self) -> None:
+        if not self.cookies_enabled_var.get():
+            self.cookie_status_var.set("Cookies disabled")
             return
+
+        if self._current_cookie_source() == COOKIE_SOURCE_BRIDGE:
+            self.cookie_status_var.set(
+                self._cookie_file_metadata_status("Bridge file", self.bridge_cookie_path_var.get().strip())
+            )
+            return
+
+        self.cookie_status_var.set(
+            self._cookie_file_metadata_status("Cookie file", self.cookies_path_var.get().strip())
+        )
+
+    def _cookie_file_metadata_status(self, label: str, path_text: str) -> str:
+        if not path_text:
+            return f"{label}: No file selected"
 
         path = Path(path_text)
         try:
             stat = path.stat()
             if not path.is_file():
                 raise OSError
-            with path.open("rb"):
-                pass
         except OSError:
-            self.bridge_cookie_status_var.set("Missing")
-            return
+            return f"{label}: Missing"
 
-        modified = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-        self.bridge_cookie_status_var.set(f"Found | {stat.st_size} bytes | modified {modified}")
+        updated = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        return f"{label}: Found \u2022 {stat.st_size} bytes \u2022 updated {updated}"
 
     def _on_download_mode_changed(self) -> None:
         if self.downloading:
@@ -721,7 +976,25 @@ class YouTubeDownloaderWindow:
         self.cookie_source_box.configure(state=source_state)
         self.bridge_cookie_entry.configure(state=bridge_entry_state)
         self.bridge_cookie_button.configure(state=bridge_button_state)
-        self.bridge_check_button.configure(state=bridge_button_state)
+        self._update_cookie_row_visibility(source)
+        self._refresh_cookie_status()
+
+    def _update_cookie_row_visibility(self, source: str) -> None:
+        if source == COOKIE_SOURCE_BRIDGE:
+            self.cookies_path_label.grid_remove()
+            self.cookies_entry.grid_remove()
+            self.cookies_button.grid_remove()
+            self.bridge_cookie_path_label.grid()
+            self.bridge_cookie_entry.grid()
+            self.bridge_cookie_button.grid()
+            return
+
+        self.cookies_path_label.grid()
+        self.cookies_entry.grid()
+        self.cookies_button.grid()
+        self.bridge_cookie_path_label.grid_remove()
+        self.bridge_cookie_entry.grid_remove()
+        self.bridge_cookie_button.grid_remove()
 
     def start_download(self) -> None:
         if self.downloading:
