@@ -1,4 +1,5 @@
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -7,6 +8,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DIST_EXE = REPO_ROOT / "dist" / "Youtube Downloaderbs.exe"
+APP_ICON_ICO = REPO_ROOT / "assets" / "app_icon.ico"
+APP_ICON_PNG = REPO_ROOT / "assets" / "app_icon.png"
 
 
 PREFLIGHT_COMMANDS = (
@@ -43,6 +46,7 @@ def main() -> int:
     print("Packaging preflight")
     print(f"repo_root: {REPO_ROOT}")
     print("pyinstaller_mode: onefile windowed app.py")
+    print(f"icon: {APP_ICON_ICO}")
     for command in PREFLIGHT_COMMANDS:
         _run(command)
 
@@ -58,6 +62,12 @@ def main() -> int:
             "--clean",
             "--onefile",
             "--windowed",
+            "--icon",
+            str(APP_ICON_ICO),
+            "--add-data",
+            f"{APP_ICON_ICO}{os.pathsep}assets",
+            "--add-data",
+            f"{APP_ICON_PNG}{os.pathsep}assets",
             "--name",
             "Youtube Downloaderbs",
             "app.py",

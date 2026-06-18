@@ -1,4 +1,5 @@
 import queue
+import sys
 import threading
 import tkinter as tk
 import urllib.parse
@@ -86,6 +87,8 @@ class YouTubeDownloaderWindow:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("YouTube Downloaderbs")
+        self._app_icon_image: tk.PhotoImage | None = None
+        self._apply_window_icon()
         self.root.geometry("1440x680")
         self.root.minsize(1000, 640)
 
@@ -147,6 +150,36 @@ class YouTubeDownloaderWindow:
         self.root.after(100, self._process_events)
         self.root.after(300, self._poll_progress_queue)
         self.root.after(COOKIE_STATUS_POLL_MS, self._poll_cookie_status)
+
+    def _find_icon_asset(self, filename: str) -> Path | None:
+        candidates: list[Path] = []
+        bundle_root = getattr(sys, "_MEIPASS", None)
+        if bundle_root:
+            candidates.append(Path(bundle_root) / "assets" / filename)
+        candidates.append(Path(__file__).resolve().parents[1] / "assets" / filename)
+        if getattr(sys, "frozen", False):
+            candidates.append(Path(sys.executable).resolve().parent / "assets" / filename)
+
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _apply_window_icon(self) -> None:
+        try:
+            ico_path = self._find_icon_asset("app_icon.ico")
+            if ico_path and sys.platform.startswith("win"):
+                try:
+                    self.root.iconbitmap(default=str(ico_path))
+                except Exception:
+                    pass
+
+            png_path = self._find_icon_asset("app_icon.png")
+            if png_path:
+                self._app_icon_image = tk.PhotoImage(file=str(png_path))
+                self.root.iconphoto(True, self._app_icon_image)
+        except Exception:
+            self._app_icon_image = None
 
     def _configure_ui_styles(self) -> None:
         style = ttk.Style(self.root)
