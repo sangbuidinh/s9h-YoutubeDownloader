@@ -182,6 +182,10 @@ class _CookieFileMetadata:
 class _CookieRefreshRetryState:
     fresh_retry_used: bool = False
     refreshed_rejected_logged: bool = False
+    diag_id: str = ""
+    refreshed_file_detected: bool = False
+    retry_attempted: bool = False
+    retry_cookie_path: str = ""
 
 
 def _emit_progress_event(progress_callback, event: ProgressEvent) -> None:
@@ -1322,8 +1326,35 @@ def _metadata_mtime_text(metadata: _CookieFileMetadata) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(metadata.mtime_ns / 1_000_000_000))
 
 
+def _time_ns_text(value: int) -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(value / 1_000_000_000))
+
+
 def _metadata_log_text(metadata: _CookieFileMetadata) -> str:
-    return f"exists={metadata.exists}, size={metadata.size}, mtime={_metadata_mtime_text(metadata)}"
+    return (
+        f"exists={metadata.exists}, size={metadata.size}, "
+        f"mtime_ns={metadata.mtime_ns if metadata.mtime_ns is not None else '-'}, "
+        f"mtime={_metadata_mtime_text(metadata)}"
+    )
+
+
+def _cookie_refresh_diag_id(error_detected_ns: int) -> str:
+    return format(error_detected_ns, "x")[-10:]
+
+
+def _command_cookie_path(command: list[str]) -> str:
+    for index, value in enumerate(command):
+        if value == "--cookies" and index + 1 < len(command):
+            return command[index + 1]
+    return ""
+
+
+def _command_video_id(command: list[str]) -> str:
+    for value in command:
+        match = re.search(r"(?:youtube\.com/watch\?v=|youtu\.be/)([^&?/]+)", value)
+        if match:
+            return match.group(1)
+    return ""
 
 
 def _is_fresh_cookie_file(
@@ -1365,6 +1396,7 @@ def _is_cookie_refresh_error(exc: YtdlpExecutionError) -> bool:
 def _maybe_retry_after_bridge_cookie_refresh(
     exc: YtdlpExecutionError,
     options: DownloadOptions,
+    command: list[str],
     log,
     cancel_controller: DownloadController | None,
     retry_state: _CookieRefreshRetryState,
@@ -1375,6 +1407,13 @@ def _maybe_retry_after_bridge_cookie_refresh(
         return False
     if retry_state.fresh_retry_used:
         if not retry_state.refreshed_rejected_logged:
+            diag_id = retry_state.diag_id or "unknown"
+            log(
+                f"[COOKIE-DIAG] id={diag_id} refreshed_but_rejected=yes "
+                f"file_was_refreshed={str(retry_state.refreshed_file_detected).lower()} "
+                f"retry_attempted={str(retry_state.retry_attempted).lower()} "
+                "reason=youtube_rejected_refreshed_session"
+            )
             log(
                 "[ERROR] Cookie file was refreshed, but YouTube still rejected the browser session. "
                 "Open YouTube in the same browser profile, sign in again, then let the bridge export cookies again."
@@ -1384,13 +1423,29 @@ def _maybe_retry_after_bridge_cookie_refresh(
 
     log("[INFO] Cookie/session error detected while using Local Cookie Bridge.")
     error_detected_ns = time.time_ns()
+    diag_id = _cookie_refresh_diag_id(error_detected_ns)
+    retry_state.diag_id = diag_id
+    video_id = _command_video_id(command) or "unknown"
     try:
         cookie_path = Path(effective_cookies_path(options))
     except DownloadError:
+        log(f"[COOKIE-DIAG] id={diag_id} source=bridge reason=effective_cookie_path_unavailable")
         log("[WARNING] Cookie Bridge file was not available for refresh check. Retry skipped.")
         return False
 
+    retry_state.retry_cookie_path = str(cookie_path)
     old_metadata = _cookie_file_metadata(cookie_path)
+    log(f"[COOKIE-DIAG] id={diag_id} source=bridge video_id={video_id}")
+    log(f"[COOKIE-DIAG] id={diag_id} effective_cookie_path={cookie_path}")
+    log(
+        f"[COOKIE-DIAG] id={diag_id} error_detected time_ns={error_detected_ns} "
+        f"time={_time_ns_text(error_detected_ns)}"
+    )
+    log(f"[COOKIE-DIAG] id={diag_id} old_metadata {_metadata_log_text(old_metadata)}")
+    log(
+        f"[COOKIE-DIAG] id={diag_id} waiting "
+        f"timeout={COOKIE_BRIDGE_REFRESH_TIMEOUT_SECONDS}s poll={COOKIE_BRIDGE_REFRESH_POLL_SECONDS}s"
+    )
     log(f"[INFO] Cookie Bridge path: {cookie_path}")
     log(f"[INFO] Cookie Bridge old metadata: {_metadata_log_text(old_metadata)}")
     log("[INFO] Waiting for Cookie Bridge to refresh the cookie file...")
@@ -1404,12 +1459,19 @@ def _maybe_retry_after_bridge_cookie_refresh(
     )
     if new_metadata is None:
         current_metadata = _cookie_file_metadata(cookie_path)
+        log(f"[COOKIE-DIAG] id={diag_id} timeout_metadata {_metadata_log_text(current_metadata)}")
+        log(
+            f"[COOKIE-DIAG] id={diag_id} file_was_refreshed=no "
+            "retry_attempted=no reason=cookie_file_not_updated_before_timeout"
+        )
         log(f"[WARNING] Cookie Bridge timeout metadata: {_metadata_log_text(current_metadata)}")
         log("[WARNING] Cookie Bridge file was not updated before timeout. Retry skipped.")
         log("[ERROR] Cookie Bridge did not provide a refreshed cookie file in time.")
         return False
 
     retry_state.fresh_retry_used = True
+    retry_state.refreshed_file_detected = True
+    log(f"[COOKIE-DIAG] id={diag_id} fresh_metadata {_metadata_log_text(new_metadata)}")
     log(f"[INFO] Cookie Bridge new metadata: {_metadata_log_text(new_metadata)}")
     log("[INFO] Cookie Bridge file updated. Retrying once with refreshed cookies.")
     return True
@@ -1444,10 +1506,22 @@ def _run_ytdlp_with_retries(
             if _maybe_retry_after_bridge_cookie_refresh(
                 exc,
                 options,
+                command,
                 log,
                 cancel_controller,
                 cookie_retry_state,
             ):
+                retry_cookie_path = _command_cookie_path(command)
+                expected_cookie_path = cookie_retry_state.retry_cookie_path
+                uses_same_cookie_path = bool(retry_cookie_path) and retry_cookie_path == expected_cookie_path
+                cookie_retry_state.retry_attempted = True
+                log(
+                    f"[COOKIE-DIAG] id={cookie_retry_state.diag_id} "
+                    f"retry_command_has_cookies={'yes' if retry_cookie_path else 'no'} "
+                    f"retry_cookie_path={retry_cookie_path or '-'} "
+                    f"retry_uses_same_cookie_path={'yes' if uses_same_cookie_path else 'no'}"
+                )
+                log(f"[COOKIE-DIAG] id={cookie_retry_state.diag_id} retry_subprocess=new")
                 current_command = list(command)
                 continue
 

@@ -1,13 +1,30 @@
 import tkinter as tk
+import tkinter.font as tkfont
 from dataclasses import dataclass
 from tkinter import ttk
 from typing import Callable, Sequence
 
 
-DIALOG_PADDING = 16
-DIALOG_WIDTH = 460
+DIALOG_PADDING = 14
+DIALOG_WIDTH = 500
 BUTTON_WIDTH = 14
-MESSAGE_WRAP = 400
+MESSAGE_WRAP = 440
+CLOSE_BUTTON_TEXT = {"hủy", "đóng", "cancel", "close", "no"}
+TITLE_TRANSLATIONS = {
+    "Error": "Lỗi",
+    "Warning": "Cảnh báo",
+    "Confirm": "Xác nhận",
+    "Info": "Thông báo",
+}
+BUTTON_TRANSLATIONS = {
+    "OK": "Đóng",
+    "Cancel": "Hủy",
+    "Yes": "Có",
+    "No": "Không",
+    "Copy": "Sao chép",
+    "Close": "Đóng",
+    "Retry": "Thử lại",
+}
 
 
 @dataclass
@@ -28,8 +45,8 @@ def center_dialog_over_parent(dialog: tk.Toplevel, parent: tk.Misc) -> None:
     parent.update_idletasks()
     dialog.update_idletasks()
 
-    parent_x = parent.winfo_x()
-    parent_y = parent.winfo_y()
+    parent_x = parent.winfo_rootx()
+    parent_y = parent.winfo_rooty()
     parent_w = parent.winfo_width()
     parent_h = parent.winfo_height()
     if parent_w <= 1 or parent_h <= 1:
@@ -45,6 +62,161 @@ def center_dialog_over_parent(dialog: tk.Toplevel, parent: tk.Misc) -> None:
     dialog.geometry(f"+{max(0, x)}+{max(0, y)}")
 
 
+def _dialog_colors(parent: tk.Misc) -> dict[str, str]:
+    app_bg = "#f4f7fb"
+    try:
+        parent_bg = parent.cget("background")
+        if isinstance(parent_bg, str) and parent_bg:
+            app_bg = parent_bg
+    except tk.TclError:
+        pass
+    return {
+        "app_bg": app_bg,
+        "panel_bg": app_bg,
+        "field_bg": "#ffffff",
+        "border": "#d7dee8",
+        "text": "#1f2937",
+        "muted": "#5f6b7a",
+        "primary": "#0a66c2",
+        "primary_active": "#0858a8",
+        "danger": "#b42318",
+        "danger_active": "#941b12",
+    }
+
+
+def _ensure_dialog_styles(parent: tk.Misc) -> dict[str, str]:
+    colors = _dialog_colors(parent)
+    style = ttk.Style(parent)
+    families = set(tkfont.families(parent))
+    ui_family = "Segoe UI" if "Segoe UI" in families else tkfont.nametofont("TkDefaultFont").actual("family")
+    mono_family = next(
+        (candidate for candidate in ("Cascadia Mono", "Consolas", "Courier New") if candidate in families),
+        tkfont.nametofont("TkFixedFont").actual("family"),
+    )
+    colors["ui_family"] = ui_family
+    colors["mono_family"] = mono_family
+
+    style.configure("Dialog.TFrame", background=colors["app_bg"])
+    style.configure(
+        "DialogBody.TFrame",
+        background=colors["panel_bg"],
+        bordercolor=colors["border"],
+        lightcolor=colors["border"],
+        darkcolor=colors["border"],
+        relief="solid",
+        borderwidth=1,
+    )
+    style.configure("DialogContent.TFrame", background=colors["panel_bg"])
+    style.configure("DialogButtonBar.TFrame", background=colors["panel_bg"])
+    style.configure(
+        "DialogTitle.TLabel",
+        background=colors["panel_bg"],
+        foreground=colors["text"],
+        font=(ui_family, 11, "bold"),
+    )
+    style.configure(
+        "DialogMessage.TLabel",
+        background=colors["panel_bg"],
+        foreground=colors["text"],
+        font=(ui_family, 9),
+    )
+    style.configure(
+        "DialogMuted.TLabel",
+        background=colors["panel_bg"],
+        foreground=colors["muted"],
+        font=(ui_family, 8),
+    )
+    style.configure(
+        "DialogPrimary.TButton",
+        background=colors["primary"],
+        foreground="#ffffff",
+        bordercolor=colors["primary"],
+        focuscolor="#bfdbfe",
+        padding=(12, 6),
+        font=(ui_family, 9, "bold"),
+    )
+    style.map(
+        "DialogPrimary.TButton",
+        background=[("active", colors["primary_active"]), ("pressed", "#074a8f"), ("disabled", "#d8dee6")],
+        foreground=[("disabled", "#758195")],
+        bordercolor=[("active", colors["primary_active"]), ("disabled", "#d8dee6")],
+    )
+    style.configure(
+        "DialogSecondary.TButton",
+        background="#f8fafc",
+        foreground=colors["text"],
+        bordercolor=colors["border"],
+        focuscolor="#d7ebff",
+        padding=(11, 6),
+        font=(ui_family, 9),
+    )
+    style.map(
+        "DialogSecondary.TButton",
+        background=[("active", "#eef2f7"), ("pressed", "#e5ebf2"), ("disabled", "#eef2f7")],
+        foreground=[("disabled", "#8a95a3")],
+        bordercolor=[("active", "#c8d3df"), ("disabled", "#d8dee6")],
+    )
+    style.configure(
+        "DialogDanger.TButton",
+        background=colors["danger"],
+        foreground="#ffffff",
+        bordercolor=colors["danger"],
+        focuscolor="#fecaca",
+        padding=(12, 6),
+        font=(ui_family, 9, "bold"),
+    )
+    style.map(
+        "DialogDanger.TButton",
+        background=[("active", colors["danger_active"]), ("pressed", "#7f1d1d"), ("disabled", "#eef2f7")],
+        foreground=[("disabled", "#8a95a3")],
+        bordercolor=[("active", colors["danger_active"]), ("disabled", "#d8dee6")],
+    )
+    return colors
+
+
+def _button_style(button_def: dict, cancel_button: str | None) -> str:
+    explicit_style = button_def.get("style")
+    if explicit_style:
+        return explicit_style
+
+    text = str(button_def.get("text", ""))
+    normalized = text.strip().lower()
+    if cancel_button and text == cancel_button:
+        return "DialogSecondary.TButton"
+    if normalized in CLOSE_BUTTON_TEXT or button_def.get("value") is False:
+        return "DialogSecondary.TButton"
+    if button_def.get("danger"):
+        return "DialogDanger.TButton"
+    return "DialogPrimary.TButton"
+
+
+def _localized_title(title: str) -> str:
+    return TITLE_TRANSLATIONS.get(title, title)
+
+
+def _localized_button_text(text: str) -> str:
+    return BUTTON_TRANSLATIONS.get(text, text)
+
+
+def _localized_button_name(name: str | None) -> str | None:
+    return _localized_button_text(name) if name else None
+
+
+def _strip_log_prefix(message: str) -> str:
+    text = (message or "").strip()
+    for prefix in ("[ERROR]", "[WARNING]", "[INFO]", "[SUCCESS]", "[SKIP]"):
+        if text.startswith(prefix):
+            return text[len(prefix) :].strip()
+    return text
+
+
+def _body_heading(title: str, heading: str | None) -> str:
+    text = (heading or "").strip()
+    if not text:
+        return ""
+    return "" if text == title.strip() else text
+
+
 def show_app_dialog(
     parent: tk.Misc,
     title: str,
@@ -55,31 +227,56 @@ def show_app_dialog(
     content_builder: Callable[[DialogContext], None] | None = None,
     width: int = DIALOG_WIDTH,
     modal: bool = True,
+    heading: str | None = None,
 ):
+    colors = _ensure_dialog_styles(parent)
+    title = _localized_title(title)
+    heading = _body_heading(title, _localized_title(heading) if heading else None)
+    default_button = _localized_button_name(default_button)
+    cancel_button = _localized_button_name(cancel_button)
     dialog = tk.Toplevel(parent)
     dialog.withdraw()
     dialog.title(title)
     dialog.transient(parent)
     dialog.resizable(False, False)
-    dialog.configure(background=parent.cget("background") if hasattr(parent, "cget") else None)
+    dialog.configure(background=colors["app_bg"])
     dialog.columnconfigure(0, weight=1)
 
     result = {"value": None}
-    shell = ttk.Frame(dialog, padding=DIALOG_PADDING)
+    shell = ttk.Frame(dialog, padding=DIALOG_PADDING, style="Dialog.TFrame")
     shell.grid(row=0, column=0, sticky="nsew")
     shell.columnconfigure(0, weight=1)
 
+    card = ttk.Frame(shell, padding=(18, 16), style="DialogBody.TFrame")
+    card.grid(row=0, column=0, sticky="nsew")
+    card.columnconfigure(0, weight=1)
+
     row = 0
-    if message:
-        ttk.Label(shell, text=message, wraplength=min(MESSAGE_WRAP, width - 60), justify="left").grid(
+    if heading:
+        ttk.Label(card, text=heading, style="DialogTitle.TLabel").grid(
             row=row,
             column=0,
             sticky="ew",
-            pady=(0, 12),
+            pady=(0, 10 if message else 8),
         )
         row += 1
 
-    body = ttk.Frame(shell)
+    if message:
+        ttk.Label(
+            card,
+            text=message,
+            wraplength=min(MESSAGE_WRAP, width - 60),
+            justify="left",
+            style="DialogMessage.TLabel",
+        ).grid(
+            row=row,
+            column=0,
+            sticky="ew",
+            pady=(0, 14),
+        )
+        row += 1
+
+    body = ttk.Frame(card, style="DialogContent.TFrame")
     body.grid(row=row, column=0, sticky="ew")
     body.columnconfigure(0, weight=1)
     row += 1
@@ -88,9 +285,11 @@ def show_app_dialog(
     if content_builder is not None:
         content_builder(context)
 
-    button_defs = list(buttons or ({"text": "OK", "value": True},))
-    button_frame = ttk.Frame(shell)
-    button_frame.grid(row=row, column=0, sticky="e", pady=(12, 0))
+    button_defs = [dict(button_def) for button_def in (buttons or ({"text": "Đóng", "value": True},))]
+    for button_def in button_defs:
+        button_def["text"] = _localized_button_text(str(button_def.get("text", "")))
+    button_frame = ttk.Frame(card, style="DialogButtonBar.TFrame")
+    button_frame.grid(row=row, column=0, sticky="e", pady=(16, 0))
 
     button_widgets: dict[str, ttk.Button] = {}
 
@@ -110,6 +309,7 @@ def show_app_dialog(
             button_frame,
             text=text,
             width=button_def.get("width", BUTTON_WIDTH),
+            style=_button_style(button_def, cancel_button),
             command=make_command(button_def),
         )
         button.grid(row=0, column=index, padx=(0 if index == 0 else 8, 0))
@@ -174,30 +374,89 @@ def show_info_dialog(parent: tk.Misc, title: str, message: str):
         parent,
         title,
         message=message,
-        buttons=({"text": "OK", "value": True},),
-        default_button="OK",
-        cancel_button="OK",
+        buttons=({"text": "Đóng", "value": True},),
+        default_button="Đóng",
+        cancel_button="Đóng",
     )
 
 
-def show_error_dialog(parent: tk.Misc, title: str, message: str, detail: str | None = None):
-    full_message = message if not detail else f"{message}\n\nChi tiết:\n{detail}"
+def show_error_dialog(
+    parent: tk.Misc,
+    title: str,
+    message: str,
+    detail: str | None = None,
+    heading: str | None = None,
+):
+    clean_message = _strip_log_prefix(message)
+    full_message = clean_message if not detail else f"{clean_message}\n\nChi tiết kỹ thuật:\n{detail}"
     return show_app_dialog(
         parent,
         title,
         message=full_message,
-        buttons=({"text": "OK", "value": True},),
-        default_button="OK",
-        cancel_button="OK",
+        buttons=({"text": "Đóng", "value": True, "style": "DialogDanger.TButton"},),
+        default_button="Đóng",
+        cancel_button="Đóng",
+        heading=heading,
     )
 
 
 def show_copy_text_dialog(parent: tk.Misc, title: str, text: str):
+    copy_state: dict[str, object] = {}
+
+    def copy_text(context: DialogContext) -> None:
+        context.parent.clipboard_clear()
+        context.parent.clipboard_append(text)
+        status_var = copy_state.get("status_var")
+        text_widget = copy_state.get("text_widget")
+        if isinstance(status_var, tk.StringVar):
+            status_var.set("Đã copy.")
+        if isinstance(text_widget, tk.Text):
+            text_widget.focus_set()
+
     def build_content(context: DialogContext) -> None:
-        text_widget = tk.Text(context.body, height=4, width=90, wrap="word", undo=False)
-        text_widget.grid(row=0, column=0, sticky="ew")
+        colors = _ensure_dialog_styles(context.parent)
+        context.body.columnconfigure(0, weight=1)
+
+        text_frame = ttk.Frame(context.body, style="DialogContent.TFrame")
+        text_frame.grid(row=0, column=0, sticky="ew")
+        text_frame.columnconfigure(0, weight=1)
+        text_frame.rowconfigure(0, weight=1)
+
+        text_widget = tk.Text(
+            text_frame,
+            height=7,
+            width=72,
+            wrap="word",
+            undo=False,
+            background=colors["field_bg"],
+            foreground=colors["text"],
+            insertbackground=colors["text"],
+            selectbackground="#d7eaff",
+            selectforeground="#102a43",
+            relief="solid",
+            borderwidth=1,
+            highlightthickness=1,
+            highlightbackground=colors["border"],
+            highlightcolor="#8fc5f5",
+            padx=8,
+            pady=6,
+            font=(colors["mono_family"], 9),
+        )
+        text_widget.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(text_frame, orient="vertical", command=text_widget.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        text_widget.configure(yscrollcommand=scrollbar.set)
         text_widget.insert("1.0", text)
         context.initial_focus = text_widget
+
+        status_var = tk.StringVar(value="")
+        copy_state["status_var"] = status_var
+        copy_state["text_widget"] = text_widget
+        ttk.Label(
+            context.body,
+            textvariable=status_var,
+            style="DialogMuted.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(6, 0))
 
         def select_all(_event=None):
             text_widget.focus_set()
@@ -223,9 +482,12 @@ def show_copy_text_dialog(parent: tk.Misc, title: str, text: str):
     return show_app_dialog(
         parent,
         title,
-        buttons=({"text": "Đóng", "value": True},),
+        buttons=(
+            {"text": "Đóng", "value": True},
+            {"text": "Sao chép", "command": copy_text, "width": 12},
+        ),
         default_button="Đóng",
         cancel_button="Đóng",
         content_builder=build_content,
-        width=560,
+        width=620,
     )

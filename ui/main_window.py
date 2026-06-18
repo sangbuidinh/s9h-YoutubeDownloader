@@ -1,6 +1,7 @@
 import queue
 import threading
 import tkinter as tk
+import urllib.parse
 from datetime import date, datetime
 from pathlib import Path
 from tkinter import filedialog, font, ttk
@@ -107,6 +108,7 @@ class YouTubeDownloaderWindow:
 
         self.api_key_var = tk.StringVar(value=load_last_api_key())
         self.channel_var = tk.StringVar()
+        self.channel_display_var = tk.StringVar(value="Hiển thị: -")
         self.save_folder_var = tk.StringVar()
         self.cookies_enabled_var = tk.BooleanVar(value=False)
         self.cookies_path_var = tk.StringVar()
@@ -131,9 +133,11 @@ class YouTubeDownloaderWindow:
         self.tree_column_fit_in_progress = False
 
         self._build_ui()
+        self.channel_var.trace_add("write", lambda *_args: self._update_channel_input_display())
         self.search_var.trace_add("write", lambda *_args: self._on_search_text_changed())
         self.cookies_path_var.trace_add("write", lambda *_args: self._refresh_cookie_status())
         self.bridge_cookie_path_var.trace_add("write", lambda *_args: self._refresh_cookie_status())
+        self._update_channel_input_display()
         self._update_cookies_state()
         self._refresh_cookie_status()
         self._update_download_button_text()
@@ -176,12 +180,51 @@ class YouTubeDownloaderWindow:
         secondary_bg = "#eaf3ff"
         secondary_active = "#dbeafe"
         secondary_fg = "#175f9f"
+        self._menu_bg = panel_bg
+        self._menu_fg = text
+        self._menu_active_bg = "#d7eaff"
+        self._menu_active_fg = "#102a43"
+        self._menu_disabled_fg = "#8a95a3"
 
         self.root.configure(background=app_bg)
         style.configure(".", font=self._ui_font, background=app_bg, foreground=text)
         style.configure("TFrame", background=app_bg)
         style.configure("TLabel", background=app_bg, foreground=text)
         style.configure("TCheckbutton", background=app_bg, foreground=text)
+        style.configure(
+            "Modern.TCheckbutton",
+            background=app_bg,
+            foreground=text,
+            font=self._ui_font,
+            padding=(2, 3),
+            focuscolor="#bfdbfe",
+        )
+        style.map(
+            "Modern.TCheckbutton",
+            background=[
+                ("active", app_bg),
+                ("selected", app_bg),
+                ("disabled", app_bg),
+            ],
+            foreground=[
+                ("disabled", "#8a95a3"),
+                ("active", text),
+                ("selected", text),
+            ],
+            indicatorcolor=[
+                ("selected", primary),
+                ("pressed", primary_active),
+                ("active", "#d7eaff"),
+                ("disabled", "#d8dee6"),
+                ("!selected", "#ffffff"),
+            ],
+            bordercolor=[
+                ("selected", primary),
+                ("focus", "#8fc5f5"),
+                ("active", "#8fc5f5"),
+                ("disabled", "#d8dee6"),
+            ],
+        )
         style.configure(
             "TEntry",
             fieldbackground=panel_bg,
@@ -211,6 +254,25 @@ class YouTubeDownloaderWindow:
         )
         style.map(
             "TCombobox",
+            fieldbackground=[("readonly", panel_bg), ("disabled", "#eef2f7")],
+            foreground=[("disabled", muted)],
+            arrowcolor=[("disabled", "#9aa4b2")],
+            bordercolor=[("focus", "#8fc5f5")],
+        )
+        style.configure(
+            "StatusEditor.TCombobox",
+            fieldbackground=panel_bg,
+            foreground=text,
+            background=panel_bg,
+            arrowcolor=muted,
+            bordercolor="#8fc5f5",
+            lightcolor="#8fc5f5",
+            darkcolor=border,
+            padding=(5, 3),
+            font=self._ui_font,
+        )
+        style.map(
+            "StatusEditor.TCombobox",
             fieldbackground=[("readonly", panel_bg), ("disabled", "#eef2f7")],
             foreground=[("disabled", muted)],
             arrowcolor=[("disabled", "#9aa4b2")],
@@ -286,6 +348,7 @@ class YouTubeDownloaderWindow:
             bordercolor=[("active", danger_active), ("disabled", "#d8dee6")],
         )
         style.configure("CookieStatus.TLabel", foreground=muted, background=app_bg, font=(ui_family, 8))
+        style.configure("ChannelDisplay.TLabel", foreground=muted, background=app_bg, font=(ui_family, 8))
         style.configure(
             "Treeview",
             background=panel_bg,
@@ -336,8 +399,8 @@ class YouTubeDownloaderWindow:
         right = ttk.Frame(main)
         right.grid(row=0, column=1, sticky="nsew")
         right.columnconfigure(0, weight=1)
-        right.rowconfigure(0, weight=5)
-        right.rowconfigure(1, weight=1)
+        right.rowconfigure(0, weight=1)
+        right.rowconfigure(1, weight=2)
 
         source_frame = ttk.LabelFrame(left, text="Nguồn", padding=(12, 10), style="Grouped.TLabelframe")
         source_frame.grid(row=0, column=0, sticky="ew", pady=(0, 12))
@@ -359,6 +422,14 @@ class YouTubeDownloaderWindow:
             style="Primary.TButton",
         )
         self.fetch_button.grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=2)
+        self.channel_display_label = ttk.Label(
+            source_frame,
+            textvariable=self.channel_display_var,
+            style="ChannelDisplay.TLabel",
+            width=62,
+            anchor="w",
+        )
+        self.channel_display_label.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(2, 0))
 
         filter_frame = ttk.LabelFrame(left, text="Bộ lọc", padding=(12, 10), style="Grouped.TLabelframe")
         filter_frame.grid(row=1, column=0, sticky="ew", pady=(0, 12))
@@ -373,6 +444,7 @@ class YouTubeDownloaderWindow:
         )
         self.filter_box.grid(row=0, column=1, sticky="ew", pady=2)
         self.filter_box.bind("<<ComboboxSelected>>", lambda _event: self.apply_filter())
+        self._block_combobox_mousewheel(self.filter_box)
 
         ttk.Label(filter_frame, text="Tìm kiếm tiêu đề").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=2)
         search_frame = ttk.Frame(filter_frame)
@@ -391,6 +463,7 @@ class YouTubeDownloaderWindow:
             text="Hiển thị video ngắn",
             variable=self.show_short_videos_var,
             command=self._on_short_video_filter_changed,
+            style="Modern.TCheckbutton",
         )
         self.short_videos_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 2))
 
@@ -406,6 +479,7 @@ class YouTubeDownloaderWindow:
         )
         self.threshold_box.grid(row=0, column=1, sticky="w")
         self.threshold_box.bind("<<ComboboxSelected>>", lambda _event: self._on_short_video_filter_changed())
+        self._block_combobox_mousewheel(self.threshold_box)
         ttk.Label(threshold_frame, text="phút").grid(row=0, column=2, sticky="w", padx=(4, 0))
 
         table_group = ttk.LabelFrame(right, text="Danh sách video", padding=(12, 10), style="Grouped.TLabelframe")
@@ -435,7 +509,18 @@ class YouTubeDownloaderWindow:
         self.tree.bind("<ButtonRelease-1>", self._on_tree_button_release, add="+")
         self.tree.bind("<Configure>", self._on_tree_configure, add="+")
         self._schedule_tree_column_fit()
-        self.status_menu = tk.Menu(self.root, tearoff=0)
+        self.status_menu = tk.Menu(
+            self.root,
+            tearoff=0,
+            background=getattr(self, "_menu_bg", "#ffffff"),
+            foreground=getattr(self, "_menu_fg", "#1f2937"),
+            activebackground=getattr(self, "_menu_active_bg", "#d7eaff"),
+            activeforeground=getattr(self, "_menu_active_fg", "#102a43"),
+            disabledforeground=getattr(self, "_menu_disabled_fg", "#8a95a3"),
+            font=getattr(self, "_ui_font", ("Segoe UI", 9)),
+            borderwidth=1,
+            relief="solid",
+        )
         self.status_menu.add_command(
             label="Đánh dấu là Đã tải",
             command=lambda: self._apply_manual_status_to_selected("Đã tải"),
@@ -509,6 +594,7 @@ class YouTubeDownloaderWindow:
             text="Sử dụng Cookies",
             variable=self.cookies_enabled_var,
             command=self._update_cookies_state,
+            style="Modern.TCheckbutton",
         )
         self.cookies_check.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 2))
 
@@ -522,32 +608,39 @@ class YouTubeDownloaderWindow:
         )
         self.cookie_source_box.grid(row=2, column=1, sticky="w", pady=2)
         self.cookie_source_box.bind("<<ComboboxSelected>>", lambda _event: self._on_cookie_source_changed())
+        self._block_combobox_mousewheel(self.cookie_source_box)
 
-        self.cookies_path_label = ttk.Label(output_frame, text="Đường dẫn file cookie")
-        self.cookies_path_label.grid(row=3, column=0, sticky="w", padx=(0, 8), pady=2)
-        self.cookies_entry = ttk.Entry(output_frame, textvariable=self.cookies_path_var, state="disabled")
-        self.cookies_entry.grid(row=3, column=1, sticky="ew", pady=2)
-        self.cookies_button = ttk.Button(output_frame, text="Chọn cookies*.txt", command=self.choose_cookies_file)
-        self.cookies_button.configure(style="SecondaryAccent.TButton")
-        self.cookies_button.grid(row=3, column=2, sticky="ew", padx=(8, 0), pady=2)
-
-        self.bridge_cookie_path_label = ttk.Label(output_frame, text="Đường dẫn cookie bridge")
-        self.bridge_cookie_path_label.grid(row=3, column=0, sticky="w", padx=(0, 8), pady=2)
-        self.bridge_cookie_entry = ttk.Entry(output_frame, textvariable=self.bridge_cookie_path_var, state="disabled")
-        self.bridge_cookie_entry.grid(row=3, column=1, sticky="ew", pady=2)
-        self.bridge_cookie_button = ttk.Button(
+        self.cookie_path_label = ttk.Label(output_frame, text="File cookie", width=16)
+        self.cookie_path_label.grid(row=3, column=0, sticky="w", padx=(0, 8), pady=2)
+        self.cookie_path_entry = ttk.Entry(
             output_frame,
-            text="Chọn youtube_cookies.txt",
-            command=self.choose_bridge_cookie_file,
+            textvariable=self.cookies_path_var,
+            state="disabled",
+            width=26,
         )
-        self.bridge_cookie_button.configure(style="SecondaryAccent.TButton")
-        self.bridge_cookie_button.grid(row=3, column=2, sticky="ew", padx=(8, 0), pady=2)
+        self.cookie_path_entry.grid(row=3, column=1, sticky="ew", pady=2)
+        self.cookie_path_button = ttk.Button(
+            output_frame,
+            text="Chọn cookies*.txt",
+            command=self.choose_cookies_file,
+            width=22,
+            style="SecondaryAccent.TButton",
+        )
+        self.cookie_path_button.grid(row=3, column=2, sticky="ew", padx=(8, 0), pady=2)
+        self.cookies_path_label = self.cookie_path_label
+        self.cookies_entry = self.cookie_path_entry
+        self.cookies_button = self.cookie_path_button
+        self.bridge_cookie_path_label = self.cookie_path_label
+        self.bridge_cookie_entry = self.cookie_path_entry
+        self.bridge_cookie_button = self.cookie_path_button
         self.cookie_status_label = ttk.Label(
             output_frame,
             textvariable=self.cookie_status_var,
             style="CookieStatus.TLabel",
+            width=48,
+            anchor="w",
         )
-        self.cookie_status_label.grid(row=4, column=1, columnspan=2, sticky="w", pady=(0, 2))
+        self.cookie_status_label.grid(row=4, column=1, columnspan=2, sticky="ew", pady=(0, 2))
 
         download_frame = ttk.LabelFrame(left, text="Tải xuống", padding=(12, 10), style="Grouped.TLabelframe")
         download_frame.grid(row=3, column=0, sticky="ew")
@@ -563,6 +656,7 @@ class YouTubeDownloaderWindow:
         )
         self.mode_box.grid(row=0, column=1, columnspan=2, sticky="ew", pady=2)
         self.mode_box.bind("<<ComboboxSelected>>", lambda _event: self._on_download_mode_changed())
+        self._block_combobox_mousewheel(self.mode_box)
 
         ttk.Label(download_frame, text="Giới hạn tốc độ").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=2)
         speed_frame = ttk.Frame(download_frame)
@@ -638,7 +732,7 @@ class YouTubeDownloaderWindow:
         if not channel_input:
             friendly = self._friendly_general_message("Cannot resolve channel")
             self._append_log(friendly)
-            show_error_dialog(self.root, "Error", friendly)
+            self._show_error_dialog(friendly)
             return
 
         manual_key = self.api_key_var.get().strip()
@@ -692,25 +786,51 @@ class YouTubeDownloaderWindow:
                 if save_last_api_key(manual_key):
                     self._thread_log(f"[INFO] Saved last API key: {mask_api_key(manual_key)}")
                 else:
-                    self._thread_log("[WARNING] Could not save last API key.")
+                    self._thread_log("[WARNING] Không thể lưu API key gần nhất.")
             hidden_short_videos = self._short_video_count(videos, threshold_minutes)
             if not show_short_videos and hidden_short_videos:
                 self._thread_log(
-                    f"[INFO] Hidden short videos: {hidden_short_videos} under {threshold_minutes} minutes."
+                    f"[INFO] Đã ẩn {hidden_short_videos} video ngắn dưới {threshold_minutes} phút."
                 )
             self.events.put(("fetch_done", channel, videos, next_page_token))
             visible_count = len(videos) if show_short_videos else len(videos) - hidden_short_videos
-            self._thread_log(f"[SUCCESS] Loaded {visible_count} videos after filtering short videos.")
+            self._thread_log(f"[SUCCESS] Đã nạp {visible_count} video sau khi lọc video ngắn.")
         except YoutubeApiError as exc:
             self.events.put(("fetch_error", self._friendly_api_message(exc)))
         except Exception as exc:
             self.events.put(("fetch_error", self._friendly_general_message(str(exc) or "Network error")))
 
+    def _update_channel_input_display(self) -> None:
+        self.channel_display_var.set(self._format_channel_display(self.channel_var.get()))
+
+    def _format_channel_display(self, raw_text: str) -> str:
+        text = (raw_text or "").strip()
+        if not text:
+            return "Hiển thị: -"
+        decoded = urllib.parse.unquote(text)
+        return f"Hiển thị: {self._shorten_middle(decoded, max_length=72)}"
+
+    def _shorten_middle(self, text: str, max_length: int = 90) -> str:
+        value = text or ""
+        if len(value) <= max_length:
+            return value
+        if max_length <= 3:
+            return "." * max_length
+        keep = max_length - 3
+        left = keep // 2
+        right = keep - left
+        return f"{value[:left]}...{value[-right:]}"
+
+    def _set_resolved_channel_display(self, channel) -> None:
+        channel_name = (getattr(channel, "channel_name", "") or "-").strip()
+        channel_id = (getattr(channel, "channel_id", "") or "-").strip()
+        self.channel_display_var.set(self._shorten_middle(f"Kênh: {channel_name} • {channel_id}", max_length=72))
+
     def start_load_more(self) -> None:
         if self.loading_more or self.fetching or self.downloading:
             return
         if not self.channel_info or not self.next_page_token:
-            self._append_log("[INFO] No more videos.")
+            self._append_log("[INFO] Không còn video nào.")
             self.next_page_token = ""
             self._update_more_button_state()
             return
@@ -741,7 +861,7 @@ class YouTubeDownloaderWindow:
         threshold_minutes: int,
     ) -> None:
         try:
-            self._thread_log("[INFO] Loading next 100 videos...")
+            self._thread_log("[INFO] Đang nạp thêm 100 video tiếp theo...")
             videos, next_page_token = fetch_more_videos(
                 uploads_playlist_id,
                 page_token,
@@ -754,22 +874,30 @@ class YouTubeDownloaderWindow:
             hidden_short_videos = self._short_video_count(videos, threshold_minutes)
             if not show_short_videos and hidden_short_videos:
                 self._thread_log(
-                    f"[INFO] Hidden short videos: {hidden_short_videos} under {threshold_minutes} minutes."
+                    f"[INFO] Đã ẩn {hidden_short_videos} video ngắn dưới {threshold_minutes} phút."
                 )
             if videos:
                 visible_count = len(videos) if show_short_videos else len(videos) - hidden_short_videos
-                self._thread_log(f"[SUCCESS] Loaded {visible_count} more videos after filtering short videos.")
+                self._thread_log(f"[SUCCESS] Đã nạp thêm {visible_count} video sau khi lọc video ngắn.")
             if not next_page_token:
-                self._thread_log("[INFO] No more videos.")
+                self._thread_log("[INFO] Không còn video nào.")
         except YoutubeApiError as exc:
             self.events.put(("load_more_error", self._friendly_api_message(exc)))
         except Exception as exc:
             self.events.put(("load_more_error", self._friendly_general_message(str(exc) or "Network error")))
 
+    def _block_combobox_mousewheel(self, combobox: ttk.Combobox) -> None:
+        combobox.bind("<MouseWheel>", self._ignore_combobox_mousewheel, add="+")
+        combobox.bind("<Button-4>", self._ignore_combobox_mousewheel, add="+")
+        combobox.bind("<Button-5>", self._ignore_combobox_mousewheel, add="+")
+
+    def _ignore_combobox_mousewheel(self, _event=None):
+        return "break"
+
     def choose_save_folder(self) -> None:
         if self.downloading:
             return
-        folder = filedialog.askdirectory(title="Choose save folder")
+        folder = filedialog.askdirectory(title="Chọn thư mục lưu")
         if not folder:
             return
         self.save_folder_var.set(folder)
@@ -789,8 +917,8 @@ class YouTubeDownloaderWindow:
         if self.downloading:
             return
         path = filedialog.askopenfilename(
-            title="Choose cookies*.txt",
-            filetypes=(("Cookies files", "cookies*.txt"), ("Text files", "*.txt"), ("All files", "*.*")),
+            title="Chọn cookies*.txt",
+            filetypes=(("Tệp cookies", "cookies*.txt"), ("Tệp văn bản", "*.txt"), ("Tất cả tệp", "*.*")),
         )
         if path:
             self.cookies_path_var.set(path)
@@ -800,8 +928,8 @@ class YouTubeDownloaderWindow:
         if self.downloading:
             return
         path = filedialog.askopenfilename(
-            title="Choose youtube_cookies.txt",
-            filetypes=(("YouTube cookies", "youtube_cookies.txt"), ("Text files", "*.txt"), ("All files", "*.*")),
+            title="Chọn youtube_cookies.txt",
+            filetypes=(("Cookie YouTube", "youtube_cookies.txt"), ("Tệp văn bản", "*.txt"), ("Tất cả tệp", "*.*")),
         )
         if path:
             self.bridge_cookie_path_var.set(path)
@@ -825,22 +953,22 @@ class YouTubeDownloaderWindow:
 
     def _refresh_cookie_status(self) -> None:
         if not self.cookies_enabled_var.get():
-            self.cookie_status_var.set("Cookies disabled")
+            self.cookie_status_var.set("Cookies: tắt")
             return
 
         if self._current_cookie_source() == COOKIE_SOURCE_BRIDGE:
             self.cookie_status_var.set(
-                self._cookie_file_metadata_status("Bridge file", self.bridge_cookie_path_var.get().strip())
+                self._cookie_file_metadata_status("Cookie Bridge", self.bridge_cookie_path_var.get().strip())
             )
             return
 
         self.cookie_status_var.set(
-            self._cookie_file_metadata_status("Cookie file", self.cookies_path_var.get().strip())
+            self._cookie_file_metadata_status("File cookie", self.cookies_path_var.get().strip())
         )
 
     def _cookie_file_metadata_status(self, label: str, path_text: str) -> str:
         if not path_text:
-            return f"{label}: No file selected"
+            return f"{label}: chưa chọn file"
 
         path = Path(path_text)
         try:
@@ -848,10 +976,10 @@ class YouTubeDownloaderWindow:
             if not path.is_file():
                 raise OSError
         except OSError:
-            return f"{label}: Missing"
+            return f"{label}: không tìm thấy"
 
         updated = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-        return f"{label}: Found \u2022 {stat.st_size} bytes \u2022 updated {updated}"
+        return f"{label}: tìm thấy \u2022 {stat.st_size} byte \u2022 cập nhật {updated}"
 
     def _on_download_mode_changed(self) -> None:
         if self.downloading:
@@ -876,8 +1004,8 @@ class YouTubeDownloaderWindow:
         if self.downloading:
             return
         if not self.videos:
-            self._append_log("[ERROR] No videos loaded")
-            show_error_dialog(self.root, "Error", "No videos loaded.")
+            self._append_log("[ERROR] Chưa có video nào trong danh sách.")
+            self._show_error_dialog("Chưa có video nào trong danh sách.", title="Chưa có video")
             return
 
         from_var = tk.StringVar()
@@ -896,6 +1024,7 @@ class YouTubeDownloaderWindow:
                 body,
                 text="Chỉ chọn video chưa tải",
                 variable=not_downloaded_only_var,
+                style="Modern.TCheckbutton",
             ).grid(row=2, column=0, columnspan=2, sticky="w")
             context.initial_focus = from_entry
 
@@ -930,14 +1059,14 @@ class YouTubeDownloaderWindow:
             from_date = self._parse_dialog_date(from_text, "Từ ngày")
             to_date = self._parse_dialog_date(to_text, "Đến ngày")
         except ValueError as exc:
-            show_error_dialog(self.root, "Error", str(exc))
+            self._show_error_dialog(str(exc))
             return
 
         if from_date > to_date:
-            show_error_dialog(self.root, "Error", "Từ ngày không được sau Đến ngày.")
+            self._show_error_dialog("Từ ngày không được sau Đến ngày.")
             return
 
-        self._append_log("[INFO] Selecting videos by upload date...")
+        self._append_log("[INFO] Đang chọn video theo ngày đăng...")
         matched_orders: set[int] = set()
         for video in self.videos:
             if not self._video_allowed_by_short_video_setting(video):
@@ -955,11 +1084,11 @@ class YouTubeDownloaderWindow:
         self.apply_filter()
         if matched_orders:
             self._append_log(
-                f"[SUCCESS] Selected {len(matched_orders)} videos from {from_date.isoformat()} to {to_date.isoformat()}."
+                f"[SUCCESS] Đã chọn {len(matched_orders)} video từ {from_date.isoformat()} đến {to_date.isoformat()}."
             )
             context.close(True)
         else:
-            self._append_log("[WARNING] No videos matched the selected date range.")
+            self._append_log("[WARNING] Không có video nào khớp với khoảng ngày đã chọn.")
 
     def _parse_dialog_date(self, value: str, label: str) -> date:
         text = (value or "").strip()
@@ -982,41 +1111,35 @@ class YouTubeDownloaderWindow:
 
         if self.downloading or not cookies_enabled:
             source_state = "disabled"
-            manual_entry_state = "disabled"
-            manual_button_state = "disabled"
-            bridge_entry_state = "disabled"
-            bridge_button_state = "disabled"
+            path_entry_state = "disabled"
+            path_button_state = "disabled"
         else:
             source_state = "readonly"
-            manual_entry_state = "readonly" if source == COOKIE_SOURCE_FILE else "disabled"
-            manual_button_state = "normal" if source == COOKIE_SOURCE_FILE else "disabled"
-            bridge_entry_state = "readonly" if source == COOKIE_SOURCE_BRIDGE else "disabled"
-            bridge_button_state = "normal" if source == COOKIE_SOURCE_BRIDGE else "disabled"
+            path_entry_state = "readonly"
+            path_button_state = "normal"
 
-        self.cookies_entry.configure(state=manual_entry_state)
-        self.cookies_button.configure(state=manual_button_state)
         self.cookie_source_box.configure(state=source_state)
-        self.bridge_cookie_entry.configure(state=bridge_entry_state)
-        self.bridge_cookie_button.configure(state=bridge_button_state)
-        self._update_cookie_row_visibility(source)
+        self._configure_cookie_path_row(source, path_entry_state, path_button_state)
         self._refresh_cookie_status()
 
-    def _update_cookie_row_visibility(self, source: str) -> None:
+    def _configure_cookie_path_row(self, source: str, entry_state: str, button_state: str) -> None:
         if source == COOKIE_SOURCE_BRIDGE:
-            self.cookies_path_label.grid_remove()
-            self.cookies_entry.grid_remove()
-            self.cookies_button.grid_remove()
-            self.bridge_cookie_path_label.grid()
-            self.bridge_cookie_entry.grid()
-            self.bridge_cookie_button.grid()
+            self.cookie_path_entry.configure(textvariable=self.bridge_cookie_path_var)
+            self.cookie_path_button.configure(
+                text="Chọn youtube_cookies.txt",
+                command=self.choose_bridge_cookie_file,
+                state=button_state,
+            )
+            self.cookie_path_entry.configure(state=entry_state)
             return
 
-        self.cookies_path_label.grid()
-        self.cookies_entry.grid()
-        self.cookies_button.grid()
-        self.bridge_cookie_path_label.grid_remove()
-        self.bridge_cookie_entry.grid_remove()
-        self.bridge_cookie_button.grid_remove()
+        self.cookie_path_entry.configure(textvariable=self.cookies_path_var)
+        self.cookie_path_button.configure(
+            text="Chọn cookies*.txt",
+            command=self.choose_cookies_file,
+            state=button_state,
+        )
+        self.cookie_path_entry.configure(state=entry_state)
 
     def start_download(self) -> None:
         if self.downloading:
@@ -1036,7 +1159,7 @@ class YouTubeDownloaderWindow:
         except ValueError:
             friendly = self._friendly_general_message("Invalid speed limit")
             self._append_log(friendly)
-            show_error_dialog(self.root, "Error", friendly)
+            self._show_error_dialog(friendly)
             return
 
         options = DownloadOptions(
@@ -1058,7 +1181,7 @@ class YouTubeDownloaderWindow:
         except DownloadError as exc:
             friendly = self._friendly_general_message(str(exc))
             self._append_log(friendly)
-            show_error_dialog(self.root, "Error", friendly)
+            self._show_error_dialog(friendly)
             return
 
         self.downloading = True
@@ -1123,12 +1246,12 @@ class YouTubeDownloaderWindow:
             self.events.put(("download_done",))
         except DownloadError as exc:
             self._enqueue_progress_event(
-                ProgressEvent(kind="error", phase="Error", message=self._friendly_general_message(str(exc)))
+                ProgressEvent(kind="error", phase="Lỗi", message=self._friendly_general_message(str(exc)))
             )
             self.events.put(("download_error", self._friendly_general_message(str(exc))))
         except Exception as exc:
             self._enqueue_progress_event(
-                ProgressEvent(kind="error", phase="Error", message=self._friendly_general_message(str(exc)))
+                ProgressEvent(kind="error", phase="Lỗi", message=self._friendly_general_message(str(exc)))
             )
             self.events.put(("download_error", self._friendly_general_message(str(exc))))
 
@@ -1648,7 +1771,10 @@ class YouTubeDownloaderWindow:
             self.tree,
             values=SUPPORTED_STATUS_VALUES,
             state="readonly",
+            font=self._ui_font,
+            style="StatusEditor.TCombobox",
         )
+        self._block_combobox_mousewheel(editor)
         current_status = video.status if video.status in SUPPORTED_STATUS_VALUES else SUPPORTED_STATUS_VALUES[0]
         editor.set(current_status)
         editor.place(x=x, y=y, width=width, height=height)
@@ -1675,7 +1801,7 @@ class YouTubeDownloaderWindow:
         editor.bind("<Escape>", cancel)
 
     def _show_title_copy_popup(self, title: str) -> None:
-        show_copy_text_dialog(self.root, "Copy video title", title)
+        show_copy_text_dialog(self.root, "Sao chép tiêu đề video", title)
 
     def _on_tree_space(self, _event):
         if self.downloading:
@@ -1804,7 +1930,7 @@ class YouTubeDownloaderWindow:
             )
         except OSError as exc:
             self._append_log(f"[ERROR] Could not save manual status: {exc}")
-            show_error_dialog(self.root, "Error", f"Could not save manual status:\n{exc}")
+            self._show_error_dialog("Không thể lưu trạng thái thủ công.", detail=str(exc))
             return
 
         video.status = status
@@ -1832,7 +1958,7 @@ class YouTubeDownloaderWindow:
                 )
             except OSError as exc:
                 self._append_log(f"[ERROR] Could not save manual status: {exc}")
-                show_error_dialog(self.root, "Error", f"Could not save manual status:\n{exc}")
+                self._show_error_dialog("Không thể lưu trạng thái thủ công.", detail=str(exc))
                 break
             video.status = status
             self._append_log(f"[INFO] Manual status override applied: {video.title} -> {status}")
@@ -1860,7 +1986,7 @@ class YouTubeDownloaderWindow:
                 )
             except OSError as exc:
                 self._append_log(f"[ERROR] Could not clear manual status: {exc}")
-                show_error_dialog(self.root, "Error", f"Could not clear manual status:\n{exc}")
+                self._show_error_dialog("Không thể xóa trạng thái thủ công.", detail=str(exc))
                 break
 
         apply_statuses(
@@ -2071,6 +2197,31 @@ class YouTubeDownloaderWindow:
     def _friendly_general_message(self, message: str) -> str:
         return format_friendly_error(classify_general_error(message), [message])
 
+    def _show_error_dialog(self, message: str, title: str = "Lỗi", detail: str | None = None) -> None:
+        clean_message = self._dialog_message_without_log_prefix(message)
+        show_error_dialog(
+            self.root,
+            title,
+            clean_message,
+            detail=detail,
+            heading=self._dialog_error_heading(clean_message, title),
+        )
+
+    def _dialog_message_without_log_prefix(self, message: str) -> str:
+        text = (message or "").strip()
+        for prefix in ("[ERROR]", "[WARNING]", "[INFO]", "[SUCCESS]", "[SKIP]"):
+            if text.startswith(prefix):
+                return text[len(prefix) :].strip()
+        return text
+
+    def _dialog_error_heading(self, message: str, title: str) -> str | None:
+        if title.strip() != "Lỗi":
+            return None
+        first_line = (message or "").strip().splitlines()[0] if (message or "").strip() else ""
+        if first_line.startswith("Không tìm thấy kênh"):
+            return "Không tìm thấy kênh"
+        return None
+
     def _process_events(self) -> None:
         try:
             while True:
@@ -2090,10 +2241,11 @@ class YouTubeDownloaderWindow:
             self.next_page_token = event[3]
             self.fetching = False
             self.fetch_button.configure(state="normal")
+            self._set_resolved_channel_display(self.channel_info)
             self.apply_filter()
             self._update_more_button_state()
             if not self.next_page_token:
-                self._append_log("[INFO] No more videos.")
+                self._append_log("[INFO] Không còn video nào.")
         elif kind == "fetch_error":
             self._append_log(event[1])
             self.next_page_token = ""
