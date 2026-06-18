@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+BUILD_DIR = REPO_ROOT / "build" / "Youtube Downloaderbs"
 DIST_EXE = REPO_ROOT / "dist" / "Youtube Downloaderbs.exe"
 APP_ICON_ICO = REPO_ROOT / "assets" / "app_icon.ico"
 APP_ICON_PNG = REPO_ROOT / "assets" / "app_icon.png"
@@ -47,6 +48,7 @@ def main() -> int:
     print(f"repo_root: {REPO_ROOT}")
     print("pyinstaller_mode: onefile windowed app.py")
     print(f"icon: {APP_ICON_ICO}")
+    _ensure_icon_assets()
     for command in PREFLIGHT_COMMANDS:
         _run(command)
 
@@ -54,6 +56,7 @@ def main() -> int:
         print("preflight_only: build skipped")
         return 0
 
+    _remove_build_output()
     pyinstaller = _pyinstaller_command()
     _run(
         (
@@ -85,6 +88,20 @@ def main() -> int:
     print("  data/api key.txt if used")
     print("  user-selected cookies files if used")
     return 0
+
+
+def _ensure_icon_assets() -> None:
+    missing = [path for path in (APP_ICON_ICO, APP_ICON_PNG) if not path.is_file()]
+    if missing:
+        names = ", ".join(str(path) for path in missing)
+        raise FileNotFoundError(f"Missing icon asset(s): {names}")
+
+
+def _remove_build_output() -> None:
+    if BUILD_DIR.exists():
+        shutil.rmtree(BUILD_DIR)
+    if DIST_EXE.exists():
+        DIST_EXE.unlink()
 
 
 def _run(command: tuple[str, ...]) -> None:

@@ -206,7 +206,11 @@ Khi chạy từ source, dữ liệu app nằm trong thư mục `data` của repo
 Chạy từ thư mục gốc của repository:
 
 ```powershell
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name "Youtube Downloaderbs" app.py
+python -m PyInstaller --noconfirm --clean --onefile --windowed `
+  --icon "assets\app_icon.ico" `
+  --add-data "assets\app_icon.ico;assets" `
+  --add-data "assets\app_icon.png;assets" `
+  --name "Youtube Downloaderbs" app.py
 ```
 
 Output dự kiến:
