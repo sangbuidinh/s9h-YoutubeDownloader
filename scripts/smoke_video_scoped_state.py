@@ -1,3 +1,4 @@
+import sqlite3
 import sys
 from contextlib import closing, contextmanager
 from pathlib import Path
@@ -27,7 +28,7 @@ def main() -> int:
     _test_downloader_skip_is_video_level()
     _test_manual_status_is_video_level()
     _test_redownload_clears_manual_override_globally()
-    _test_duplicate_folder_rows_aggregate_to_one_video()
+    _test_v3_duplicate_folder_rows_migrate_to_one_video()
     print("video-scoped state smoke tests passed")
     return 0
 
@@ -136,21 +137,22 @@ def _test_redownload_clears_manual_override_globally() -> None:
             _assert(calls == {"video": 1, "thumb": 1}, "re-download did not run required fake downloads")
 
 
-def _test_duplicate_folder_rows_aggregate_to_one_video() -> None:
+def _test_v3_duplicate_folder_rows_migrate_to_one_video() -> None:
     with _temp_runtime() as paths:
         _seed_duplicate_rows(paths["db_path"])
         with _patched_db_file(paths["db_path"]):
             entry = state_store.get_video_entry(CHANNEL_ID, VIDEO_ID)
             entries = state_store.get_channel_video_entries(CHANNEL_ID)
 
+        _assert(_count_items(paths["db_path"]) == 1, "schema-v3 duplicate rows did not migrate to one physical row")
         _assert(
             state_store.get_effective_status(entry, MODE_VIDEO_THUMB) == state_store.STATUS_DOWNLOADED,
-            "duplicate folder rows did not aggregate to downloaded",
+            "migrated duplicate folder rows did not produce downloaded state",
         )
-        _assert(list(entries) == [VIDEO_ID], "channel entries did not collapse duplicate rows to video_id")
+        _assert(list(entries) == [VIDEO_ID], "channel entries did not expose one logical video_id")
         _assert(
             state_store.get_effective_status(entries[VIDEO_ID], MODE_VIDEO_THUMB) == state_store.STATUS_DOWNLOADED,
-            "channel aggregate entry was not downloaded",
+            "channel entry after migration was not downloaded",
         )
 
 
@@ -171,15 +173,92 @@ def _seed_downloaded(save_base_folder: str) -> None:
 
 
 def _seed_duplicate_rows(db_path: Path) -> None:
-    db_store.init_db(db_path)
+    _create_v3_database(db_path)
     now = "2026-01-01T00:00:00+00:00"
-    with closing(db_store.connect_db(db_path)) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         channel_a = _insert_channel(conn, FOLDER_A, now)
         channel_blank = _insert_channel(conn, "", now)
         item_a = _insert_item(conn, channel_a, FOLDER_A, state_store.STATUS_DOWNLOADED, now)
         _insert_file(conn, item_a, PART_VIDEO, state_store.STATUS_DOWNLOADED, "same-video.mp4", "D:/A/Channel/video/same-video.mp4", now)
         _insert_file(conn, item_a, PART_THUMB, state_store.STATUS_DOWNLOADED, "same-video.jpg", "D:/A/Channel/thumb/same-video.jpg", now)
         _insert_item(conn, channel_blank, "", state_store.STATUS_NOT_DOWNLOADED, now)
+        conn.commit()
+
+
+def _create_v3_database(db_path: Path) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    now = "2026-01-01T00:00:00+00:00"
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE app_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE app_schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            );
+            CREATE TABLE channels (
+                id INTEGER PRIMARY KEY,
+                platform TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                channel_name TEXT NULL,
+                save_base_folder_raw TEXT NULL,
+                save_base_folder_norm TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(platform, channel_id, save_base_folder_norm)
+            );
+            CREATE TABLE download_items (
+                id INTEGER PRIMARY KEY,
+                channel_db_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                platform TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                video_id TEXT NOT NULL,
+                save_base_folder_raw TEXT NULL,
+                save_base_folder_norm TEXT NOT NULL,
+                original_title TEXT NULL,
+                sanitized_filename_base TEXT NOT NULL,
+                display_order_at_download INTEGER NULL,
+                status TEXT NULL,
+                manual_status TEXT NULL,
+                manual_override INTEGER NULL CHECK(manual_override IN (0, 1) OR manual_override IS NULL),
+                downloaded_at TEXT NULL,
+                updated_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(platform, channel_id, video_id, save_base_folder_norm),
+                FOREIGN KEY(channel_db_id) REFERENCES channels(id) ON DELETE CASCADE
+            );
+            CREATE TABLE download_files (
+                id INTEGER PRIMARY KEY,
+                item_id INTEGER NOT NULL REFERENCES download_items(id) ON DELETE CASCADE,
+                part TEXT NOT NULL CHECK(part IN ('video', 'thumb', 'audio')),
+                status TEXT NULL,
+                filename_raw TEXT NULL,
+                filename_norm TEXT NULL,
+                path_raw TEXT NULL,
+                path_norm TEXT NULL,
+                is_valid INTEGER NOT NULL DEFAULT 1 CHECK(is_valid IN (0, 1)),
+                validation_reason TEXT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(item_id, part),
+                FOREIGN KEY(item_id) REFERENCES download_items(id) ON DELETE CASCADE
+            );
+            CREATE INDEX idx_download_items_channel ON download_items(channel_db_id);
+            CREATE INDEX idx_download_items_channel_folder ON download_items(platform, channel_id, save_base_folder_norm);
+            CREATE INDEX idx_download_files_path_norm ON download_files(path_norm);
+            """
+        )
+        conn.execute("INSERT INTO app_meta(key, value, updated_at) VALUES ('schema_version', '3', ?)", (now,))
+        for version in (1, 2, 3):
+            conn.execute(
+                "INSERT INTO app_schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+                (version, db_store.APPLICATION_MIGRATION_NAMES[version], now),
+            )
         conn.commit()
 
 
@@ -254,12 +333,30 @@ def _patched_downloader_transfers(calls: dict[str, int]):
     old_log_runtime_tool_summary = downloader._log_runtime_tool_summary
     old_validate_download_environment = downloader.validate_download_environment
 
-    def fake_download_video(_video_id, _stem, _temp_dir, final_path, _options, _log, _cancel_controller=None):
+    def fake_download_video(
+        _video_id,
+        _stem,
+        _temp_dir,
+        final_path,
+        _options,
+        _log,
+        _cancel_controller=None,
+        _cookie_retry_state=None,
+    ):
         calls["video"] += 1
         final_path.parent.mkdir(parents=True, exist_ok=True)
         final_path.write_bytes(b"mp4")
 
-    def fake_download_thumbnail(_video, _stem, _temp_dir, final_path, _options, _log, _cancel_controller=None):
+    def fake_download_thumbnail(
+        _video,
+        _stem,
+        _temp_dir,
+        final_path,
+        _options,
+        _log,
+        _cancel_controller=None,
+        _cookie_retry_state=None,
+    ):
         calls["thumb"] += 1
         final_path.parent.mkdir(parents=True, exist_ok=True)
         final_path.write_bytes(b"jpg")

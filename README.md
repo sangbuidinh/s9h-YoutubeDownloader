@@ -34,7 +34,7 @@
 - Tải thumbnail JPG.
 - Tải hoặc trích xuất audio MP3.
 - Lưu lịch sử tải và trạng thái thủ công bằng SQLite.
-- Hỗ trợ `cookies*.txt` cho trường hợp YouTube yêu cầu đăng nhập hoặc xác minh bot.
+- Hỗ trợ `cookies*.txt` và tùy chọn `Local Cookie Bridge` cho trường hợp YouTube yêu cầu đăng nhập hoặc xác minh bot.
 - Hiển thị tiến trình tải nhẹ, 2 dòng, không làm rối log.
 - Dạng portable: runtime tools nằm trong `data/bin`.
 
@@ -83,22 +83,24 @@ Runtime tools được đặt ngoài file `.exe` để có thể cập nhật ri
 | `yt-dlp.exe` | Có | Đặt trong `data/bin` |
 | `ffmpeg.exe` | Có | Đặt trong `data/bin`, dùng để merge và trích xuất MP3 |
 | `deno.exe` | Không | Hỗ trợ một số YouTube JavaScript challenge |
-| `cookies*.txt` | Không | Dùng khi YouTube yêu cầu đăng nhập hoặc xác minh bot |
+| `cookies*.txt` / Local Cookie Bridge | Không | Dùng khi YouTube yêu cầu đăng nhập, phiên trình duyệt hoặc xác minh bot |
 
 ## 🔑 YouTube Data API key
 
 YouTube Data API key là bắt buộc để lấy danh sách video từ kênh. Bạn có thể nhập API key trực tiếp trong app trước khi tải danh sách video.
 
-API key nhập gần nhất được lưu cục bộ trong:
+Sau một lần `Lấy danh sách Video` thành công, API key không rỗng trong ô nhập được tự động ghi nhớ và bảo vệ bằng Windows DPAPI cho user hiện tại trong:
 
 ```text
 data/app_settings.json
 ```
 
-App cũng có thể đọc thêm API key từ `data/api key.txt`, mỗi dòng một key. File `data/api key.txt.example` trong bản đóng gói chỉ là mẫu.
+File cài đặt chỉ lưu payload đã bảo vệ `last_api_key_protected`; app không lưu plaintext `last_api_key`. Trường tùy chọn cũ `remember_api_key` đã bị loại bỏ và được dọn trong lần đọc/ghi cài đặt tiếp theo. Key đã bảo vệ thường chỉ giải mã được bằng đúng tài khoản Windows đã lưu nó, nên khi chuyển thư mục portable sang PC hoặc user Windows khác, bạn có thể phải nhập lại key. Nếu Windows DPAPI không khả dụng hoặc lưu thất bại, key vẫn dùng được trong phiên hiện tại nhưng app sẽ hiển thị cảnh báo.
+
+App cũng có thể đọc thêm API key từ `data/api key.txt`, mỗi dòng một key. File này vẫn là nguồn key plaintext do người dùng tự quản lý; app không tự động copy key UI vào file đó và không thay đổi file đó. File `data/api key.txt.example` trong bản đóng gói chỉ là mẫu.
 
 > [!WARNING]
-> Không commit, upload hoặc chia sẻ API key thật.
+> Không commit, upload hoặc chia sẻ API key thật, `data/api key.txt` hoặc `data/app_settings.json`. DPAPI không bảo vệ key trước malware hoặc tiến trình khác đã chạy với cùng quyền của user Windows hiện tại.
 
 ## 🍪 Cookies
 
@@ -108,6 +110,29 @@ App hỗ trợ chọn file `cookies*.txt` hoặc `cookies.txt`. File cookies nê
 
 > [!WARNING]
 > Không upload cookies thật lên GitHub và không đưa cookies thật vào release package.
+
+### Local Cookie Bridge v1.1.0-pre
+
+YouTube Downloaderbs v1.1.0-pre supports an optional `Local Cookie Bridge`.
+
+Cookie Bridge repository:
+https://github.com/sangbuidinh/s9h-youtube-cookie-bridge
+
+Use this only when YouTube/yt-dlp requires browser cookies or reports session/bot-check related errors. Normal downloads do not require Cookie Bridge.
+
+The bridge exports browser cookies locally to:
+
+```text
+data/runtime/youtube_cookies.txt
+```
+
+In the app:
+
+1. Enable `Sử dụng Cookies`.
+2. Choose `Local Cookie Bridge`.
+3. Set the bridge cookie path to `data/runtime/youtube_cookies.txt` if needed.
+
+Never share `data/runtime/youtube_cookies.txt`.
 
 ## 🎞️ Kiểu tải
 
@@ -162,7 +187,7 @@ data/download_state.sqlite3-shm
 | Hết quota API | Quota hằng ngày đã dùng hết | Chờ quota reset hoặc dùng API key hợp lệ khác |
 | Thiếu `yt-dlp.exe` | Runtime file không nằm trong `data/bin` | Giữ `yt-dlp.exe` trong `data/bin` |
 | Thiếu `ffmpeg.exe` | Runtime file không nằm trong `data/bin` | Giữ `ffmpeg.exe` trong `data/bin` |
-| YouTube yêu cầu đăng nhập / xác minh bot | YouTube yêu cầu phiên đăng nhập hoặc chặn bot | Bật cookies và chọn file `cookies*.txt` hợp lệ |
+| YouTube yêu cầu đăng nhập / xác minh bot | YouTube yêu cầu phiên đăng nhập hoặc chặn bot | Bật cookies và chọn file `cookies*.txt` hợp lệ, hoặc dùng tùy chọn `Local Cookie Bridge` |
 | Tải chậm hoặc bị ngắt | Mạng, CDN hoặc YouTube throttling | Thử lại sau, cập nhật yt-dlp hoặc dùng cookies hợp lệ |
 | Lỗi trích xuất MP3 | Thiếu ffmpeg hoặc file MP4 nguồn không hợp lệ | Kiểm tra `ffmpeg.exe` và thử tải lại |
 
@@ -183,7 +208,11 @@ Khi chạy từ source, dữ liệu app nằm trong thư mục `data` của repo
 Chạy từ thư mục gốc của repository:
 
 ```powershell
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name "Youtube Downloaderbs" app.py
+python -m PyInstaller --noconfirm --clean --onefile --windowed `
+  --icon "assets\app_icon.ico" `
+  --add-data "assets\app_icon.ico;assets" `
+  --add-data "assets\app_icon.png;assets" `
+  --name "Youtube Downloaderbs" app.py
 ```
 
 Output dự kiến:

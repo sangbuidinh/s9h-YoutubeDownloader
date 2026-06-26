@@ -116,6 +116,7 @@ def _test_streamed_runner_cancels_quickly() -> None:
     worker = threading.Thread(target=run, daemon=True)
     worker.start()
     _wait_for_current_process(controller)
+    _assert(controller.has_active_process(), "controller did not report active subprocess")
 
     start = time.monotonic()
     controller.request_cancel()
@@ -125,6 +126,7 @@ def _test_streamed_runner_cancels_quickly() -> None:
     _assert(not worker.is_alive(), "streamed runner did not stop after cancellation")
     _assert(elapsed < 5, f"streamed runner cancellation was too slow: {elapsed:.2f}s")
     _assert(result == ["cancelled"], f"streamed runner result was wrong: {result}")
+    _assert(not controller.has_active_process(), "controller still reported active subprocess after cleanup")
     _assert(controller.current_process is None, "current process was not cleared")
 
 
@@ -159,7 +161,7 @@ def _test_cancelled_batch_does_not_emit_batch_completed() -> None:
 def _wait_for_current_process(controller: DownloadController) -> None:
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        if controller.current_process is not None:
+        if controller.has_active_process():
             return
         time.sleep(0.05)
     raise AssertionError("runner did not register current process")

@@ -10,9 +10,20 @@ from core.runtime_paths import runtime_file
 
 API_BASE = "https://www.googleapis.com/youtube/v3"
 USER_AGENT = "YouTube Downloader Source/1.0"
-SHORT_VIDEO_DEFAULT_THRESHOLD_SECONDS = 180
+DURATION_FILTER_DEFAULT_HIDE_BELOW_SECONDS = 180
+DURATION_FILTER_DEFAULT_HIDE_ABOVE_SECONDS = 3600
 VISIBLE_VIDEO_FETCH_TARGET = 100
 MAX_UPLOADS_SCAN_LIMIT = 500
+_DURATION_PATTERN = re.compile(
+    r"^P"
+    r"(?:(?P<days>\d+)D)?"
+    r"(?:T"
+    r"(?:(?P<hours>\d+)H)?"
+    r"(?:(?P<minutes>\d+)M)?"
+    r"(?:(?P<seconds>\d+)S)?"
+    r")?"
+    r"$"
+)
 
 
 @dataclass
@@ -30,7 +41,8 @@ class VideoItem:
     published_at: str
     thumbnail_url: str
     display_order: int
-    duration_seconds: int = 0
+    duration_seconds: int | None = None
+    live_broadcast_content: str = "none"
     sanitized_filename_base: str = ""
     status: str = "Chưa tải"
 
@@ -82,14 +94,20 @@ def fetch_latest_videos(
     manual_api_key: str = "",
     progress=None,
     api_key_file: Path | None = None,
-    min_visible_duration_seconds: int = SHORT_VIDEO_DEFAULT_THRESHOLD_SECONDS,
+    hide_below_duration_enabled: bool = True,
+    min_visible_duration_seconds: int = DURATION_FILTER_DEFAULT_HIDE_BELOW_SECONDS,
+    hide_above_duration_enabled: bool = True,
+    max_visible_duration_seconds: int = DURATION_FILTER_DEFAULT_HIDE_ABOVE_SECONDS,
 ) -> tuple[ChannelInfo, list[VideoItem]]:
     channel, videos, _next_page_token = fetch_latest_video_page(
         channel_input,
         manual_api_key,
         progress,
         api_key_file,
+        hide_below_duration_enabled=hide_below_duration_enabled,
         min_visible_duration_seconds=min_visible_duration_seconds,
+        hide_above_duration_enabled=hide_above_duration_enabled,
+        max_visible_duration_seconds=max_visible_duration_seconds,
     )
     return channel, videos
 
@@ -99,7 +117,10 @@ def fetch_latest_video_page(
     manual_api_key: str = "",
     progress=None,
     api_key_file: Path | None = None,
-    min_visible_duration_seconds: int = SHORT_VIDEO_DEFAULT_THRESHOLD_SECONDS,
+    hide_below_duration_enabled: bool = True,
+    min_visible_duration_seconds: int = DURATION_FILTER_DEFAULT_HIDE_BELOW_SECONDS,
+    hide_above_duration_enabled: bool = True,
+    max_visible_duration_seconds: int = DURATION_FILTER_DEFAULT_HIDE_ABOVE_SECONDS,
 ) -> tuple[ChannelInfo, list[VideoItem], str]:
     keys = read_api_keys(manual_api_key, api_key_file)
     if not keys:
@@ -108,7 +129,15 @@ def fetch_latest_video_page(
     last_key_error: YoutubeApiError | None = None
     for index, api_key in enumerate(keys):
         try:
-            return _fetch_latest_videos_with_key(channel_input, api_key, progress, min_visible_duration_seconds)
+            return _fetch_latest_videos_with_key(
+                channel_input,
+                api_key,
+                progress,
+                hide_below_duration_enabled,
+                min_visible_duration_seconds,
+                hide_above_duration_enabled,
+                max_visible_duration_seconds,
+            )
         except YoutubeApiError as exc:
             if exc.retry_next_key:
                 last_key_error = exc
@@ -130,7 +159,10 @@ def fetch_more_videos(
     manual_api_key: str = "",
     progress=None,
     api_key_file: Path | None = None,
-    min_visible_duration_seconds: int = SHORT_VIDEO_DEFAULT_THRESHOLD_SECONDS,
+    hide_below_duration_enabled: bool = True,
+    min_visible_duration_seconds: int = DURATION_FILTER_DEFAULT_HIDE_BELOW_SECONDS,
+    hide_above_duration_enabled: bool = True,
+    max_visible_duration_seconds: int = DURATION_FILTER_DEFAULT_HIDE_ABOVE_SECONDS,
 ) -> tuple[list[VideoItem], str]:
     if not page_token:
         _progress(progress, "[INFO] No more videos.")
@@ -148,7 +180,10 @@ def fetch_more_videos(
                 page_token,
                 start_order,
                 api_key,
+                hide_below_duration_enabled,
                 min_visible_duration_seconds,
+                hide_above_duration_enabled,
+                max_visible_duration_seconds,
             )
         except YoutubeApiError as exc:
             if exc.retry_next_key:
@@ -168,7 +203,10 @@ def _fetch_latest_videos_with_key(
     channel_input: str,
     api_key: str,
     progress,
+    hide_below_duration_enabled: bool,
     min_visible_duration_seconds: int,
+    hide_above_duration_enabled: bool,
+    max_visible_duration_seconds: int,
 ) -> tuple[ChannelInfo, list[VideoItem], str]:
     _progress(progress, "[INFO] Resolving channel...")
     channel = _resolve_channel(channel_input, api_key)
@@ -185,7 +223,10 @@ def _fetch_latest_videos_with_key(
         start_order=1,
         target_visible_count=VISIBLE_VIDEO_FETCH_TARGET,
         max_checked=MAX_UPLOADS_SCAN_LIMIT,
+        hide_below_duration_enabled=hide_below_duration_enabled,
         min_visible_duration_seconds=min_visible_duration_seconds,
+        hide_above_duration_enabled=hide_above_duration_enabled,
+        max_visible_duration_seconds=max_visible_duration_seconds,
     )
     return channel, videos, next_page_token
 
@@ -195,7 +236,10 @@ def _fetch_more_videos_with_key(
     page_token: str,
     start_order: int,
     api_key: str,
+    hide_below_duration_enabled: bool,
     min_visible_duration_seconds: int,
+    hide_above_duration_enabled: bool,
+    max_visible_duration_seconds: int,
 ) -> tuple[list[VideoItem], str]:
     videos, next_page_token = _fetch_video_items_until_visible_count(
         uploads_playlist_id,
@@ -204,7 +248,10 @@ def _fetch_more_videos_with_key(
         target_visible_count=VISIBLE_VIDEO_FETCH_TARGET,
         max_checked=MAX_UPLOADS_SCAN_LIMIT,
         page_token=page_token,
+        hide_below_duration_enabled=hide_below_duration_enabled,
         min_visible_duration_seconds=min_visible_duration_seconds,
+        hide_above_duration_enabled=hide_above_duration_enabled,
+        max_visible_duration_seconds=max_visible_duration_seconds,
     )
     return videos, next_page_token
 
@@ -407,7 +454,10 @@ def _fetch_video_items_until_visible_count(
     target_visible_count: int = VISIBLE_VIDEO_FETCH_TARGET,
     max_checked: int = MAX_UPLOADS_SCAN_LIMIT,
     page_token: str = "",
-    min_visible_duration_seconds: int = SHORT_VIDEO_DEFAULT_THRESHOLD_SECONDS,
+    hide_below_duration_enabled: bool = True,
+    min_visible_duration_seconds: int = DURATION_FILTER_DEFAULT_HIDE_BELOW_SECONDS,
+    hide_above_duration_enabled: bool = True,
+    max_visible_duration_seconds: int = DURATION_FILTER_DEFAULT_HIDE_ABOVE_SECONDS,
 ) -> tuple[list[VideoItem], str]:
     videos: list[VideoItem] = []
     visible_count = 0
@@ -440,7 +490,15 @@ def _fetch_video_items_until_visible_count(
         videos.extend(page_videos)
         checked_count += len(video_ids)
         visible_count += sum(
-            1 for video in page_videos if not is_short_video(video, min_visible_duration_seconds)
+            1
+            for video in page_videos
+            if _counts_toward_visible_target(
+                video,
+                hide_below_enabled=hide_below_duration_enabled,
+                min_duration_seconds=min_visible_duration_seconds,
+                hide_above_enabled=hide_above_duration_enabled,
+                max_duration_seconds=max_visible_duration_seconds,
+            )
         )
 
         current_page_token = next_page_token
@@ -469,15 +527,19 @@ def _fetch_video_details(video_ids: list[str], api_key: str, start_order: int = 
             if not video_id:
                 continue
             duration_iso = content_details.get("duration", "")
-            duration_seconds = _duration_to_seconds(duration_iso)
+            duration_seconds = _parse_duration_seconds(duration_iso)
+            live_broadcast_content = _normalize_live_broadcast_content(
+                snippet.get("liveBroadcastContent", "none")
+            )
             details_by_id[video_id] = VideoItem(
                 video_id=video_id,
                 title=snippet.get("title", "(Untitled)"),
-                duration=_duration_to_text(duration_iso),
+                duration=_duration_to_text(duration_iso, live_broadcast_content),
                 published_at=_published_to_date(snippet.get("publishedAt", "")),
                 thumbnail_url=_best_thumbnail_url(snippet.get("thumbnails", {})),
                 display_order=0,
                 duration_seconds=duration_seconds,
+                live_broadcast_content=live_broadcast_content,
             )
 
     ordered: list[VideoItem] = []
@@ -497,17 +559,67 @@ def _best_thumbnail_url(thumbnails: dict) -> str:
     return ""
 
 
-def is_short_video(
+def is_video_visible_by_duration(
     video: VideoItem,
-    threshold_seconds: int = SHORT_VIDEO_DEFAULT_THRESHOLD_SECONDS,
+    *,
+    hide_below_enabled: bool = True,
+    min_duration_seconds: int = DURATION_FILTER_DEFAULT_HIDE_BELOW_SECONDS,
+    hide_above_enabled: bool = True,
+    max_duration_seconds: int = DURATION_FILTER_DEFAULT_HIDE_ABOVE_SECONDS,
 ) -> bool:
-    return getattr(video, "duration_seconds", 0) < threshold_seconds
+    if getattr(video, "live_broadcast_content", "none") in {"live", "upcoming"}:
+        return True
+    try:
+        seconds = getattr(video, "duration_seconds")
+    except Exception:
+        return True
+    if seconds is None:
+        return True
+    if isinstance(seconds, bool) or not isinstance(seconds, int):
+        return True
+    if seconds <= 0:
+        return True
+
+    if hide_below_enabled and seconds < _normalize_duration_threshold_seconds(
+        min_duration_seconds,
+        DURATION_FILTER_DEFAULT_HIDE_BELOW_SECONDS,
+    ):
+        return False
+    if hide_above_enabled and seconds > _normalize_duration_threshold_seconds(
+        max_duration_seconds,
+        DURATION_FILTER_DEFAULT_HIDE_ABOVE_SECONDS,
+    ):
+        return False
+    return True
 
 
-def _duration_to_text(duration: str) -> str:
-    seconds_total = _duration_to_seconds(duration)
-    if seconds_total <= 0 and not re.fullmatch(r"P(?:0D)?T?(?:0H)?(?:0M)?(?:0S)?", duration or ""):
-        return duration or ""
+def _counts_toward_visible_target(
+    video: VideoItem,
+    *,
+    hide_below_enabled: bool,
+    min_duration_seconds: int,
+    hide_above_enabled: bool,
+    max_duration_seconds: int,
+) -> bool:
+    return is_video_visible_by_duration(
+        video,
+        hide_below_enabled=hide_below_enabled,
+        min_duration_seconds=min_duration_seconds,
+        hide_above_enabled=hide_above_enabled,
+        max_duration_seconds=max_duration_seconds,
+    )
+
+
+def _duration_to_text(duration: str, live_broadcast_content: str = "none") -> str:
+    live_state = _normalize_live_broadcast_content(live_broadcast_content)
+    if live_state == "live":
+        return "Đang trực tiếp"
+    if live_state == "upcoming":
+        return "Sắp phát"
+
+    seconds_total = _parse_duration_seconds(duration)
+    if seconds_total is None:
+        return "Không rõ"
 
     hours = seconds_total // 3600
     minutes = (seconds_total % 3600) // 60
@@ -518,19 +630,58 @@ def _duration_to_text(duration: str) -> str:
     return f"{minutes}:{seconds:02d}"
 
 
-def _duration_to_seconds(duration: str) -> int:
-    match = re.fullmatch(
-        r"P(?:(?P<days>\d+)D)?T?(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?",
-        duration or "",
-    )
-    if not match:
-        return 0
+def _duration_to_seconds(duration: str) -> int | None:
+    return _parse_duration_seconds(duration)
 
-    days = int(match.group("days") or 0)
-    hours = int(match.group("hours") or 0)
-    minutes = int(match.group("minutes") or 0)
-    seconds = int(match.group("seconds") or 0)
-    return days * 86400 + hours * 3600 + minutes * 60 + seconds
+
+def _parse_duration_seconds(duration: str) -> int | None:
+    if not isinstance(duration, str):
+        return None
+
+    value = duration.strip()
+    if not value:
+        return None
+
+    match = _DURATION_PATTERN.fullmatch(value)
+    if match is None:
+        return None
+
+    days_raw = match.group("days")
+    hours_raw = match.group("hours")
+    minutes_raw = match.group("minutes")
+    seconds_raw = match.group("seconds")
+    has_date_component = days_raw is not None
+    has_time_component = any(part is not None for part in (hours_raw, minutes_raw, seconds_raw))
+    if not has_date_component and not has_time_component:
+        return None
+    if "T" in value and not has_time_component:
+        return None
+
+    days = int(days_raw or 0)
+    hours = int(hours_raw or 0)
+    minutes = int(minutes_raw or 0)
+    seconds = int(seconds_raw or 0)
+    total = days * 86400 + hours * 3600 + minutes * 60 + seconds
+    if total <= 0:
+        return None
+    return total
+
+
+def _normalize_live_broadcast_content(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"live", "upcoming"}:
+        return normalized
+    return "none"
+
+
+def _normalize_duration_threshold_seconds(threshold_seconds: int, default_seconds: int) -> int:
+    try:
+        value = int(threshold_seconds)
+    except (TypeError, ValueError):
+        value = default_seconds
+    if value <= 0:
+        value = default_seconds
+    return value
 
 
 def _published_to_date(published_at: str) -> str:

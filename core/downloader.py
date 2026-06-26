@@ -1,5 +1,7 @@
 import os
 import re
+import hashlib
+import inspect
 import shutil
 import subprocess
 import tempfile
@@ -7,8 +9,10 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from enum import Enum
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from core.download_modes import (
     MODE_VIDEO_AUDIO_THUMB,
@@ -27,10 +31,11 @@ from core.file_status import (
 from core.progress_status import ProgressEvent, parse_ytdlp_progress_line
 from core.error_messages import (
     SHOW_TECHNICAL_WARNINGS,
-    batch_blocked_warning,
     classify_general_error,
     classify_ytdlp_error,
     format_friendly_error,
+    friendly_ffmpeg_failure_kind_error,
+    friendly_ytdlp_failure_kind_error,
     missing_js_runtime_warning,
 )
 from core.filename_utils import normalize_output_stem
@@ -51,9 +56,58 @@ PREMIERE_SAFE_VIDEO_FORMAT = (
     "b[height<=1080][ext=mp4][vcodec^=avc1][acodec^=mp4a]"
 )
 MAX_FINAL_PATH_LENGTH = 240
+FFMPEG_OUTPUT_LINE_LIMIT = 20
+FFMPEG_OUTPUT_LINE_CHAR_LIMIT = 500
+FFMPEG_COMBINED_OUTPUT_LIMIT = 8192
+_STANDALONE_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)\b(?P<name>key|api_key|token|access_token)="
+)
 OUTPUT_PATH_TOO_LONG_MESSAGE = (
     "Output path too long. Please choose a shorter save folder or shorten filename limit."
 )
+COOKIE_SOURCE_FILE = "file"
+COOKIE_SOURCE_BRIDGE = "bridge"
+YTDLP_COOKIES_OPTION = "--cookies"
+BRIDGE_COOKIE_FILE_MISSING_MESSAGE = (
+    "Local Cookie Bridge cookie file not found. Open the bridge extension and click "
+    "Export YouTube Cookies, then try again."
+)
+BRIDGE_COOKIE_SESSION_ERROR_MESSAGE = (
+    "Local Cookie Bridge cookies may be expired. Open the bridge extension and click "
+    "Export YouTube Cookies, then retry the failed download."
+)
+FILE_COOKIE_SESSION_ERROR_MESSAGE = (
+    "Cookies may be expired. Export a fresh cookies.txt file, select it again if needed, "
+    "then retry the failed download."
+)
+
+
+class YtdlpFailureKind(str, Enum):
+    RATE_LIMIT = "rate_limit"
+    BOT_CHECK = "bot_check"
+    COOKIE_SESSION = "cookie_session"
+    HTTP_403 = "http_403"
+    PERMANENT_VIDEO = "permanent_video"
+    TOOL_CONFIGURATION = "tool_configuration"
+    NETWORK = "network"
+    UNKNOWN = "unknown"
+
+
+class FFmpegFailureKind(str, Enum):
+    INVALID_INPUT = "invalid_input"
+    NO_AUDIO_STREAM = "no_audio_stream"
+    ENCODER_UNAVAILABLE = "encoder_unavailable"
+    DISK_FULL = "disk_full"
+    PERMISSION_DENIED = "permission_denied"
+    OUTPUT_PATH = "output_path"
+    INTERRUPTED_WRITE = "interrupted_write"
+    UNKNOWN = "unknown"
+
+
+class BatchDecision(str, Enum):
+    RETRY_CURRENT = "retry_current"
+    SKIP_CURRENT = "skip_current"
+    STOP_BATCH = "stop_batch"
 
 
 class DownloadError(Exception):
@@ -62,6 +116,26 @@ class DownloadError(Exception):
 
 class DownloadCancelled(DownloadError):
     pass
+
+
+class SkipCurrentVideo(DownloadError):
+    pass
+
+
+@dataclass(frozen=True)
+class SystemicBlockContext:
+    block_id: str
+    failure_kind: YtdlpFailureKind
+    retry_allowed: bool
+    reason: str
+    video_id: str = ""
+    title: str = ""
+    part: str = ""
+    cookie_source: str = ""
+    cookie_path: str = ""
+    cookie_changed: bool = False
+    refreshed_retry_used: bool = False
+    output_lines: tuple[str, ...] = ()
 
 
 @dataclass
@@ -78,13 +152,20 @@ _PROGRESS_CONTEXT = threading.local()
 
 
 class DownloadController:
-    def __init__(self):
+    def __init__(self, systemic_block_callback=None):
         self._cancel_requested = threading.Event()
         self._process_lock = threading.Lock()
+        self._decision_condition = threading.Condition()
+        self._active_block_id = ""
+        self._systemic_decision: BatchDecision | None = None
+        self.systemic_block_callback = systemic_block_callback
         self.current_process: subprocess.Popen | None = None
 
     def request_cancel(self) -> None:
         self._cancel_requested.set()
+        with self._decision_condition:
+            self._systemic_decision = BatchDecision.STOP_BATCH
+            self._decision_condition.notify_all()
         with self._process_lock:
             process = self.current_process
         if process is not None:
@@ -103,6 +184,71 @@ class DownloadController:
         with self._process_lock:
             if self.current_process is process:
                 self.current_process = None
+
+    def has_active_process(self) -> bool:
+        with self._process_lock:
+            process = self.current_process
+        if process is None:
+            return False
+        try:
+            return process.poll() is None
+        except Exception:
+            return False
+
+    def is_idle(self) -> bool:
+        with self._decision_condition:
+            waiting_for_decision = bool(
+                self._active_block_id
+                and self._systemic_decision is None
+                and not self.is_cancel_requested()
+            )
+        return not self.has_active_process() and not waiting_for_decision
+
+    def wait_for_systemic_decision(self, context: SystemicBlockContext) -> BatchDecision:
+        callback = self.systemic_block_callback
+        if callback is None:
+            return BatchDecision.STOP_BATCH
+
+        with self._decision_condition:
+            if self.is_cancel_requested():
+                return BatchDecision.STOP_BATCH
+            self._active_block_id = context.block_id
+            self._systemic_decision = None
+
+        try:
+            callback(context)
+        except Exception:
+            return BatchDecision.STOP_BATCH
+
+        with self._decision_condition:
+            while self._systemic_decision is None and not self.is_cancel_requested():
+                self._decision_condition.wait(timeout=0.25)
+            decision = self._systemic_decision or BatchDecision.STOP_BATCH
+            if self._active_block_id == context.block_id:
+                self._active_block_id = ""
+                self._systemic_decision = None
+            return decision
+
+    def submit_systemic_decision(self, block_id: str, decision: BatchDecision | str) -> bool:
+        try:
+            normalized = decision if isinstance(decision, BatchDecision) else BatchDecision(str(decision))
+        except ValueError:
+            return False
+        with self._decision_condition:
+            if block_id != self._active_block_id:
+                return False
+            self._systemic_decision = normalized
+            self._decision_condition.notify_all()
+            return True
+
+    def is_systemic_block_active(self, block_id: str) -> bool:
+        with self._decision_condition:
+            return bool(
+                block_id
+                and block_id == self._active_block_id
+                and self._systemic_decision is None
+                and not self.is_cancel_requested()
+            )
 
     def _terminate_process(self, process: subprocess.Popen) -> None:
         _terminate_process_tree(process)
@@ -142,6 +288,30 @@ class YtdlpExecutionError(DownloadError):
         self.stream_interrupted = stream_interrupted
 
 
+class FFmpegExecutionError(DownloadError):
+    def __init__(
+        self,
+        *,
+        operation: str,
+        exit_code: int,
+        message: str,
+        output_lines: list[str] | tuple[str, ...],
+        combined_output: str = "",
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.exit_code = int(exit_code)
+        self.output_lines = tuple(
+            line
+            for line in (
+                _bound_subprocess_output_line(_sanitize_subprocess_output_line(output_line))
+                for output_line in output_lines
+            )
+            if line
+        )[-FFMPEG_OUTPUT_LINE_LIMIT:]
+        self.combined_output = _bounded_sanitized_subprocess_output("", combined_output)
+
+
 @dataclass
 class DownloadOptions:
     base_folder: str
@@ -151,6 +321,33 @@ class DownloadOptions:
     cookies_path: str = ""
     speed_limit: str | None = None
     download_mode: str = MODE_VIDEO_THUMB
+    cookie_source: str = COOKIE_SOURCE_FILE
+    bridge_cookie_path: str = ""
+
+
+@dataclass(frozen=True)
+class _CookieFileSnapshot:
+    exists: bool
+    size: int
+    mtime_ns: int | None
+    sha256: str
+
+    @property
+    def usable(self) -> bool:
+        return self.exists and self.size > 0 and bool(self.sha256)
+
+
+@dataclass(frozen=True)
+class _PreparedCookieAttempt:
+    command: list[str]
+    canonical_path: str = ""
+    canonical_snapshot: _CookieFileSnapshot | None = None
+    temp_cookie_path: str = ""
+
+
+@dataclass
+class _YtdlpAttemptState:
+    verified_retry_used: bool = False
 
 
 def _emit_progress_event(progress_callback, event: ProgressEvent) -> None:
@@ -250,14 +447,36 @@ def _emit_ytdlp_error_progress(
     exc: YtdlpExecutionError,
     cookies_enabled: bool,
 ) -> None:
-    text = exc.combined_output or "\n".join([str(exc), *exc.output_lines])
-    friendly = classify_ytdlp_error(
-        text,
-        cookies_enabled=cookies_enabled,
-        bot_check=exc.bot_check,
-        http_403=exc.http_403,
-        missing_js_runtime=exc.missing_js_runtime,
-    )
+    options = DownloadOptions("", "", "", cookies_enabled=cookies_enabled)
+    failure_kind = classify_ytdlp_failure_kind(exc, options)
+    if failure_kind in {
+        YtdlpFailureKind.RATE_LIMIT,
+        YtdlpFailureKind.BOT_CHECK,
+        YtdlpFailureKind.COOKIE_SESSION,
+        YtdlpFailureKind.HTTP_403,
+    }:
+        friendly = friendly_ytdlp_failure_kind_error(failure_kind.value)
+    else:
+        text = exc.combined_output or "\n".join([str(exc), *exc.output_lines])
+        friendly = classify_ytdlp_error(
+            text,
+            cookies_enabled=cookies_enabled,
+            bot_check=exc.bot_check,
+            http_403=exc.http_403,
+            missing_js_runtime=exc.missing_js_runtime,
+        )
+    _emit_progress(progress_callback, "Error", video, index, total, message=friendly.title, kind="error")
+
+
+def _emit_ffmpeg_error_progress(
+    progress_callback,
+    video,
+    index: int,
+    total: int,
+    exc: FFmpegExecutionError,
+) -> None:
+    failure_kind = classify_ffmpeg_failure_kind(exc)
+    friendly = friendly_ffmpeg_failure_kind_error(failure_kind.value, exc.combined_output)
     _emit_progress(progress_callback, "Error", video, index, total, message=friendly.title, kind="error")
 
 
@@ -337,10 +556,39 @@ def validate_download_environment(options: DownloadOptions) -> None:
         raise DownloadError("yt-dlp.exe missing")
     if not ffmpeg_path.exists():
         raise DownloadError("ffmpeg.exe missing")
-    if options.cookies_enabled:
-        cookies_path = Path(options.cookies_path)
-        if not options.cookies_path or not cookies_path.exists() or not cookies_path.is_file():
-            raise DownloadError("Cookies file missing")
+    effective_cookies_path(options)
+
+
+def effective_cookies_path(options: DownloadOptions) -> str:
+    if not options.cookies_enabled:
+        return ""
+    source = options.cookie_source if options.cookie_source in {COOKIE_SOURCE_FILE, COOKIE_SOURCE_BRIDGE} else COOKIE_SOURCE_FILE
+    if source == COOKIE_SOURCE_BRIDGE:
+        path_text = _normalized_cookie_option_path(options.bridge_cookie_path)
+        error_message = BRIDGE_COOKIE_FILE_MISSING_MESSAGE
+    else:
+        path_text = _normalized_cookie_option_path(options.cookies_path)
+        error_message = "Cookies file missing"
+    if not path_text:
+        raise DownloadError(error_message)
+    try:
+        path = Path(path_text)
+        if not path.exists() or not path.is_file():
+            raise OSError
+        with path.open("rb"):
+            pass
+    except (OSError, ValueError) as exc:
+        raise DownloadError(error_message) from exc
+    return str(path)
+
+
+def _normalized_cookie_option_path(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    path = value.strip()
+    if not path or "\x00" in path or len(path) > 32767:
+        return ""
+    return path
 
 
 def download_items(
@@ -353,20 +601,17 @@ def download_items(
 ) -> None:
     validate_download_environment(options)
     ensure_output_dirs(options.base_folder, options.channel_name, options.download_mode)
-    _log_runtime_tool_summary(log)
+    _call_runtime_tool_summary(options, log, cancel_controller)
     downloaded_count = 0
     failed_count = 0
     skipped_count = 0
-    blocking_failure_count = 0
-    consecutive_blocking_failures = 0
     mode_parts = required_parts(options.download_mode)
     video_total = len(videos)
     cancelled = False
-    stopped_early = False
 
     if options.cookies_enabled:
         log("[INFO] Cookies enabled: yes")
-        log("[INFO] Passing cookies.txt to yt-dlp.")
+        log("[INFO] yt-dlp will receive an isolated per-attempt cookies.txt copy.")
     if _deno_runtime_path().exists():
         log("[INFO] Deno runtime found. JavaScript challenge solving enabled.")
 
@@ -396,7 +641,6 @@ def download_items(
                 log(f"[SKIP] {stem} marked as downloaded in SQLite state")
                 _emit_progress(progress_callback, "Skipped", video, index, video_total)
                 skipped_count += 1
-                consecutive_blocking_failures = 0
                 video.status = get_effective_status(entry, options.download_mode)
                 status_callback(video)
                 continue
@@ -405,18 +649,16 @@ def download_items(
             if not missing_parts:
                 _emit_progress(progress_callback, "Skipped", video, index, video_total)
                 skipped_count += 1
-                consecutive_blocking_failures = 0
                 video.status = get_effective_status(entry, options.download_mode)
                 status_callback(video)
                 continue
 
-            with tempfile.TemporaryDirectory(prefix="youtube_downloader_") as temp_dir:
-                temp_path = Path(temp_dir)
+            with _media_staging_directory(paths.channel_dir, video.video_id, log) as temp_path:
                 for part in missing_parts:
                     _raise_if_cancelled(cancel_controller)
                     current_part = part
-                    _remember_run_part(run_parts_current_run, part)
                     if part == PART_VIDEO:
+                        _remember_run_part(run_parts_current_run, part)
                         log(f"[INFO] Downloading {stem}.mp4")
                         log("[INFO] Premiere-safe mode: MP4 H.264/AAC only, max 1080p.")
                         _emit_progress(progress_callback, "Video", video, index, video_total, message="Downloading...")
@@ -432,6 +674,7 @@ def download_items(
                                 options,
                                 log,
                                 cancel_controller,
+                                _YtdlpAttemptState(),
                             )
                         finally:
                             _restore_progress_context(previous_progress)
@@ -439,7 +682,7 @@ def download_items(
                         log(f"[INFO] Downloading audio {stem}.mp3")
                         if options.download_mode == MODE_VIDEO_AUDIO_THUMB:
                             _emit_progress(progress_callback, "Validating MP4", video, index, video_total)
-                            if not _premiere_safe_mp4_ready(paths.video_path):
+                            if not _premiere_safe_mp4_ready_for_download(paths.video_path, cancel_controller):
                                 current_part = PART_VIDEO
                                 _remember_run_part(run_parts_current_run, PART_VIDEO)
                                 log(f"[INFO] Local MP4 missing or invalid; downloading {stem}.mp4 for MP3 extraction.")
@@ -459,6 +702,7 @@ def download_items(
                                         options,
                                         log,
                                         cancel_controller,
+                                        _YtdlpAttemptState(),
                                     )
                                 finally:
                                     _restore_progress_context(previous_progress)
@@ -477,6 +721,7 @@ def download_items(
                                 status_callback(video)
                                 log(_part_success_message(PART_VIDEO, stem))
                             current_part = PART_AUDIO
+                            _remember_run_part(run_parts_current_run, PART_AUDIO)
                             _emit_progress(
                                 progress_callback,
                                 "MP3",
@@ -499,6 +744,7 @@ def download_items(
                             finally:
                                 _restore_progress_context(previous_progress)
                         else:
+                            _remember_run_part(run_parts_current_run, PART_AUDIO)
                             _emit_progress(progress_callback, "MP3", video, index, video_total, message="Downloading...")
                             previous_progress = _set_progress_context(
                                 progress_callback, video, index, video_total, "MP3"
@@ -512,10 +758,12 @@ def download_items(
                                     options,
                                     log,
                                     cancel_controller,
+                                    _YtdlpAttemptState(),
                                 )
                             finally:
                                 _restore_progress_context(previous_progress)
                     elif part == PART_THUMB:
+                        _remember_run_part(run_parts_current_run, part)
                         log(f"[INFO] Downloading thumbnail {stem}.jpg")
                         _emit_progress(
                             progress_callback,
@@ -529,7 +777,16 @@ def download_items(
                             progress_callback, video, index, video_total, "Thumbnail"
                         )
                         try:
-                            _download_thumbnail(video, stem, temp_path, paths.thumb_path, options, log, cancel_controller)
+                            _download_thumbnail(
+                                video,
+                                stem,
+                                temp_path,
+                                paths.thumb_path,
+                                options,
+                                log,
+                                cancel_controller,
+                                _YtdlpAttemptState(),
+                            )
                         finally:
                             _restore_progress_context(previous_progress)
                     update_video_part_state(
@@ -566,7 +823,6 @@ def download_items(
             )
             if final_status == STATUS_DOWNLOADED:
                 downloaded_count += 1
-                consecutive_blocking_failures = 0
                 log(f"[SUCCESS] Downloaded {_success_file_list(stem, options.download_mode)}")
             else:
                 failed_count += 1
@@ -582,14 +838,6 @@ def download_items(
         except PermissionError as exc:
             _remember_run_part(run_parts_current_run, current_part)
             _mark_part_error(options, video, paths, current_part)
-            if current_part == PART_VIDEO:
-                _cleanup_companion_outputs_after_video_failure(
-                    options,
-                    video,
-                    paths,
-                    log,
-                    run_parts_current_run,
-                )
             final_status = _reconcile_current_item(
                 options,
                 video,
@@ -600,11 +848,9 @@ def download_items(
             )
             if final_status == STATUS_DOWNLOADED:
                 downloaded_count += 1
-                consecutive_blocking_failures = 0
                 log(f"[SUCCESS] Downloaded {_success_file_list(stem, options.download_mode)}")
                 continue
             failed_count += 1
-            consecutive_blocking_failures = 0
             _emit_general_error_progress(
                 progress_callback, video, index, video_total, f"{type(exc).__name__}: {exc}"
             )
@@ -621,17 +867,23 @@ def download_items(
                 run_parts=tuple(run_parts_current_run) or None,
             )
             break
+        except SkipCurrentVideo:
+            _remember_run_part(run_parts_current_run, current_part)
+            _reconcile_current_item(
+                options,
+                video,
+                paths,
+                log,
+                status_callback,
+                run_parts=tuple(run_parts_current_run) or None,
+            )
+            skipped_count += 1
+            log(f"[SKIP] Skipped current video after user decision: {stem}")
+            _emit_progress(progress_callback, "Skipped", video, index, video_total)
+            continue
         except YtdlpExecutionError as exc:
             _remember_run_part(run_parts_current_run, current_part)
             _mark_part_error(options, video, paths, current_part)
-            if current_part == PART_VIDEO:
-                _cleanup_companion_outputs_after_video_failure(
-                    options,
-                    video,
-                    paths,
-                    log,
-                    run_parts_current_run,
-                )
             final_status = _reconcile_current_item(
                 options,
                 video,
@@ -642,34 +894,16 @@ def download_items(
             )
             if final_status == STATUS_DOWNLOADED:
                 downloaded_count += 1
-                consecutive_blocking_failures = 0
                 log(f"[SUCCESS] Downloaded {_success_file_list(stem, options.download_mode)}")
                 continue
             failed_count += 1
             _emit_ytdlp_error_progress(progress_callback, video, index, video_total, exc, options.cookies_enabled)
-            _log_friendly_ytdlp_error(log, exc, options.cookies_enabled)
+            _log_friendly_ytdlp_error(log, exc, options)
             if exc.missing_js_runtime and not _deno_runtime_path().exists() and (exc.bot_check or exc.http_403):
                 _log_missing_js_runtime_warning(log, exc.output_lines)
-            if exc.bot_check or exc.http_403:
-                blocking_failure_count += 1
-                consecutive_blocking_failures += 1
-                if consecutive_blocking_failures >= 3:
-                    log(format_friendly_error(batch_blocked_warning()))
-                    stopped_early = True
-                    break
-            else:
-                consecutive_blocking_failures = 0
-        except DownloadError as exc:
+        except FFmpegExecutionError as exc:
             _remember_run_part(run_parts_current_run, current_part)
             _mark_part_error(options, video, paths, current_part)
-            if current_part == PART_VIDEO:
-                _cleanup_companion_outputs_after_video_failure(
-                    options,
-                    video,
-                    paths,
-                    log,
-                    run_parts_current_run,
-                )
             final_status = _reconcile_current_item(
                 options,
                 video,
@@ -680,11 +914,27 @@ def download_items(
             )
             if final_status == STATUS_DOWNLOADED:
                 downloaded_count += 1
-                consecutive_blocking_failures = 0
                 log(f"[SUCCESS] Downloaded {_success_file_list(stem, options.download_mode)}")
                 continue
             failed_count += 1
-            consecutive_blocking_failures = 0
+            _emit_ffmpeg_error_progress(progress_callback, video, index, video_total, exc)
+            _log_friendly_ffmpeg_error(log, exc)
+        except DownloadError as exc:
+            _remember_run_part(run_parts_current_run, current_part)
+            _mark_part_error(options, video, paths, current_part)
+            final_status = _reconcile_current_item(
+                options,
+                video,
+                paths,
+                log,
+                status_callback,
+                run_parts=tuple(run_parts_current_run) or None,
+            )
+            if final_status == STATUS_DOWNLOADED:
+                downloaded_count += 1
+                log(f"[SUCCESS] Downloaded {_success_file_list(stem, options.download_mode)}")
+                continue
+            failed_count += 1
             if str(exc) == OUTPUT_PATH_TOO_LONG_MESSAGE:
                 _emit_general_error_progress(progress_callback, video, index, video_total, "Path too long")
                 _log_friendly_general_error(log, "Path too long", [str(exc)])
@@ -694,14 +944,6 @@ def download_items(
         except Exception as exc:
             _remember_run_part(run_parts_current_run, current_part)
             _mark_part_error(options, video, paths, current_part)
-            if current_part == PART_VIDEO:
-                _cleanup_companion_outputs_after_video_failure(
-                    options,
-                    video,
-                    paths,
-                    log,
-                    run_parts_current_run,
-                )
             final_status = _reconcile_current_item(
                 options,
                 video,
@@ -712,11 +954,9 @@ def download_items(
             )
             if final_status == STATUS_DOWNLOADED:
                 downloaded_count += 1
-                consecutive_blocking_failures = 0
                 log(f"[SUCCESS] Downloaded {_success_file_list(stem, options.download_mode)}")
                 continue
             failed_count += 1
-            consecutive_blocking_failures = 0
             technical = f"{type(exc).__name__}: {exc}"
             _emit_general_error_progress(progress_callback, video, index, video_total, technical)
             _log_friendly_general_error(log, technical, [technical])
@@ -726,11 +966,9 @@ def download_items(
         log(f"[ERROR] Failed: {failed_count}")
     if skipped_count > 0:
         log(f"[SKIP] Skipped: {skipped_count}")
-    if blocking_failure_count > 0:
-        log(f"[WARNING] Bot-check/403 failures: {blocking_failure_count}")
     if cancelled:
         _emit_progress_event(progress_callback, ProgressEvent(kind="stop_requested"))
-    elif not stopped_early:
+    else:
         _emit_progress_event(progress_callback, ProgressEvent(kind="batch_complete"))
 
 
@@ -796,9 +1034,10 @@ def _download_video(
     options: DownloadOptions,
     log,
     cancel_controller: DownloadController | None = None,
+    cookie_retry_state: _YtdlpAttemptState | None = None,
 ) -> None:
     url = f"https://www.youtube.com/watch?v={video_id}"
-    if final_path.exists() and _premiere_safe_mp4_ready(final_path):
+    if final_path.exists() and _premiere_safe_mp4_ready_for_download(final_path, cancel_controller):
         return
     output_template = str(temp_dir / f"{_safe_temp_stem(video_id)}.%(ext)s")
     command = _base_ytdlp_command(options) + [
@@ -813,10 +1052,19 @@ def _download_video(
         output_template,
         url,
     ]
-    _run_ytdlp_with_retries(command, options, log, cancel_controller)
-    _move_single_file(temp_dir, "*.mp4", final_path, log, replace_existing=True)
+    _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
+    staged_mp4_path = _select_staged_file(temp_dir, "*.mp4", ".mp4")
     _emit_current_progress("Validating MP4")
-    _validate_premiere_safe_mp4(final_path, log, delete_invalid=True)
+    _validate_premiere_safe_mp4_for_download(staged_mp4_path, log, True, cancel_controller)
+    _atomic_promote_with_retry(
+        staged_mp4_path,
+        final_path,
+        log,
+        replace_existing=True,
+        cancel_controller=cancel_controller,
+    )
+    if not _final_file_ready(final_path):
+        raise DownloadError("video download failed")
 
 
 def _download_audio(
@@ -827,6 +1075,7 @@ def _download_audio(
     options: DownloadOptions,
     log,
     cancel_controller: DownloadController | None = None,
+    cookie_retry_state: _YtdlpAttemptState | None = None,
 ) -> None:
     url = f"https://www.youtube.com/watch?v={video_id}"
     output_template = str(temp_dir / f"{_safe_temp_stem(video_id)}.%(ext)s")
@@ -843,8 +1092,8 @@ def _download_audio(
         output_template,
         url,
     ]
-    _run_ytdlp_with_retries(command, options, log, cancel_controller)
-    _move_single_file(temp_dir, "*.mp3", final_path, log)
+    _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
+    _move_single_file(temp_dir, "*.mp3", final_path, log, cancel_controller=cancel_controller)
 
 
 def _extract_mp3_from_video(
@@ -855,7 +1104,7 @@ def _extract_mp3_from_video(
     cancel_controller: DownloadController | None = None,
 ) -> None:
     _emit_current_progress("Validating MP4")
-    _validate_premiere_safe_mp4(source_video_path, log, delete_invalid=False)
+    _validate_premiere_safe_mp4_for_download(source_video_path, log, False, cancel_controller)
     if _final_file_ready(final_audio_path):
         return
 
@@ -876,7 +1125,7 @@ def _extract_mp3_from_video(
     _run_ffmpeg_for_audio(command, cancel_controller)
     if not _final_file_ready(temp_mp3_path):
         raise DownloadError("audio extraction failed")
-    _move_with_retry(temp_mp3_path, final_audio_path, log)
+    _atomic_promote_with_retry(temp_mp3_path, final_audio_path, log, cancel_controller=cancel_controller)
     if not _final_file_ready(final_audio_path):
         raise DownloadError("audio extraction failed")
 
@@ -909,6 +1158,9 @@ def _run_ffmpeg_for_audio(command: list[str], cancel_controller: DownloadControl
                 continue
     except FileNotFoundError:
         raise DownloadError("ffmpeg.exe missing")
+    except OSError as exc:
+        reason = _sanitize_subprocess_output_line(str(exc)) or type(exc).__name__
+        raise DownloadError(f"ffmpeg process creation failed during extract_mp3: {type(exc).__name__}: {reason}") from exc
     except KeyboardInterrupt:
         _terminate_process_tree(process)
         raise DownloadCancelled("download cancelled/interrupted")
@@ -919,8 +1171,26 @@ def _run_ffmpeg_for_audio(command: list[str], cancel_controller: DownloadControl
     if _cancel_requested(cancel_controller):
         raise DownloadCancelled("download cancelled/interrupted")
     if process.returncode == 0:
-        return f"{stdout}\n{stderr}"
-    raise DownloadError("audio extraction failed")
+        return _bounded_sanitized_subprocess_output(stdout, stderr)
+
+    output_lines = _ffmpeg_output_lines(stdout, stderr)
+    combined_output = _bounded_sanitized_subprocess_output(stdout, stderr)
+    return_code = process.returncode if process.returncode is not None else -1
+    initial = FFmpegExecutionError(
+        operation="extract_mp3",
+        exit_code=return_code,
+        message="ffmpeg extract_mp3 failed",
+        output_lines=output_lines,
+        combined_output=combined_output,
+    )
+    failure_kind = classify_ffmpeg_failure_kind(initial)
+    raise FFmpegExecutionError(
+        operation="extract_mp3",
+        exit_code=return_code,
+        message=f"ffmpeg extract_mp3 failed: {failure_kind.value}",
+        output_lines=output_lines,
+        combined_output=combined_output,
+    )
 
 
 def _download_thumbnail(
@@ -931,6 +1201,7 @@ def _download_thumbnail(
     options: DownloadOptions,
     log,
     cancel_controller: DownloadController | None = None,
+    cookie_retry_state: _YtdlpAttemptState | None = None,
 ) -> None:
     url = f"https://www.youtube.com/watch?v={video.video_id}"
     output_template = str(temp_dir / f"{_safe_temp_stem(video.video_id)}.%(ext)s")
@@ -938,7 +1209,13 @@ def _download_thumbnail(
         try:
             log("[INFO] Downloading thumbnail from API URL first.")
             _raise_if_cancelled(cancel_controller)
-            _download_thumbnail_from_url(video.thumbnail_url, temp_dir / f"{_safe_temp_stem(video.video_id)}.jpg", final_path, log)
+            _download_thumbnail_from_url(
+                video.thumbnail_url,
+                temp_dir / f"{_safe_temp_stem(video.video_id)}.jpg",
+                final_path,
+                log,
+                cancel_controller,
+            )
             return
         except DownloadCancelled:
             raise
@@ -957,8 +1234,8 @@ def _download_thumbnail(
     ]
 
     try:
-        _run_ytdlp_with_retries(command, options, log, cancel_controller)
-        _move_single_file(temp_dir, "*.jpg", final_path, log)
+        _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
+        _move_single_file(temp_dir, "*.jpg", final_path, log, cancel_controller=cancel_controller)
         return
     except YtdlpExecutionError as exc:
         if exc.bot_check or exc.http_403:
@@ -997,22 +1274,49 @@ def _base_ytdlp_command(options: DownloadOptions) -> list[str]:
             "--remote-components",
             "ejs:github",
         ])
-    if options.cookies_enabled:
-        command.extend(["--cookies", options.cookies_path])
     if options.speed_limit:
         command.extend(["--limit-rate", options.speed_limit])
     return command
 
 
-def _premiere_safe_mp4_ready(path: Path) -> bool:
+def _premiere_safe_mp4_ready(path: Path, cancel_controller: DownloadController | None = None) -> bool:
     try:
-        _validate_premiere_safe_mp4(path, delete_invalid=False)
+        if cancel_controller is None:
+            _validate_premiere_safe_mp4(path, delete_invalid=False)
+        else:
+            _validate_premiere_safe_mp4(path, delete_invalid=False, cancel_controller=cancel_controller)
+    except DownloadCancelled:
+        raise
     except DownloadError:
         return False
     return True
 
 
-def _validate_premiere_safe_mp4(path: Path, log=None, delete_invalid: bool = True) -> None:
+def _premiere_safe_mp4_ready_for_download(path: Path, cancel_controller: DownloadController | None) -> bool:
+    if cancel_controller is None:
+        return _premiere_safe_mp4_ready(path)
+    return _premiere_safe_mp4_ready(path, cancel_controller)
+
+
+def _validate_premiere_safe_mp4_for_download(
+    path: Path,
+    log,
+    delete_invalid: bool,
+    cancel_controller: DownloadController | None,
+) -> None:
+    if cancel_controller is None:
+        _validate_premiere_safe_mp4(path, log, delete_invalid=delete_invalid)
+        return
+    _validate_premiere_safe_mp4(path, log, delete_invalid=delete_invalid, cancel_controller=cancel_controller)
+
+
+def _validate_premiere_safe_mp4(
+    path: Path,
+    log=None,
+    delete_invalid: bool = True,
+    cancel_controller: DownloadController | None = None,
+) -> None:
+    _raise_if_cancelled(cancel_controller)
     try:
         if not path.exists():
             _fail_premiere_safe_validation(path, "file does not exist", log, delete_invalid=delete_invalid)
@@ -1031,13 +1335,19 @@ def _validate_premiere_safe_mp4(path: Path, log=None, delete_invalid: bool = Tru
         )
 
     try:
-        output = _probe_media_with_ffmpeg(path)
+        if cancel_controller is None:
+            output = _probe_media_with_ffmpeg(path)
+        else:
+            output = _probe_media_with_ffmpeg(path, cancel_controller)
+    except DownloadCancelled:
+        raise
     except DownloadError as exc:
         message = str(exc)
         if message == "ffmpeg.exe missing":
             raise
         reason = message.removeprefix("premiere_safe_mp4_validation_failed: ").strip() or "unable to probe media"
         _fail_premiere_safe_validation(path, reason, log, delete_invalid=delete_invalid)
+    _raise_if_cancelled(cancel_controller)
     ok, reason = _parse_premiere_safe_probe_output(output)
     if not ok:
         _fail_premiere_safe_validation(path, reason, log, delete_invalid=delete_invalid)
@@ -1065,48 +1375,78 @@ def _delete_invalid_file(path: Path, log=None) -> None:
             log("[WARNING] Invalid Premiere-safe MP4 output could not be removed.")
 
 
-def _probe_media_with_ffmpeg(path: Path) -> str:
+def _probe_media_with_ffmpeg(path: Path, cancel_controller: DownloadController | None = None) -> str:
     ffmpeg_path = runtime_file("ffmpeg.exe")
     ffprobe_path = ffmpeg_path.with_name("ffprobe.exe")
     if ffprobe_path.exists():
-        output = _run_probe_command(
-            [
-                str(ffprobe_path),
-                "-v",
-                "error",
-                "-show_entries",
-                "stream=codec_type,codec_name,codec_tag_string,width,height",
-                "-of",
-                "compact=p=0:nk=0",
-                str(path),
-            ]
+        command = [
+            str(ffprobe_path),
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_type,codec_name,codec_tag_string,width,height",
+            "-of",
+            "compact=p=0:nk=0",
+            str(path),
+        ]
+        output = (
+            _run_probe_command(command)
+            if cancel_controller is None
+            else _run_probe_command(command, cancel_controller)
         )
         if output.strip():
             return output
 
-    output = _run_probe_command([str(ffmpeg_path), "-hide_banner", "-i", str(path)])
+    command = [str(ffmpeg_path), "-hide_banner", "-i", str(path)]
+    output = _run_probe_command(command) if cancel_controller is None else _run_probe_command(command, cancel_controller)
     if output.strip():
         return output
     raise DownloadError("premiere_safe_mp4_validation_failed: unable to probe media")
 
 
-def _run_probe_command(command: list[str]) -> str:
+def _run_probe_command(command: list[str], cancel_controller: DownloadController | None = None) -> str:
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    process = None
+    stdout = ""
+    stderr = ""
+    deadline = time.monotonic() + 30
     try:
-        result = subprocess.run(
+        _raise_if_cancelled(cancel_controller)
+        process = subprocess.Popen(
             command,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=30,
             creationflags=creationflags,
         )
+        if cancel_controller is not None:
+            cancel_controller.set_current_process(process)
+        while True:
+            if _cancel_requested(cancel_controller):
+                _terminate_process_tree(process)
+                raise DownloadCancelled("download cancelled/interrupted")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_process_tree(process)
+                raise DownloadError("premiere_safe_mp4_validation_failed: media probe timed out")
+            try:
+                stdout, stderr = process.communicate(timeout=min(0.25, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                continue
     except FileNotFoundError:
         raise DownloadError("ffmpeg.exe missing")
-    except subprocess.TimeoutExpired:
-        raise DownloadError("premiere_safe_mp4_validation_failed: media probe timed out")
-    return f"{result.stdout}\n{result.stderr}"
+    except KeyboardInterrupt:
+        _terminate_process_tree(process)
+        raise DownloadCancelled("download cancelled/interrupted")
+    finally:
+        if process is not None and cancel_controller is not None:
+            cancel_controller.clear_current_process(process)
+
+    _raise_if_cancelled(cancel_controller)
+    return f"{stdout}\n{stderr}"
 
 
 def _parse_premiere_safe_probe_output(output: str) -> tuple[bool, str]:
@@ -1167,18 +1507,63 @@ def _deno_runtime_path() -> Path:
     return runtime_file("deno.exe")
 
 
-def _log_runtime_tool_summary(log) -> None:
+def _call_runtime_tool_summary(
+    options: DownloadOptions,
+    log,
+    cancel_controller: DownloadController | None = None,
+) -> None:
+    summary = _log_runtime_tool_summary
+    try:
+        signature = inspect.signature(summary)
+    except (TypeError, ValueError):
+        summary(options, log, cancel_controller)
+        return
+
+    positional_capacity = 0
+    has_varargs = False
+    for parameter in signature.parameters.values():
+        if parameter.kind == inspect.Parameter.VAR_POSITIONAL:
+            has_varargs = True
+        elif parameter.kind in {
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        }:
+            positional_capacity += 1
+
+    if has_varargs or positional_capacity >= 3:
+        _log_runtime_tool_summary(options, log, cancel_controller)
+    elif positional_capacity == 2:
+        _log_runtime_tool_summary(options, log)
+    else:
+        _log_runtime_tool_summary(log)
+
+
+def _log_runtime_tool_summary(
+    options: DownloadOptions,
+    log,
+    cancel_controller: DownloadController | None = None,
+) -> None:
+    _ = options
     ytdlp_path = runtime_file("yt-dlp.exe")
     ffmpeg_path = runtime_file("ffmpeg.exe")
     deno_path = _deno_runtime_path()
 
-    ytdlp_version = _get_command_version(ytdlp_path, ["--version"])
+    _raise_if_cancelled(cancel_controller)
+    ytdlp_version = _get_command_version(
+        [str(ytdlp_path), "--version"],
+        cancel_controller=cancel_controller,
+    )
     if ytdlp_version:
         log(f"[INFO] yt-dlp version: {ytdlp_version}")
     else:
         log("[INFO] yt-dlp version: unavailable")
 
-    ffmpeg_version = _get_command_version(ffmpeg_path, ["-version"]) if ffmpeg_path.exists() else ""
+    _raise_if_cancelled(cancel_controller)
+    ffmpeg_version = (
+        _get_command_version([str(ffmpeg_path), "-version"], cancel_controller=cancel_controller)
+        if ffmpeg_path.exists()
+        else ""
+    )
     if ffmpeg_path.exists() and ffmpeg_version:
         log(f"[INFO] ffmpeg found: yes ({ffmpeg_version})")
     elif ffmpeg_path.exists():
@@ -1186,7 +1571,12 @@ def _log_runtime_tool_summary(log) -> None:
     else:
         log("[INFO] ffmpeg found: no")
 
-    deno_version = _get_command_version(deno_path, ["--version"]) if deno_path.exists() else ""
+    _raise_if_cancelled(cancel_controller)
+    deno_version = (
+        _get_command_version([str(deno_path), "--version"], cancel_controller=cancel_controller)
+        if deno_path.exists()
+        else ""
+    )
     if deno_path.exists() and deno_version:
         log(f"[INFO] deno found: yes ({deno_version})")
     elif deno_path.exists():
@@ -1195,23 +1585,66 @@ def _log_runtime_tool_summary(log) -> None:
         log("[INFO] deno found: no")
 
 
-def _get_command_version(path: Path, args: list[str]) -> str:
-    if not path.exists():
+def _get_command_version(
+    command: list[str],
+    *,
+    cancel_controller: DownloadController | None = None,
+    timeout_seconds: float = 10.0,
+) -> str:
+    if not command:
         return ""
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    creationflags = _subprocess_creationflags()
+    process = None
+    stdout = ""
+    stderr = ""
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
     try:
-        result = subprocess.run(
-            [str(path), *args],
-            capture_output=True,
+        _raise_if_cancelled(cancel_controller)
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=10,
             creationflags=creationflags,
         )
-    except (OSError, subprocess.TimeoutExpired):
+        if cancel_controller is not None:
+            cancel_controller.set_current_process(process)
+        if _cancel_requested(cancel_controller):
+            _terminate_process_tree(process)
+            raise DownloadCancelled("download cancelled/interrupted")
+        while True:
+            if _cancel_requested(cancel_controller):
+                _terminate_process_tree(process)
+                raise DownloadCancelled("download cancelled/interrupted")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_process_tree(process)
+                return ""
+            try:
+                stdout, stderr = process.communicate(timeout=min(0.1, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                continue
+    except FileNotFoundError:
+        if _cancel_requested(cancel_controller):
+            raise DownloadCancelled("download cancelled/interrupted")
         return ""
-    output = result.stdout or result.stderr or ""
+    except OSError:
+        if _cancel_requested(cancel_controller):
+            raise DownloadCancelled("download cancelled/interrupted")
+        return ""
+    except KeyboardInterrupt:
+        _terminate_process_tree(process)
+        raise DownloadCancelled("download cancelled/interrupted")
+    finally:
+        if process is not None and cancel_controller is not None:
+            cancel_controller.clear_current_process(process)
+
+    if _cancel_requested(cancel_controller):
+        raise DownloadCancelled("download cancelled/interrupted")
+    output = stdout or stderr or ""
     for line in output.splitlines():
         line = line.strip()
         if line:
@@ -1238,22 +1671,186 @@ def _sleep_with_cancel(seconds: int | float, cancel_controller: DownloadControll
         time.sleep(min(0.25, remaining))
 
 
+def _command_cookie_path(command: list[str]) -> str:
+    for index, value in enumerate(command):
+        if value == YTDLP_COOKIES_OPTION and index + 1 < len(command):
+            return command[index + 1]
+    return ""
+
+
+def _command_video_id(command: list[str]) -> str:
+    for value in command:
+        match = re.search(r"(?:youtube\.com/watch\?v=|youtu\.be/)([^&?/]+)", value)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _sha256_file(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def _cookie_file_snapshot(path: Path) -> _CookieFileSnapshot:
+    try:
+        stat_result = path.stat()
+        if not path.is_file():
+            return _CookieFileSnapshot(False, 0, None, "")
+        return _CookieFileSnapshot(True, stat_result.st_size, stat_result.st_mtime_ns, _sha256_file(path))
+    except OSError:
+        return _CookieFileSnapshot(False, 0, None, "")
+
+
+def _cookie_snapshot_log_text(snapshot: _CookieFileSnapshot | None) -> str:
+    if snapshot is None:
+        return "snapshot_available=no"
+    return (
+        f"snapshot_available={'yes' if snapshot.usable else 'no'}, "
+        f"exists={str(snapshot.exists).lower()}, size={snapshot.size}, "
+        f"mtime_ns={snapshot.mtime_ns if snapshot.mtime_ns is not None else '-'}"
+    )
+
+
+def _cookie_snapshots_content_equal(
+    left: _CookieFileSnapshot | None,
+    right: _CookieFileSnapshot | None,
+) -> bool:
+    return bool(
+        left
+        and right
+        and left.usable
+        and right.usable
+        and left.size == right.size
+        and left.sha256 == right.sha256
+    )
+
+
+def _cookie_snapshot_changed(
+    old: _CookieFileSnapshot | None,
+    current: _CookieFileSnapshot | None,
+) -> bool:
+    return bool(old and current and current.usable and not _cookie_snapshots_content_equal(old, current))
+
+
+def _copy_cookie_file(source: Path, target: Path) -> None:
+    shutil.copy2(source, target)
+
+
+def _set_private_cookie_permissions(path: Path) -> None:
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _strip_cookie_options(command: list[str]) -> list[str]:
+    stripped: list[str] = []
+    index = 0
+    while index < len(command):
+        value = command[index]
+        if value == YTDLP_COOKIES_OPTION:
+            index += 2
+            continue
+        if value.startswith(f"{YTDLP_COOKIES_OPTION}="):
+            index += 1
+            continue
+        stripped.append(value)
+        index += 1
+    return stripped
+
+
+def _cookie_option_insert_index(command: list[str]) -> int:
+    for index, value in enumerate(command):
+        if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value or ""):
+            return index
+    return len(command)
+
+
+def _insert_cookie_option(command: list[str], cookie_path: Path) -> list[str]:
+    insert_at = _cookie_option_insert_index(command)
+    return [
+        *command[:insert_at],
+        YTDLP_COOKIES_OPTION,
+        str(cookie_path),
+        *command[insert_at:],
+    ]
+
+
+@contextmanager
+def _prepared_cookie_attempt(command: list[str], options: DownloadOptions, log=None):
+    base_command = _strip_cookie_options(list(command))
+    if not options.cookies_enabled:
+        yield _PreparedCookieAttempt(base_command)
+        return
+
+    canonical_path = Path(effective_cookies_path(options))
+    last_before: _CookieFileSnapshot | None = None
+    last_after: _CookieFileSnapshot | None = None
+    last_temp: _CookieFileSnapshot | None = None
+    for attempt_index in range(3):
+        last_before = _cookie_file_snapshot(canonical_path)
+        if not last_before.usable:
+            raise DownloadError("Cookies file missing")
+
+        with tempfile.TemporaryDirectory(prefix="s9h_cookie_attempt_") as temp_dir:
+            temp_cookie_path = Path(temp_dir) / "cookies.txt"
+            try:
+                _copy_cookie_file(canonical_path, temp_cookie_path)
+                _set_private_cookie_permissions(temp_cookie_path)
+            except OSError as exc:
+                raise DownloadError("Could not prepare isolated cookies file") from exc
+
+            last_temp = _cookie_file_snapshot(temp_cookie_path)
+            last_after = _cookie_file_snapshot(canonical_path)
+            if (
+                _cookie_snapshots_content_equal(last_before, last_after)
+                and _cookie_snapshots_content_equal(last_before, last_temp)
+            ):
+                yield _PreparedCookieAttempt(
+                    _insert_cookie_option(base_command, temp_cookie_path),
+                    str(canonical_path),
+                    last_before,
+                    str(temp_cookie_path),
+                )
+                return
+
+        if log:
+            log(
+                "[COOKIE-DIAG] Cookie source changed while preparing isolated copy; "
+                f"retrying stable copy {attempt_index + 1}/3."
+            )
+
+    if log:
+        log(f"[COOKIE-DIAG] canonical_before {_cookie_snapshot_log_text(last_before)}")
+        log(f"[COOKIE-DIAG] temp_copy {_cookie_snapshot_log_text(last_temp)}")
+        log(f"[COOKIE-DIAG] canonical_after {_cookie_snapshot_log_text(last_after)}")
+    raise DownloadError("Cookie file changed while preparing isolated copy. Try again after export finishes.")
+
+
 def _run_ytdlp_with_retries(
     command: list[str],
     options: DownloadOptions,
     log,
     cancel_controller: DownloadController | None = None,
+    cookie_retry_state: _YtdlpAttemptState | None = None,
 ) -> None:
     http_403_delays = [10, 30]
     http_403_retries = 0
-    bot_check_retries = 0
+    attempt_state = cookie_retry_state or _YtdlpAttemptState()
     stream_interrupted_retried = False
-    current_command = list(command)
+    base_command = _strip_cookie_options(list(command))
+    current_command = list(base_command)
 
     while True:
         _raise_if_cancelled(cancel_controller)
+        attempt_info: _PreparedCookieAttempt | None = None
         try:
-            stderr = _run_ytdlp(current_command, cancel_controller)
+            with _prepared_cookie_attempt(current_command, options, log) as prepared_attempt:
+                attempt_info = prepared_attempt
+                stderr = _run_ytdlp(prepared_attempt.command, cancel_controller)
             if (
                 SHOW_TECHNICAL_WARNINGS
                 and stderr
@@ -1263,19 +1860,13 @@ def _run_ytdlp_with_retries(
                 _log_missing_js_runtime_warning(log, [stderr])
             return
         except YtdlpExecutionError as exc:
-            if exc.bot_check:
-                if options.cookies_enabled and bot_check_retries < 1:
-                    bot_check_retries += 1
-                    delay = 10
-                    log(
-                        "[WARNING] YouTube bot-check from yt-dlp. "
-                        f"Retrying in {delay} seconds (retry {bot_check_retries}/1)."
-                    )
-                    _sleep_with_cancel(delay, cancel_controller)
-                    continue
-                raise
+            failure_kind = classify_ytdlp_failure_kind(exc, options)
 
-            if exc.http_403 and http_403_retries < len(http_403_delays):
+            if (
+                failure_kind == YtdlpFailureKind.HTTP_403
+                and not attempt_state.verified_retry_used
+                and http_403_retries < len(http_403_delays)
+            ):
                 delay = http_403_delays[http_403_retries]
                 http_403_retries += 1
                 log(
@@ -1286,17 +1877,314 @@ def _run_ytdlp_with_retries(
                 continue
 
             if (
-                exc.stream_interrupted or _contains_stream_interrupted_output(exc.combined_output)
+                failure_kind == YtdlpFailureKind.NETWORK
+                and (exc.stream_interrupted or _contains_stream_interrupted_output(exc.combined_output))
             ) and not stream_interrupted_retried:
                 stream_interrupted_retried = True
                 current_command = _ensure_flag(
-                    _replace_option(command, "--http-chunk-size", "512K"),
+                    _replace_option(base_command, "--http-chunk-size", "512K"),
                     "--no-continue",
                 )
                 log("[WARNING] Stream interrupted. Retrying once with safer chunk settings.")
                 continue
 
+            if _is_systemic_ytdlp_failure(failure_kind):
+                if _resolve_systemic_ytdlp_failure(
+                    exc,
+                    failure_kind,
+                    options,
+                    base_command,
+                    log,
+                    cancel_controller,
+                    attempt_state,
+                    attempt_info,
+                ):
+                    current_command = list(base_command)
+                    continue
+
             raise
+
+
+def classify_ytdlp_failure_kind(exc: YtdlpExecutionError, options: DownloadOptions) -> YtdlpFailureKind:
+    text = exc.combined_output or "\n".join([str(exc), *exc.output_lines])
+    if _contains_rate_limit_error(text):
+        return YtdlpFailureKind.RATE_LIMIT
+    if exc.bot_check or _contains_bot_check_error(text):
+        return YtdlpFailureKind.BOT_CHECK
+    if _contains_permanent_video_error(text):
+        return YtdlpFailureKind.PERMANENT_VIDEO
+    if is_cookie_session_error(text):
+        return YtdlpFailureKind.COOKIE_SESSION
+    if exc.http_403 or _contains_http_403_error(text):
+        return YtdlpFailureKind.HTTP_403
+    if exc.missing_js_runtime or _contains_missing_js_runtime_error(text):
+        return YtdlpFailureKind.TOOL_CONFIGURATION
+    if exc.stream_interrupted or _contains_stream_interrupted_output(text) or _contains_network_error(text):
+        return YtdlpFailureKind.NETWORK
+    return YtdlpFailureKind.UNKNOWN
+
+
+def classify_ffmpeg_failure_kind(exc: FFmpegExecutionError) -> FFmpegFailureKind:
+    text = "\n".join([str(exc), exc.combined_output, *exc.output_lines]).lower()
+    if _contains_any(
+        text,
+        (
+            "no space left on device",
+            "disk full",
+            "not enough space",
+            "there is not enough space on the disk",
+        ),
+    ):
+        return FFmpegFailureKind.DISK_FULL
+    if _contains_any(
+        text,
+        (
+            "permission denied",
+            "access is denied",
+            "operation not permitted",
+        ),
+    ):
+        return FFmpegFailureKind.PERMISSION_DENIED
+    if _contains_any(
+        text,
+        (
+            "unknown encoder",
+            "encoder (codec",
+            "encoder not found",
+            "not found for output stream",
+            "error selecting an encoder",
+        ),
+    ):
+        return FFmpegFailureKind.ENCODER_UNAVAILABLE
+    if _contains_any(
+        text,
+        (
+            "matches no streams",
+            "does not contain any stream",
+            "audio stream not found",
+            "no audio stream",
+        ),
+    ):
+        return FFmpegFailureKind.NO_AUDIO_STREAM
+    if _contains_any(
+        text,
+        (
+            "no such file or directory",
+            "invalid filename",
+            "error opening output",
+            "could not open output file",
+            "unable to open output file",
+            "filename too long",
+            "file name too long",
+        ),
+    ):
+        return FFmpegFailureKind.OUTPUT_PATH
+    if _contains_any(
+        text,
+        (
+            "invalid data found when processing input",
+            "moov atom not found",
+            "error opening input",
+            "could not find codec parameters",
+            "invalid argument",
+        ),
+    ):
+        return FFmpegFailureKind.INVALID_INPUT
+    if _contains_any(
+        text,
+        (
+            "broken pipe",
+            "input/output error",
+            "error writing trailer",
+            "error closing file",
+            "conversion failed",
+        ),
+    ):
+        return FFmpegFailureKind.INTERRUPTED_WRITE
+    return FFmpegFailureKind.UNKNOWN
+
+
+def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
+    return any(marker in text for marker in markers)
+
+
+def _is_systemic_ytdlp_failure(kind: YtdlpFailureKind) -> bool:
+    return kind in {
+        YtdlpFailureKind.RATE_LIMIT,
+        YtdlpFailureKind.BOT_CHECK,
+        YtdlpFailureKind.COOKIE_SESSION,
+        YtdlpFailureKind.HTTP_403,
+    }
+
+
+def _resolve_systemic_ytdlp_failure(
+    exc: YtdlpExecutionError,
+    failure_kind: YtdlpFailureKind,
+    options: DownloadOptions,
+    command: list[str],
+    log,
+    cancel_controller: DownloadController | None,
+    attempt_state: _YtdlpAttemptState,
+    attempt_info: _PreparedCookieAttempt | None,
+) -> bool:
+    failed_snapshot = attempt_info.canonical_snapshot if attempt_info else None
+    cookie_path = attempt_info.canonical_path if attempt_info else ""
+    current_snapshot = _current_cookie_snapshot(cookie_path)
+    if _cookie_retry_allowed(options, attempt_state, failed_snapshot, cookie_path) and _cookie_snapshot_changed(
+        failed_snapshot,
+        current_snapshot,
+    ):
+        attempt_state.verified_retry_used = True
+        log("[INFO] Cookie source changed after failed yt-dlp attempt. Retrying current part once.")
+        return True
+
+    callback = getattr(cancel_controller, "systemic_block_callback", None) if cancel_controller is not None else None
+    if callback is None:
+        log(
+            "[ERROR] Systemic YouTube/session failure requires a user decision, "
+            "but no pause callback is available. Stopping batch."
+        )
+        if cancel_controller is not None:
+            cancel_controller.request_cancel()
+        raise DownloadCancelled("download cancelled/interrupted")
+
+    note = ""
+    while True:
+        _raise_if_cancelled(cancel_controller)
+        retry_allowed = _cookie_retry_allowed(options, attempt_state, failed_snapshot, cookie_path)
+        current_snapshot = _current_cookie_snapshot(cookie_path)
+        cookie_changed = _cookie_snapshot_changed(failed_snapshot, current_snapshot)
+        if retry_allowed and cookie_changed:
+            attempt_state.verified_retry_used = True
+            log("[INFO] Cookie source changed. Retrying current part once with a fresh isolated copy.")
+            return True
+
+        context = _systemic_block_context(
+            exc,
+            failure_kind,
+            options,
+            command,
+            retry_allowed=retry_allowed,
+            cookie_changed=cookie_changed,
+            refreshed_retry_used=attempt_state.verified_retry_used,
+            note=note,
+        )
+        decision = cancel_controller.wait_for_systemic_decision(context)
+        if decision == BatchDecision.STOP_BATCH:
+            cancel_controller.request_cancel()
+            raise DownloadCancelled("download cancelled/interrupted")
+        if decision == BatchDecision.SKIP_CURRENT:
+            raise SkipCurrentVideo("skipped by user after systemic yt-dlp failure")
+        if decision != BatchDecision.RETRY_CURRENT:
+            note = "Unknown decision; choose Skip or Stop."
+            continue
+        if not retry_allowed:
+            note = "A verified cookie retry was already used for this part."
+            continue
+
+        current_snapshot = _current_cookie_snapshot(cookie_path)
+        if _cookie_snapshot_changed(failed_snapshot, current_snapshot):
+            attempt_state.verified_retry_used = True
+            log("[INFO] Cookie source changed. Retrying current part once with a fresh isolated copy.")
+            return True
+
+        note = "No changed cookie export was detected. Export/replace cookies before retrying."
+        log("[WARNING] Retry requested, but the canonical cookie source has not changed since the failed attempt.")
+
+
+def _cookie_retry_allowed(
+    options: DownloadOptions,
+    attempt_state: _YtdlpAttemptState,
+    failed_snapshot: _CookieFileSnapshot | None,
+    cookie_path: str,
+) -> bool:
+    return bool(options.cookies_enabled and cookie_path and failed_snapshot and not attempt_state.verified_retry_used)
+
+
+def _current_cookie_snapshot(cookie_path: str) -> _CookieFileSnapshot | None:
+    if not cookie_path:
+        return None
+    return _cookie_file_snapshot(Path(cookie_path))
+
+
+_SYSTEMIC_BLOCK_LOCK = threading.Lock()
+_SYSTEMIC_BLOCK_COUNTER = 0
+
+
+def _next_systemic_block_id() -> str:
+    global _SYSTEMIC_BLOCK_COUNTER
+    with _SYSTEMIC_BLOCK_LOCK:
+        _SYSTEMIC_BLOCK_COUNTER += 1
+        return f"systemic-{int(time.time() * 1000)}-{_SYSTEMIC_BLOCK_COUNTER}"
+
+
+def _systemic_block_context(
+    exc: YtdlpExecutionError,
+    failure_kind: YtdlpFailureKind,
+    options: DownloadOptions,
+    command: list[str],
+    retry_allowed: bool,
+    cookie_changed: bool,
+    refreshed_retry_used: bool,
+    note: str = "",
+) -> SystemicBlockContext:
+    progress_context = _current_progress_context()
+    video = progress_context.video if progress_context else None
+    title = getattr(video, "sanitized_filename_base", "") or getattr(video, "title", "") or ""
+    video_id = getattr(video, "video_id", "") or _command_video_id(command)
+    part = _part_from_progress_phase(progress_context.phase if progress_context else "")
+    cookie_path = _effective_cookie_path_or_empty(options)
+    friendly = friendly_ytdlp_failure_kind_error(
+        failure_kind.value,
+        refreshed_rejected=refreshed_retry_used and failure_kind in {
+            YtdlpFailureKind.BOT_CHECK,
+            YtdlpFailureKind.COOKIE_SESSION,
+            YtdlpFailureKind.HTTP_403,
+        },
+    )
+    reason = f"{friendly.title}: {friendly.reason}"
+    if note:
+        reason = f"{reason}\n{note}"
+    return SystemicBlockContext(
+        block_id=_next_systemic_block_id(),
+        failure_kind=failure_kind,
+        retry_allowed=retry_allowed,
+        reason=reason,
+        video_id=video_id,
+        title=title,
+        part=part,
+        cookie_source=_cookie_source_text(options),
+        cookie_path=cookie_path,
+        cookie_changed=cookie_changed,
+        refreshed_retry_used=refreshed_retry_used,
+        output_lines=tuple(_technical_lines_for_ytdlp(exc)[:8]),
+    )
+
+
+def _effective_cookie_path_or_empty(options: DownloadOptions) -> str:
+    try:
+        return effective_cookies_path(options)
+    except DownloadError:
+        return ""
+
+
+def _cookie_source_text(options: DownloadOptions) -> str:
+    if not options.cookies_enabled:
+        return "disabled"
+    if options.cookie_source == COOKIE_SOURCE_BRIDGE:
+        return "Local Cookie Bridge"
+    return "File cookies.txt"
+
+
+def _part_from_progress_phase(phase: str) -> str:
+    lower = (phase or "").strip().lower()
+    if lower in {"video", "validating mp4"}:
+        return PART_VIDEO
+    if lower in {"mp3", "audio"}:
+        return PART_AUDIO
+    if lower in {"thumbnail", "thumb"}:
+        return PART_THUMB
+    return ""
 
 
 def _run_ytdlp(command: list[str], cancel_controller: DownloadController | None = None) -> str:
@@ -1471,16 +2359,190 @@ def _classify_ytdlp_error(output: str) -> str:
 def _contains_bot_check_error(stderr: str) -> bool:
     lower = (stderr or "").lower()
     return (
-        "sign in to confirm" in lower
+        "sign in to confirm you're not a bot" in lower
+        or "sign in to confirm you are not a bot" in lower
         or "not a bot" in lower
-        or "use --cookies" in lower
-        or "use --cookies-from-browser" in lower
+        or "confirm you're not a bot" in lower
+        or "confirm you are not a bot" in lower
+        or "this helps protect our community" in lower
+        or "verify that you're human" in lower
+        or "verify you're human" in lower
+        or "verify that you are human" in lower
+        or "verify you are human" in lower
+        or "unusual traffic" in lower
+        or "automated requests" in lower
+        or "automated request" in lower
+        or "detected automated traffic" in lower
     )
+
+
+def is_cookie_session_error(text: str) -> bool:
+    lower = (text or "").lower()
+    if not lower:
+        return False
+    session_markers = (
+        "cookies are expired",
+        "cookies expired",
+        "cookies are invalid",
+        "cookie invalid",
+        "cookies invalid",
+        "cookie is invalid",
+        "cookies are no longer valid",
+        "cookie is no longer valid",
+        "no longer valid cookie",
+        "cookie/session rejected",
+        "cookie session rejected",
+        "session cookie rejected",
+        "youtube rejected the supplied session",
+        "youtube rejected the current session",
+        "supplied browser session has expired",
+        "browser session has expired",
+        "login session expired",
+        "session has expired",
+        "current account is not authenticated",
+        "account is not authenticated",
+        "account authentication failed",
+        "not authenticated",
+        "authentication required",
+        "authentication is required",
+        "authentication is required to view this video",
+        "login required",
+        "please log in",
+        "sign in to continue",
+        "please sign in to continue",
+        "please sign in to view this video",
+        "you must be signed in to view this video",
+        "sign in to confirm your age",
+        "sign in to confirm your identity",
+        "sign in to confirm your account",
+        "failed to load cookies",
+        "could not load cookies",
+        "unable to load cookies",
+        "failed to parse cookies",
+        "could not parse cookies",
+        "unable to parse cookies",
+        "cookie parsing failed",
+    )
+    if any(marker in lower for marker in session_markers):
+        return True
+
+    if "age-restricted" in lower or "age restricted" in lower or "age-restricted video" in lower:
+        return any(
+            marker in lower
+            for marker in (
+                "authenticate",
+                "authentication",
+                "sign in",
+                "signed in",
+                "login",
+                "cookie",
+                "cookies",
+            )
+        )
+
+    has_cookie_marker = "cookie" in lower or "cookies" in lower or "browser session" in lower
+    explicit_problem_markers = (
+        "expired",
+        "invalid",
+        "not valid",
+        "no longer valid",
+        "rejected",
+        "failed",
+        "unable to",
+        "could not",
+        "authentication",
+        "authenticate",
+    )
+    if has_cookie_marker and any(marker in lower for marker in explicit_problem_markers):
+        return True
+
+    has_http_marker = (
+        "http error 403" in lower
+        or "403: forbidden" in lower
+        or "http error 429" in lower
+        or "429: too many requests" in lower
+    )
+    http_context_markers = (
+        "login required",
+        "please log in",
+        "authentication required",
+        "cookies are expired",
+        "cookies are invalid",
+        "cookies are no longer valid",
+        "browser session has expired",
+        "session rejected",
+    )
+    return has_http_marker and any(marker in lower for marker in http_context_markers)
+
+
+def cookie_session_error_message(options: DownloadOptions) -> str:
+    source = (
+        options.cookie_source
+        if options.cookie_source in {COOKIE_SOURCE_FILE, COOKIE_SOURCE_BRIDGE}
+        else COOKIE_SOURCE_FILE
+    )
+    if source == COOKIE_SOURCE_BRIDGE:
+        return BRIDGE_COOKIE_SESSION_ERROR_MESSAGE
+    return FILE_COOKIE_SESSION_ERROR_MESSAGE
 
 
 def _contains_http_403_error(stderr: str) -> bool:
     lower = (stderr or "").lower()
     return "http error 403" in lower or "forbidden" in lower
+
+
+def _contains_rate_limit_error(text: str) -> bool:
+    lower = (text or "").lower()
+    return (
+        "http error 429" in lower
+        or "429: too many requests" in lower
+        or "too many requests" in lower
+        or "rate limit" in lower
+        or "rate-limit" in lower
+        or "temporarily blocked" in lower
+    )
+
+
+def _contains_permanent_video_error(text: str) -> bool:
+    lower = (text or "").lower()
+    return (
+        "private video" in lower
+        or "video unavailable" in lower
+        or "this video is unavailable" in lower
+        or "deleted video" in lower
+        or "this video has been deleted" in lower
+        or "this video has been removed" in lower
+        or "removed by the uploader" in lower
+        or "has been removed" in lower
+        or "members-only" in lower
+        or "members only" in lower
+        or "join this channel" in lower
+        or "not available in your region" in lower
+        or "copyright claim" in lower
+        or "not available in your country" in lower
+        or "uploader account has been terminated" in lower
+        or "account associated with this video has been terminated" in lower
+        or "livestream recording is unavailable" in lower
+        or "live stream recording is unavailable" in lower
+        or "recording of this live stream is unavailable" in lower
+        or "no longer available" in lower
+        or "unsupported media" in lower
+        or "no longer supported" in lower
+        or _contains_premiere_safe_format_error(text)
+    )
+
+
+def _contains_network_error(text: str) -> bool:
+    lower = (text or "").lower()
+    return (
+        "network error" in lower
+        or "timed out" in lower
+        or "timeout" in lower
+        or "temporary failure" in lower
+        or "connection reset" in lower
+        or "connection aborted" in lower
+        or "unable to download webpage" in lower
+    )
 
 
 def _contains_missing_js_runtime_error(stderr: str) -> bool:
@@ -1577,53 +2639,6 @@ def _mark_part_error(options: DownloadOptions, video, paths, part: str | None) -
         pass
 
 
-def _cleanup_companion_outputs_after_video_failure(
-    options: DownloadOptions,
-    video,
-    paths,
-    log,
-    run_parts_current_run: list[str] | None = None,
-) -> None:
-    for part, path in _companion_outputs_for_failed_video(paths, options.download_mode):
-        _remember_run_part(run_parts_current_run, part)
-        _delete_companion_output_after_video_failure(path, part, log)
-        try:
-            update_video_part_state(
-                options.channel_id,
-                options.channel_name,
-                options.base_folder,
-                video,
-                paths,
-                part,
-                STATUS_ERROR,
-                options.download_mode,
-            )
-        except OSError:
-            if log:
-                log(f"[WARNING] Could not update companion state after video failure: {part}")
-
-
-def _companion_outputs_for_failed_video(paths, download_mode: str) -> tuple[tuple[str, Path], ...]:
-    companions: list[tuple[str, Path]] = []
-    mode_parts = required_parts(download_mode)
-    if PART_THUMB in mode_parts:
-        companions.append((PART_THUMB, paths.thumb_path))
-    if PART_AUDIO in mode_parts:
-        companions.append((PART_AUDIO, paths.audio_path))
-    return tuple(companions)
-
-
-def _delete_companion_output_after_video_failure(path: Path, part: str, log=None) -> None:
-    try:
-        if path.exists() and path.is_file():
-            path.unlink()
-            if log:
-                log(f"[WARNING] Removed {part} output after video failure: {path.name}")
-    except OSError:
-        if log:
-            log(f"[WARNING] Could not remove {part} output after video failure: {path.name}")
-
-
 def _success_file_list(stem: str, download_mode: str) -> str:
     names = []
     for part in required_parts(download_mode):
@@ -1655,17 +2670,315 @@ def _last_meaningful_output_lines(stdout: str, stderr: str, limit: int = 50) -> 
     return combined[-limit:]
 
 
-def _sanitize_ytdlp_output_line(line: str) -> str:
-    text = (line or "").strip()
-    youtube_api_key_prefix = "AI" "za"
-    text = re.sub(r"(?i)(key=)[^&\s]+", r"\1***", text)
-    text = re.sub(
-        re.escape(youtube_api_key_prefix) + r"[0-9A-Za-z_-]{20,}",
-        youtube_api_key_prefix + "...****",
+def _collect_meaningful_ffmpeg_lines(text: str) -> list[str]:
+    lines: list[str] = []
+    for raw_line in str(text or "").splitlines():
+        line = _sanitize_subprocess_output_line(raw_line)
+        if not line:
+            continue
+        line = _bound_subprocess_output_line(line)
+        if not _is_meaningful_ffmpeg_line(line):
+            continue
+        if lines and lines[-1] == line:
+            continue
+        lines.append(line)
+    return lines
+
+
+def _ffmpeg_output_lines(stdout: str, stderr: str, *, limit: int = FFMPEG_OUTPUT_LINE_LIMIT) -> list[str]:
+    stderr_lines = _collect_meaningful_ffmpeg_lines(stderr)
+    stdout_lines = _collect_meaningful_ffmpeg_lines(stdout)
+    preferred_lines = stderr_lines if stderr_lines else stdout_lines
+    return preferred_lines[-max(1, int(limit)) :]
+
+
+def _bounded_sanitized_subprocess_output(
+    stdout: str,
+    stderr: str,
+    *,
+    limit: int = FFMPEG_COMBINED_OUTPUT_LIMIT,
+) -> str:
+    stderr_lines = _collect_meaningful_ffmpeg_lines(stderr)
+    stdout_lines = _collect_meaningful_ffmpeg_lines(stdout)
+    preferred_lines = stderr_lines if stderr_lines else stdout_lines
+    return _join_bounded_tail(preferred_lines, max(1, int(limit)))
+
+
+def _sanitize_subprocess_output_line(line: str) -> str:
+    try:
+        text = str(line or "").strip()
+    except Exception:
+        return ""
+    if not text:
+        return ""
+
+    try:
+        youtube_api_key_prefix = "AI" "za"
+        text = re.sub(
+            re.escape(youtube_api_key_prefix) + r"[0-9A-Za-z_-]{20,}",
+            "<redacted-api-key>",
+            text,
+        )
+        text = re.sub(
+            r"(?i)--cookies(?:[=\s]+(?:\"[^\"]*\"|'[^']*'|\S+))?",
+            "<cookies-arg-redacted>",
+            text,
+        )
+        text = re.sub(
+            r"(?i)\b(?:set-cookie|cookies?|cookie)\s*[:=]\s*[^\r\n]*",
+            "<cookie-redacted>",
+            text,
+        )
+        text = _sanitize_subprocess_paths(text)
+    except Exception:
+        return "<sanitized-output-unavailable>"
+    return text.strip()
+
+
+def _sanitize_subprocess_paths(text: str) -> str:
+    text, protected_urls = _protect_urls_for_path_sanitization(text)
+    text = _redact_sensitive_assignments_outside_urls(text)
+    quoted_path = r"(?P<quote>['\"])(?P<path>(?:[A-Za-z]:[\\/]|\\\\|/)(?:(?!(?P=quote)).)*)(?P=quote)"
+
+    def replace_quoted(match: re.Match) -> str:
+        path_text = match.group("path")
+        if not _is_absolute_subprocess_path(path_text):
+            return match.group(0)
+        quote = match.group("quote")
+        return f"{quote}{_path_placeholder(path_text)}{quote}"
+
+    text = re.sub(quoted_path, replace_quoted, text)
+
+    unquoted_patterns = (
+        r"(?<![\w/])([A-Za-z]:[\\/][^\r\n\"'<>|?*]*?)(?=(?::\s|[,;)\]\r\n]|$))",
+        r"(?<![\w/])(\\\\[^\r\n\"'<>|?*]*?)(?=(?::\s|[,;)\]\r\n]|$))",
+        r"(?<![\w:])(/[^\s\r\n\"'<>?][^\r\n\"'<>?]*?)(?=(?::\s|[,;)\]\r\n]|$))",
+    )
+    for pattern in unquoted_patterns:
+        text = re.sub(pattern, lambda match: _path_placeholder(match.group(1)), text)
+    return _restore_protected_urls(text, protected_urls)
+
+
+def _protect_urls_for_path_sanitization(text: str) -> tuple[str, dict[str, str]]:
+    if not text:
+        return text, {}
+
+    marker = "__S9H_PROTECTED_URL_"
+    while marker in text:
+        marker = f"_{marker}_"
+
+    protected_urls: dict[str, str] = {}
+
+    def replace_url(match: re.Match) -> str:
+        index = len(protected_urls)
+        placeholder = f"{marker}{index}__"
+        url, suffix = _split_url_trailing_punctuation(match.group("url"))
+        protected_urls[placeholder] = _redact_sensitive_url_query_values(url)
+        return f"{placeholder}{suffix}"
+
+    protected_text = re.sub(
+        r"(?P<url>[A-Za-z][A-Za-z0-9+.-]*://[^\s\"'<>]+)",
+        replace_url,
         text,
     )
-    text = re.sub(r"(?i)(cookie(?:s)?\s*[:=]).*", r"\1 ***", text)
-    return text
+    return protected_text, protected_urls
+
+
+def _redact_sensitive_url_query_values(url: str) -> str:
+    try:
+        text = str(url or "")
+    except Exception:
+        return ""
+    if not text or "?" not in text:
+        return text
+
+    if "#" in text:
+        before_fragment, fragment = text.split("#", 1)
+        fragment = f"#{fragment}"
+    else:
+        before_fragment = text
+        fragment = ""
+
+    prefix, query = before_fragment.split("?", 1)
+    query = re.sub(
+        r"(?i)(?P<prefix>^|[&;])"
+        r"(?P<name>key|api_key|token|access_token)"
+        r"(?P<equals>=)"
+        r"(?P<value>[^&;#]*)",
+        lambda match: f"{match.group('prefix')}{match.group('name')}{match.group('equals')}***",
+        query,
+    )
+    return f"{prefix}?{query}{fragment}"
+
+
+def _redact_sensitive_assignments_outside_urls(text: str) -> str:
+    try:
+        source = str(text or "")
+    except Exception:
+        return ""
+    if not source:
+        return ""
+
+    pieces: list[str] = []
+    cursor = 0
+    search_from = 0
+    while True:
+        match = _STANDALONE_SECRET_ASSIGNMENT_PATTERN.search(source, search_from)
+        if match is None:
+            pieces.append(source[cursor:])
+            break
+
+        value_start = match.end()
+        value_end = _standalone_secret_value_end(source, value_start)
+        pieces.append(source[cursor:match.start()])
+        pieces.append(source[match.start() : value_start])
+        pieces.append("***")
+        cursor = value_end
+        search_from = max(value_end, value_start)
+
+    return "".join(pieces)
+
+
+def _standalone_secret_value_end(text: str, start: int) -> int:
+    index = start
+    bracket_depth = 0
+    while index < len(text):
+        char = text[index]
+        if char in "&#,;)}":
+            break
+        if char == "]" and bracket_depth <= 0:
+            break
+        if char.isspace():
+            break
+        if char == ":" and index + 1 < len(text) and text[index + 1].isspace():
+            break
+        if char == "[":
+            bracket_depth += 1
+        elif char == "]" and bracket_depth > 0:
+            bracket_depth -= 1
+        index += 1
+    return index
+
+
+def _restore_protected_urls(text: str, protected_urls: dict[str, str]) -> str:
+    restored = text
+    for placeholder, url in protected_urls.items():
+        if placeholder in restored:
+            restored = restored.replace(placeholder, url, 1)
+        if placeholder in restored:
+            restored = restored.replace(placeholder, "<url>")
+    return restored
+
+
+def _split_url_trailing_punctuation(url: str) -> tuple[str, str]:
+    candidate = str(url or "")
+    suffix = ""
+    while candidate:
+        last = candidate[-1]
+        if last in ",;":
+            suffix = last + suffix
+            candidate = candidate[:-1]
+            continue
+        if last == ":":
+            suffix = last + suffix
+            candidate = candidate[:-1]
+            continue
+        if last == ")" and candidate.count(")") > candidate.count("("):
+            suffix = last + suffix
+            candidate = candidate[:-1]
+            continue
+        if last == "]" and candidate.count("]") > candidate.count("["):
+            suffix = last + suffix
+            candidate = candidate[:-1]
+            continue
+        break
+    return candidate or "<url>", suffix
+
+
+def _is_absolute_subprocess_path(path_text: str) -> bool:
+    return bool(
+        re.match(r"^[A-Za-z]:[\\/]", path_text or "")
+        or str(path_text or "").startswith("\\\\")
+        or str(path_text or "").startswith("/")
+    )
+
+
+def _path_placeholder(path_text: str) -> str:
+    stripped = str(path_text or "").strip().rstrip("\\/")
+    if not stripped:
+        return "<path>"
+    is_posix = stripped.startswith("/") and not stripped.startswith("\\\\")
+    path_cls = PurePosixPath if is_posix else PureWindowsPath
+    basename = path_cls(stripped).name
+    if not _safe_path_basename(basename):
+        return "<path>"
+    separator = "/" if is_posix or ("/" in stripped and "\\" not in stripped) else "\\"
+    return f"<path>{separator}{basename[:120]}"
+
+
+def _safe_path_basename(basename: str) -> bool:
+    if not basename:
+        return False
+    if any(separator in basename for separator in ("\\", "/")):
+        return False
+    if any(ord(char) < 32 for char in basename):
+        return False
+    if any(char in basename for char in ("?", "&", "=")):
+        return False
+    return True
+
+
+def _bound_subprocess_output_line(line: str, limit: int = FFMPEG_OUTPUT_LINE_CHAR_LIMIT) -> str:
+    text = " ".join(str(line or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _join_bounded_tail(lines: list[str], limit: int) -> str:
+    selected: list[str] = []
+    total = 0
+    for line in reversed(lines):
+        addition = len(line) + (1 if selected else 0)
+        if selected and total + addition > limit:
+            break
+        if not selected and addition > limit:
+            selected.append(line[-limit:])
+            break
+        selected.append(line)
+        total += addition
+    return "\n".join(reversed(selected))
+
+
+def _is_meaningful_ffmpeg_line(line: str) -> bool:
+    if not line:
+        return False
+    lower = line.lower().strip()
+    if lower.startswith("ffmpeg version "):
+        return False
+    if lower.startswith("built with "):
+        return False
+    if lower.startswith("configuration:"):
+        return False
+    if lower.startswith("press [q] to stop"):
+        return False
+    if re.match(r"^(libavutil|libavcodec|libavformat|libavdevice|libavfilter|libswscale|libswresample|libpostproc)\s+", lower):
+        return False
+    if _is_ffmpeg_progress_line(lower):
+        return False
+    return True
+
+
+def _is_ffmpeg_progress_line(lower_line: str) -> bool:
+    if lower_line.startswith("frame=") and "time=" in lower_line:
+        return True
+    if lower_line.startswith("size=") and "time=" in lower_line and "bitrate=" in lower_line:
+        return True
+    return False
+
+
+def _sanitize_ytdlp_output_line(line: str) -> str:
+    return _sanitize_subprocess_output_line(line)
 
 
 def _is_meaningful_ytdlp_line(line: str) -> bool:
@@ -1681,16 +2994,33 @@ def _is_meaningful_ytdlp_line(line: str) -> bool:
     return True
 
 
-def _log_friendly_ytdlp_error(log, exc: YtdlpExecutionError, cookies_enabled: bool) -> None:
+def _log_friendly_ytdlp_error(log, exc: YtdlpExecutionError, options: DownloadOptions) -> None:
     text = exc.combined_output or "\n".join([str(exc), *exc.output_lines])
-    friendly = classify_ytdlp_error(
-        text,
-        cookies_enabled=cookies_enabled,
-        bot_check=exc.bot_check,
-        http_403=exc.http_403,
-        missing_js_runtime=exc.missing_js_runtime,
-    )
+    failure_kind = classify_ytdlp_failure_kind(exc, options)
+    if failure_kind in {
+        YtdlpFailureKind.RATE_LIMIT,
+        YtdlpFailureKind.BOT_CHECK,
+        YtdlpFailureKind.COOKIE_SESSION,
+        YtdlpFailureKind.HTTP_403,
+    }:
+        friendly = friendly_ytdlp_failure_kind_error(failure_kind.value)
+    else:
+        friendly = classify_ytdlp_error(
+            text,
+            cookies_enabled=options.cookies_enabled,
+            bot_check=exc.bot_check,
+            http_403=exc.http_403,
+            missing_js_runtime=exc.missing_js_runtime,
+        )
     log(format_friendly_error(friendly, _technical_lines_for_ytdlp(exc)))
+    if options.cookies_enabled and failure_kind == YtdlpFailureKind.COOKIE_SESSION:
+        log(cookie_session_error_message(options))
+
+
+def _log_friendly_ffmpeg_error(log, exc: FFmpegExecutionError) -> None:
+    failure_kind = classify_ffmpeg_failure_kind(exc)
+    friendly = friendly_ffmpeg_failure_kind_error(failure_kind.value, exc.combined_output)
+    log(format_friendly_error(friendly, _ffmpeg_technical_lines_for_log(exc)))
 
 
 def _log_missing_js_runtime_warning(log, output_lines: list[str]) -> None:
@@ -1708,25 +3038,114 @@ def _technical_lines_for_ytdlp(exc: YtdlpExecutionError) -> list[str]:
     return [*lines, f"yt-dlp exit code {exc.exit_code}"]
 
 
+def _technical_lines_for_ffmpeg(exc: FFmpegExecutionError) -> list[str]:
+    lines = [line for line in exc.output_lines if line.strip()]
+    if not lines and str(exc).strip():
+        lines = [_sanitize_subprocess_output_line(str(exc))]
+    return [*lines[-FFMPEG_OUTPUT_LINE_LIMIT:], f"ffmpeg exit code {exc.exit_code}", f"operation: {exc.operation}"]
+
+
+def _ffmpeg_technical_lines_for_log(exc: FFmpegExecutionError) -> list[str]:
+    lines = _technical_lines_for_ffmpeg(exc)
+    evidence = [
+        line
+        for line in lines
+        if not line.startswith("ffmpeg exit code ") and not line.startswith("operation: ")
+    ]
+    summary = _bound_subprocess_output_line(
+        " | ".join([f"ffmpeg exit code {exc.exit_code}", f"operation: {exc.operation}", *evidence[:3]])
+    )
+    return [summary, *lines]
+
+
+@contextmanager
+def _media_staging_directory(channel_dir: Path, video_id: str, log=None):
+    channel_dir.mkdir(parents=True, exist_ok=True)
+    safe_id = _safe_temp_stem(video_id)[:32]
+    staging_path = Path(tempfile.mkdtemp(prefix=f".s9h-stage-{safe_id}-", dir=str(channel_dir)))
+    try:
+        yield staging_path
+    finally:
+        _cleanup_media_staging_directory(staging_path, channel_dir, log)
+
+
+def _cleanup_media_staging_directory(staging_path: Path, channel_dir: Path, log=None) -> None:
+    try:
+        if not _is_path_relative_to(staging_path.resolve(strict=False), channel_dir.resolve(strict=False)):
+            if log:
+                log("[WARNING] Could not clean staging directory safely.")
+            return
+        if not staging_path.exists():
+            return
+        if staging_path.is_symlink() or not staging_path.is_dir():
+            if log:
+                log("[WARNING] Could not clean staging directory safely.")
+            return
+        shutil.rmtree(staging_path)
+    except OSError:
+        if log:
+            log("[WARNING] Could not remove staging directory; a file may still be locked.")
+
+
+def _is_path_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
 def _move_single_file(
     temp_dir: Path,
     pattern: str,
     final_path: Path,
     log=None,
     replace_existing: bool = False,
+    cancel_controller: DownloadController | None = None,
 ) -> None:
     if not replace_existing and _final_file_ready(final_path):
         return
+    staged_path = _select_staged_file(temp_dir, pattern, final_path.suffix)
+    _atomic_promote_with_retry(
+        staged_path,
+        final_path,
+        log,
+        replace_existing=replace_existing,
+        cancel_controller=cancel_controller,
+    )
 
-    candidates = [path for path in temp_dir.rglob(pattern) if path.is_file()]
+
+def _select_staged_file(
+    staging_dir: Path,
+    pattern: str,
+    expected_suffix: str,
+) -> Path:
+    suffix = (expected_suffix or "").lower()
+    candidates = []
+    for path in staging_dir.rglob(pattern):
+        if not path.is_file():
+            continue
+        if suffix and path.suffix.lower() != suffix:
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        if size > 0:
+            candidates.append((size, path))
     if not candidates:
-        raise DownloadError(f"expected {final_path.suffix} file was not created")
+        raise DownloadError(f"expected {expected_suffix} file was not created")
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
 
-    candidates.sort(key=lambda path: path.stat().st_size, reverse=True)
-    _move_with_retry(candidates[0], final_path, log, replace_existing=replace_existing)
 
-
-def _download_thumbnail_from_url(thumbnail_url: str, temp_path: Path, final_path: Path, log=None) -> None:
+def _download_thumbnail_from_url(
+    thumbnail_url: str,
+    temp_path: Path,
+    final_path: Path,
+    log=None,
+    cancel_controller: DownloadController | None = None,
+) -> None:
     request = urllib.request.Request(thumbnail_url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=25) as response:
@@ -1739,9 +3158,9 @@ def _download_thumbnail_from_url(thumbnail_url: str, temp_path: Path, final_path
         raise DownloadError("thumbnail download failed")
 
     temp_path.write_bytes(data)
-    if _final_file_ready(final_path):
-        return
-    _move_with_retry(temp_path, final_path, log)
+    if not _final_file_ready(temp_path):
+        raise DownloadError("thumbnail download failed")
+    _atomic_promote_with_retry(temp_path, final_path, log, cancel_controller=cancel_controller)
 
 
 def _is_jpeg_download(content_type: str, data: bytes) -> bool:
@@ -1760,26 +3179,112 @@ def _move_with_retry(
     final_path: Path,
     log=None,
     replace_existing: bool = False,
+    cancel_controller: DownloadController | None = None,
 ) -> None:
-    last_error: BaseException | None = None
-    final_path.parent.mkdir(parents=True, exist_ok=True)
-    for attempt, delay in enumerate((0, 1, 3, 5)):
-        if delay:
-            time.sleep(delay)
-        try:
-            if _final_file_ready(final_path) and not replace_existing:
-                return
-            if final_path.exists():
-                final_path.unlink()
-            shutil.move(str(source_path), str(final_path))
-            if attempt > 0 and log:
-                log("[WARNING] File was temporarily locked, retry succeeded.")
-            return
-        except (OSError, shutil.Error) as exc:
-            last_error = exc
+    _atomic_promote_with_retry(
+        source_path,
+        final_path,
+        log,
+        replace_existing=replace_existing,
+        cancel_controller=cancel_controller,
+    )
 
-    if last_error is not None:
-        raise FileOperationError("move", source_path, final_path, last_error)
+
+def _atomic_promote_with_retry(
+    source_path: Path,
+    final_path: Path,
+    log=None,
+    replace_existing: bool = False,
+    cancel_controller: DownloadController | None = None,
+) -> None:
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    if _final_file_ready(final_path) and not replace_existing:
+        return
+
+    try:
+        if not source_path.exists() or not source_path.is_file() or source_path.stat().st_size <= 0:
+            raise OSError("source file is missing or empty")
+    except OSError as exc:
+        raise FileOperationError("promote", source_path, final_path, exc) from exc
+
+    if not _paths_share_filesystem(source_path, final_path.parent):
+        exc = OSError("source and destination are not on the same filesystem")
+        raise FileOperationError("promote", source_path, final_path, exc) from exc
+
+    promoted = False
+    last_replace_error: OSError | None = None
+    successful_attempt = 0
+    for attempt, delay in enumerate((0, 1, 3, 5)):
+        _raise_if_cancelled(cancel_controller)
+        if delay:
+            _sleep_with_cancel(delay, cancel_controller)
+        try:
+            os.replace(source_path, final_path)
+            promoted = True
+            successful_attempt = attempt
+            break
+        except OSError as exc:
+            last_replace_error = exc
+
+    if not promoted:
+        if last_replace_error is None:
+            last_replace_error = OSError("promotion did not complete")
+        raise FileOperationError("promote", source_path, final_path, last_replace_error)
+
+    _verify_promoted_file_with_retry(source_path, final_path, cancel_controller)
+    if successful_attempt > 0 and log:
+        log("[WARNING] File was temporarily locked, retry succeeded.")
+
+
+def _verify_promoted_file_with_retry(
+    source_path: Path,
+    final_path: Path,
+    cancel_controller: DownloadController | None = None,
+) -> None:
+    last_error: OSError | None = None
+    for delay in (0, 0.05, 0.1, 0.2):
+        _raise_if_cancelled(cancel_controller)
+        if delay:
+            _sleep_with_cancel(delay, cancel_controller)
+        try:
+            _verify_promoted_file_once(source_path, final_path)
+            return
+        except OSError as exc:
+            last_error = exc
+    if last_error is None:
+        last_error = OSError("promoted file verification failed")
+    raise FileOperationError("verify_promoted_file", source_path, final_path, last_error)
+
+
+def _verify_promoted_file_once(source_path: Path, final_path: Path) -> None:
+    if not final_path.exists():
+        raise OSError("promoted file does not exist")
+    if not final_path.is_file():
+        raise OSError("promoted path is not a file")
+    if final_path.stat().st_size <= 0:
+        raise OSError("promoted file is empty")
+    if source_path.exists():
+        raise OSError("source still exists after promotion")
+
+
+def _paths_share_filesystem(source_path: Path, destination_parent: Path) -> bool:
+    try:
+        if not source_path.exists() or not source_path.is_file():
+            return False
+        source_parent = source_path.parent
+        if not source_parent.exists() or not source_parent.is_dir():
+            return False
+        if not destination_parent.exists() or not destination_parent.is_dir():
+            return False
+        source_resolved = source_path.resolve(strict=False)
+        destination_resolved = destination_parent.resolve(strict=False)
+        if os.name == "nt" and source_resolved.anchor.casefold() != destination_resolved.anchor.casefold():
+            return False
+        source_parent_device = source_path.parent.stat().st_dev
+        destination_parent_device = destination_parent.stat().st_dev
+        return source_parent_device == destination_parent_device
+    except OSError:
+        return False
 
 
 def _final_file_ready(path: Path) -> bool:
