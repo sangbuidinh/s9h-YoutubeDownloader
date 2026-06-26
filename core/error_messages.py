@@ -42,11 +42,11 @@ def classify_ytdlp_error(
     missing_js_runtime: bool = False,
 ) -> FriendlyError:
     if bot_check or _contains_bot_check(text):
-        if cookies_enabled:
-            return FRIENDLY_ERRORS["cookies_invalid"]
-        return FRIENDLY_ERRORS["bot_check"]
+        return FRIENDLY_ERRORS["bot_verification"]
+    if cookies_enabled and _contains_cookie_session_rejected(text):
+        return FRIENDLY_ERRORS["cookie_session_rejected"]
     if http_403 or _contains_http_403(text):
-        return FRIENDLY_ERRORS["http_403"]
+        return FRIENDLY_ERRORS["http_403_repeated"]
     if missing_js_runtime or _contains_js_runtime(text):
         return FRIENDLY_ERRORS["missing_js_runtime"]
     return classify_general_error(text)
@@ -87,6 +87,8 @@ def classify_general_error(text: str) -> FriendlyError:
         return FRIENDLY_ERRORS["premiere_safe_mp4"]
     if _contains_stream_interrupted(lower):
         return FRIENDLY_ERRORS["stream_interrupted"]
+    if _contains_disk_full(lower):
+        return FRIENDLY_ERRORS["disk_full"]
     if _contains_audio_extraction(lower):
         return FRIENDLY_ERRORS["audio_failed"]
     if _contains_file_exists(lower):
@@ -126,6 +128,39 @@ def batch_blocked_warning() -> FriendlyError:
     return FRIENDLY_ERRORS["batch_blocked"]
 
 
+def friendly_ytdlp_failure_kind_error(kind: str, refreshed_rejected: bool = False) -> FriendlyError:
+    if refreshed_rejected:
+        return FRIENDLY_ERRORS["refreshed_cookie_rejected"]
+    mapping = {
+        "rate_limit": "rate_limit",
+        "bot_check": "bot_verification",
+        "cookie_session": "cookie_session_rejected",
+        "http_403": "http_403_repeated",
+    }
+    return FRIENDLY_ERRORS.get(mapping.get(kind, ""), FRIENDLY_ERRORS["generic"])
+
+
+def friendly_ffmpeg_failure_kind_error(kind: str, text: str = "") -> FriendlyError:
+    normalized = (kind or "").strip().lower()
+    mapping = {
+        "invalid_input": "ffmpeg_invalid_input",
+        "no_audio_stream": "ffmpeg_no_audio",
+        "encoder_unavailable": "ffmpeg_encoder_unavailable",
+        "disk_full": "disk_full",
+        "permission_denied": "permission_denied",
+    }
+    if normalized == "output_path":
+        lower = (text or "").lower()
+        if _contains_path_too_long(lower):
+            return FRIENDLY_ERRORS["path_too_long"]
+        if _contains_permission(lower):
+            return FRIENDLY_ERRORS["permission_denied"]
+        return FRIENDLY_ERRORS["invalid_filename"]
+    if normalized == "interrupted_write":
+        return FRIENDLY_ERRORS["audio_failed"]
+    return FRIENDLY_ERRORS.get(mapping.get(normalized, ""), FRIENDLY_ERRORS["audio_failed"])
+
+
 def _technical_detail(technical_lines: list[str] | tuple[str, ...]) -> str:
     lines = [str(line).strip() for line in technical_lines if str(line).strip()]
     if not lines:
@@ -145,10 +180,84 @@ def _shorten(text: str, limit: int) -> str:
 def _contains_bot_check(text: str) -> bool:
     lower = (text or "").lower()
     return (
-        "sign in to confirm" in lower
+        "sign in to confirm you're not a bot" in lower
+        or "sign in to confirm you are not a bot" in lower
         or "not a bot" in lower
-        or "use --cookies" in lower
         or "confirm you're not a bot" in lower
+        or "confirm you are not a bot" in lower
+        or "this helps protect our community" in lower
+        or "verify that you're human" in lower
+        or "verify you're human" in lower
+        or "verify that you are human" in lower
+        or "verify you are human" in lower
+        or "unusual traffic" in lower
+        or "automated requests" in lower
+        or "automated request" in lower
+        or "detected automated traffic" in lower
+    )
+
+
+def _contains_cookie_session_rejected(text: str) -> bool:
+    lower = (text or "").lower()
+    if not lower:
+        return False
+    session_markers = (
+        "cookies are expired",
+        "cookies expired",
+        "cookies are invalid",
+        "cookie invalid",
+        "cookies invalid",
+        "cookie is invalid",
+        "cookies are no longer valid",
+        "cookie is no longer valid",
+        "cookie/session rejected",
+        "cookie session rejected",
+        "session cookie rejected",
+        "youtube rejected the supplied session",
+        "supplied browser session has expired",
+        "browser session has expired",
+        "login session expired",
+        "session has expired",
+        "current account is not authenticated",
+        "account is not authenticated",
+        "account authentication failed",
+        "not authenticated",
+        "authentication required",
+        "authentication is required",
+        "authentication is required to view this video",
+        "login required",
+        "please log in",
+        "sign in to continue",
+        "please sign in to continue",
+        "please sign in to view this video",
+        "you must be signed in to view this video",
+        "sign in to confirm your age",
+        "sign in to confirm your identity",
+        "sign in to confirm your account",
+        "failed to load cookies",
+        "could not load cookies",
+        "unable to load cookies",
+        "failed to parse cookies",
+        "could not parse cookies",
+        "unable to parse cookies",
+    )
+    if any(marker in lower for marker in session_markers):
+        return True
+    if "age-restricted" in lower or "age restricted" in lower:
+        return any(marker in lower for marker in ("authenticate", "authentication", "sign in", "login", "cookie"))
+    if "cookie" not in lower and "cookies" not in lower and "browser session" not in lower:
+        return False
+    return (
+        "expired" in lower
+        or "invalid" in lower
+        or "not valid" in lower
+        or "no longer valid" in lower
+        or "rejected" in lower
+        or "authentication" in lower
+        or "authenticate" in lower
+        or "failed" in lower
+        or "could not" in lower
+        or "unable to" in lower
     )
 
 
@@ -259,6 +368,16 @@ def _contains_path_too_long(text: str) -> bool:
 def _contains_permission(text: str) -> bool:
     lower = (text or "").lower()
     return "permission denied" in lower or "access is denied" in lower or "winerror 5" in lower
+
+
+def _contains_disk_full(text: str) -> bool:
+    lower = (text or "").lower()
+    return (
+        "no space left on device" in lower
+        or "disk full" in lower
+        or "not enough space" in lower
+        or "there is not enough space on the disk" in lower
+    )
 
 
 def _contains_file_in_use(text: str) -> bool:
@@ -373,6 +492,56 @@ FRIENDLY_ERRORS = {
             "Vào youtube.com và refresh",
             "Xuất lại cookies.txt mới",
             "Chọn lại file cookies.txt trong tool",
+        ),
+    ),
+    "bot_verification": FriendlyError(
+        "ERROR",
+        "YouTube yêu cầu xác minh người dùng",
+        "YouTube đang yêu cầu xác nhận bạn không phải bot. Danh sách tải đã được tạm dừng để tránh tiếp tục gửi yêu cầu.",
+        (
+            "Mở YouTube trong đúng trình duyệt đang đăng nhập và hoàn tất xác minh nếu có",
+            "Xuất lại cookie sau khi phiên trình duyệt đã được YouTube chấp nhận",
+            "Chỉ thử lại khi phiên đăng nhập hoạt động bình thường",
+        ),
+    ),
+    "rate_limit": FriendlyError(
+        "ERROR",
+        "YouTube đang giới hạn lượt tải",
+        "YouTube đang tạm giới hạn do có quá nhiều yêu cầu tải. Hãy chờ một thời gian hoặc làm mới phiên cookie trước khi thử lại.",
+        (
+            "Chờ một thời gian trước khi tải tiếp",
+            "Giảm số video tải liên tục",
+            "Làm mới cookie nếu YouTube vẫn tiếp tục giới hạn",
+        ),
+    ),
+    "cookie_session_rejected": FriendlyError(
+        "ERROR",
+        "Phiên đăng nhập không còn hợp lệ",
+        "YouTube không chấp nhận phiên đăng nhập hoặc cookie hiện tại. Hãy đăng nhập lại và xuất cookie mới trước khi thử lại.",
+        (
+            "Mở YouTube trong trình duyệt và đăng nhập lại nếu cần",
+            "Xuất hoặc thay thế file cookie sau khi phiên đăng nhập hợp lệ",
+            "Chỉ bấm thử lại khi file cookie nguồn đã thay đổi",
+        ),
+    ),
+    "http_403_repeated": FriendlyError(
+        "ERROR",
+        "YouTube liên tục từ chối truy cập",
+        "YouTube đã nhiều lần trả về lỗi HTTP 403. Danh sách tải được tạm dừng để tránh tiếp tục thất bại.",
+        (
+            "Chờ một thời gian hoặc làm mới cookie trước khi thử lại",
+            "Không tiếp tục tải hàng loạt khi YouTube đang từ chối truy cập",
+            "Bỏ qua video hiện tại nếu lỗi chỉ xảy ra với video này",
+        ),
+    ),
+    "refreshed_cookie_rejected": FriendlyError(
+        "ERROR",
+        "Cookie mới vẫn bị YouTube từ chối",
+        "Cookie đã được thay đổi nhưng YouTube vẫn không chấp nhận phiên mới. Bạn có thể bỏ qua video hiện tại hoặc dừng danh sách tải.",
+        (
+            "Đăng nhập lại YouTube trong đúng trình duyệt",
+            "Xuất cookie mới sau khi phiên trình duyệt hoạt động",
+            "Bỏ qua video hoặc dừng danh sách nếu YouTube vẫn từ chối",
         ),
     ),
     "http_403": FriendlyError(
@@ -522,6 +691,46 @@ FRIENDLY_ERRORS = {
             r"Kiểm tra ffmpeg.exe nằm trong data\bin của thư mục portable",
             "Cập nhật yt-dlp.exe nếu file quá cũ",
             "Thử tải lại video sau vài phút",
+        ),
+    ),
+    "ffmpeg_invalid_input": FriendlyError(
+        "ERROR",
+        "File MP4 nguồn không hợp lệ để trích xuất MP3",
+        "File MP4 đã tải có thể chưa hoàn chỉnh, bị hỏng hoặc FFmpeg không đọc được.",
+        (
+            "Tải lại video để tạo file MP4 nguồn mới",
+            "Kiểm tra file MP4 có phát được bằng trình phát video hay không",
+            "Nếu lỗi lặp lại, cập nhật ffmpeg.exe rồi thử lại",
+        ),
+    ),
+    "ffmpeg_no_audio": FriendlyError(
+        "ERROR",
+        "Video không có luồng âm thanh phù hợp",
+        "FFmpeg không tìm thấy luồng âm thanh có thể trích xuất từ file MP4 nguồn.",
+        (
+            "Kiểm tra video gốc có âm thanh hay không",
+            "Thử tải lại video bằng chế độ có MP3",
+            "Nếu video là bản không có tiếng, bỏ qua phần MP3",
+        ),
+    ),
+    "ffmpeg_encoder_unavailable": FriendlyError(
+        "ERROR",
+        "FFmpeg thiếu bộ mã hóa MP3",
+        "Bản ffmpeg.exe hiện tại không có bộ mã hóa libmp3lame để tạo file MP3.",
+        (
+            "Thay ffmpeg.exe bằng bản đầy đủ có libmp3lame",
+            r"Đặt ffmpeg.exe mới trong data\bin của thư mục portable",
+            "Sau đó tải lại phần MP3",
+        ),
+    ),
+    "disk_full": FriendlyError(
+        "ERROR",
+        "Ổ đĩa không còn đủ dung lượng",
+        "Ổ lưu file hoặc thư mục tạm không còn đủ dung lượng để ghi file tải xuống.",
+        (
+            "Giải phóng dung lượng ổ đĩa đang lưu video",
+            "Chọn thư mục lưu trên ổ còn nhiều dung lượng hơn",
+            "Sau đó tải lại phần bị lỗi",
         ),
     ),
     "path_too_long": FriendlyError(

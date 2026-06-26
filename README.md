@@ -89,16 +89,18 @@ Runtime tools được đặt ngoài file `.exe` để có thể cập nhật ri
 
 YouTube Data API key là bắt buộc để lấy danh sách video từ kênh. Bạn có thể nhập API key trực tiếp trong app trước khi tải danh sách video.
 
-API key nhập gần nhất được lưu cục bộ trong:
+Sau một lần `Lấy danh sách Video` thành công, API key không rỗng trong ô nhập được tự động ghi nhớ và bảo vệ bằng Windows DPAPI cho user hiện tại trong:
 
 ```text
 data/app_settings.json
 ```
 
-App cũng có thể đọc thêm API key từ `data/api key.txt`, mỗi dòng một key. File `data/api key.txt.example` trong bản đóng gói chỉ là mẫu.
+File cài đặt chỉ lưu payload đã bảo vệ `last_api_key_protected`; app không lưu plaintext `last_api_key`. Trường tùy chọn cũ `remember_api_key` đã bị loại bỏ và được dọn trong lần đọc/ghi cài đặt tiếp theo. Key đã bảo vệ thường chỉ giải mã được bằng đúng tài khoản Windows đã lưu nó, nên khi chuyển thư mục portable sang PC hoặc user Windows khác, bạn có thể phải nhập lại key. Nếu Windows DPAPI không khả dụng hoặc lưu thất bại, key vẫn dùng được trong phiên hiện tại nhưng app sẽ hiển thị cảnh báo.
+
+App cũng có thể đọc thêm API key từ `data/api key.txt`, mỗi dòng một key. File này vẫn là nguồn key plaintext do người dùng tự quản lý; app không tự động copy key UI vào file đó và không thay đổi file đó. File `data/api key.txt.example` trong bản đóng gói chỉ là mẫu.
 
 > [!WARNING]
-> Không commit, upload hoặc chia sẻ API key thật.
+> Không commit, upload hoặc chia sẻ API key thật, `data/api key.txt` hoặc `data/app_settings.json`. DPAPI không bảo vệ key trước malware hoặc tiến trình khác đã chạy với cùng quyền của user Windows hiện tại.
 
 ## 🍪 Cookies
 

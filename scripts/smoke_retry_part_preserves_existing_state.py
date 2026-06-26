@@ -10,8 +10,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from core import db_store, state_store
+from core import db_store, downloader, state_store
 from core.download_modes import MODE_VIDEO_AUDIO_THUMB, MODE_VIDEO_THUMB, PART_AUDIO, PART_THUMB, PART_VIDEO
+from core.downloader import DownloadOptions
 
 
 CHANNEL_ID = "channel"
@@ -26,6 +27,7 @@ def main() -> int:
     _test_sqlite_thumbnail_retry_preserves_existing_video()
     _test_sqlite_failed_retry_does_not_downgrade_video()
     _test_sqlite_audio_retry_preserves_video_and_thumb()
+    _test_failed_media_replacement_preserves_existing_files()
     _assert(
         real_runtime_before == _snapshot_real_runtime_files(),
         "real runtime state files were mutated by temp-file smoke tests",
@@ -149,6 +151,95 @@ def _test_sqlite_audio_retry_preserves_video_and_thumb() -> None:
         _assert(after["status"] == state_store.STATUS_DOWNLOADED, "audio retry aggregate did not become downloaded")
 
 
+def _test_failed_media_replacement_preserves_existing_files() -> None:
+    with TemporaryDirectory(prefix="retry_media_replace_") as temp_dir:
+        root = Path(temp_dir)
+        staging = root / "stage"
+        staging.mkdir()
+        final_video = root / "video" / "video.mp4"
+        final_audio = root / "audio" / "audio.mp3"
+        final_thumb = root / "thumb" / "thumb.jpg"
+        final_video.parent.mkdir()
+        final_audio.parent.mkdir()
+        final_thumb.parent.mkdir()
+        final_video.write_bytes(b"OLD_VIDEO")
+        final_audio.write_bytes(b"OLD_AUDIO")
+        final_thumb.write_bytes(b"OLD_THUMB")
+
+        old_run = downloader._run_ytdlp_with_retries
+        old_ready = downloader._premiere_safe_mp4_ready_for_download
+        old_validate = downloader._validate_premiere_safe_mp4_for_download
+        old_promote = downloader._atomic_promote_with_retry
+        try:
+            def write_staged_mp4(command, _options, _log, _cancel_controller=None, _cookie_retry_state=None):
+                _output_path(command, "mp4").write_bytes(b"NEW_VIDEO")
+
+            downloader._run_ytdlp_with_retries = write_staged_mp4
+            downloader._premiere_safe_mp4_ready_for_download = lambda _path, _controller: False
+            downloader._validate_premiere_safe_mp4_for_download = lambda *_args, **_kwargs: None
+            downloader._atomic_promote_with_retry = lambda source, target, *_args, **_kwargs: (_ for _ in ()).throw(
+                downloader.FileOperationError("promote", source, target, PermissionError("locked"))
+            )
+            try:
+                downloader._download_video(
+                    "retry-video",
+                    "retry-video",
+                    staging,
+                    final_video,
+                    DownloadOptions(str(root), CHANNEL_ID, CHANNEL_NAME),
+                    lambda _message: None,
+                )
+            except downloader.FileOperationError:
+                pass
+            else:
+                raise AssertionError("failed video replacement did not propagate")
+        finally:
+            downloader._run_ytdlp_with_retries = old_run
+            downloader._premiere_safe_mp4_ready_for_download = old_ready
+            downloader._validate_premiere_safe_mp4_for_download = old_validate
+            downloader._atomic_promote_with_retry = old_promote
+
+        _assert(final_audio.read_bytes() == b"OLD_AUDIO", "failed video replacement changed existing MP3")
+        _assert(final_thumb.read_bytes() == b"OLD_THUMB", "failed video replacement changed existing thumbnail")
+
+        old_run = downloader._run_ytdlp_with_retries
+        old_ready_file = downloader._final_file_ready
+        old_promote = downloader._atomic_promote_with_retry
+        try:
+            def write_staged_mp3(command, _options, _log, _cancel_controller=None, _cookie_retry_state=None):
+                _output_path(command, "mp3").write_bytes(b"NEW_AUDIO")
+
+            def final_ready(path):
+                if Path(path) == final_audio:
+                    return False
+                return old_ready_file(path)
+
+            downloader._run_ytdlp_with_retries = write_staged_mp3
+            downloader._final_file_ready = final_ready
+            downloader._atomic_promote_with_retry = lambda source, target, *_args, **_kwargs: (_ for _ in ()).throw(
+                downloader.FileOperationError("promote", source, target, PermissionError("locked"))
+            )
+            try:
+                downloader._download_audio(
+                    "retry-audio",
+                    "retry-audio",
+                    staging,
+                    final_audio,
+                    DownloadOptions(str(root), CHANNEL_ID, CHANNEL_NAME),
+                    lambda _message: None,
+                )
+            except downloader.FileOperationError:
+                pass
+            else:
+                raise AssertionError("failed audio replacement did not propagate")
+        finally:
+            downloader._run_ytdlp_with_retries = old_run
+            downloader._final_file_ready = old_ready_file
+            downloader._atomic_promote_with_retry = old_promote
+
+        _assert(final_audio.read_bytes() == b"OLD_AUDIO", "failed audio replacement changed existing MP3")
+
+
 def _seed_sqlite_part_state(
     db_path: Path,
     video_id: str,
@@ -196,6 +287,11 @@ def _video(video_id: str):
         sanitized_filename_base=video_id,
         display_order=1,
     )
+
+
+def _output_path(command: list[str], extension: str) -> Path:
+    template = Path(command[command.index("-o") + 1])
+    return template.with_name(template.name.replace("%(ext)s", extension))
 
 
 def _assert_common_sqlite_updates_are_metadata_only() -> None:

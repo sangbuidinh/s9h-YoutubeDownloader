@@ -14,7 +14,8 @@ from core import db_store, state_store
 def main() -> int:
     _configure_stdio()
     _test_missing_sqlite_is_created()
-    _test_existing_sqlite_uses_lightweight_probe()
+    _test_existing_sqlite_startup_validates_without_ddl()
+    _test_repeated_state_reads_do_not_rerun_ddl()
     _test_unrelated_text_file_is_ignored()
     print("startup SQLite state smoke tests passed")
     return 0
@@ -32,16 +33,33 @@ def _test_missing_sqlite_is_created() -> None:
         _assert(summary["download_items"] == 0, "new SQLite DB should start empty")
 
 
-def _test_existing_sqlite_uses_lightweight_probe() -> None:
+def _test_existing_sqlite_startup_validates_without_ddl() -> None:
     with _temp_runtime() as paths:
         _seed_sqlite_many_rows(paths["db_path"], rows=1000)
+        _forget_initialized(paths["db_path"])
         recorder = _SqlRecorder(db_store.sqlite3.connect)
         with _patched_db_file(paths["db_path"]), _patched_sqlite_connect(recorder):
             state_store.initialize_sqlite_state()
+            entry = state_store.get_video_entry("channel", "video-1")
 
         statements = recorder.statements_text()
-        _assert("CREATE TABLE IF NOT EXISTS download_items" in statements, "startup did not ensure schema")
+        _assert(not _contains_ddl(statements), f"startup validation reran schema DDL: {statements}")
         _assert("COUNT(" not in statements.upper(), "startup used COUNT(*) for initialization")
+        _assert(entry and entry["video_id"] == "video-1", "existing rows did not survive startup")
+
+
+def _test_repeated_state_reads_do_not_rerun_ddl() -> None:
+    with _temp_runtime() as paths:
+        _seed_sqlite_many_rows(paths["db_path"], rows=3)
+        recorder = _SqlRecorder(db_store.sqlite3.connect)
+        with _patched_db_file(paths["db_path"]), _patched_sqlite_connect(recorder):
+            state_store.load_state()
+            state_store.get_video_entry("channel", "video-1")
+            entries = state_store.get_channel_video_entries("channel")
+
+        statements = recorder.statements_text()
+        _assert(not _contains_ddl(statements), f"state reads reran schema DDL: {statements}")
+        _assert("video-1" in entries, "video-scoped channel entries were not retained")
 
 
 def _test_unrelated_text_file_is_ignored() -> None:
@@ -135,6 +153,7 @@ def _patched_db_file(db_path: Path):
 def _patched_sqlite_connect(recorder):
     old_connect = db_store.sqlite3.connect
     try:
+        recorder.set_connect(old_connect)
         db_store.sqlite3.connect = recorder.connect
         yield
     finally:
@@ -146,38 +165,28 @@ class _SqlRecorder:
         self._connect = connect
         self.statements = []
 
+    def set_connect(self, connect) -> None:
+        self._connect = connect
+
     def connect(self, *args, **kwargs):
-        return _ConnectionProxy(self._connect(*args, **kwargs), self.statements)
+        conn = self._connect(*args, **kwargs)
+        conn.set_trace_callback(lambda statement: self.statements.append(statement))
+        return conn
 
     def statements_text(self) -> str:
         return "\n".join(self.statements)
 
 
-class _ConnectionProxy:
-    def __init__(self, conn, statements):
-        self._conn = conn
-        self._statements = statements
+def _contains_ddl(statements: str) -> bool:
+    normalized = statements.upper()
+    return any(
+        marker in normalized
+        for marker in ("CREATE TABLE", "CREATE INDEX", "DROP INDEX", "ALTER TABLE")
+    )
 
-    def execute(self, sql, parameters=(), /):
-        self._statements.append(" ".join(str(sql).split()))
-        return self._conn.execute(sql, parameters)
 
-    def executescript(self, sql):
-        self._statements.append(" ".join(str(sql).split()))
-        return self._conn.executescript(sql)
-
-    def close(self):
-        return self._conn.close()
-
-    def __enter__(self):
-        self._conn.__enter__()
-        return self
-
-    def __exit__(self, exc_type, exc, traceback):
-        return self._conn.__exit__(exc_type, exc, traceback)
-
-    def __getattr__(self, name):
-        return getattr(self._conn, name)
+def _forget_initialized(db_path: Path) -> None:
+    db_store._INITIALIZED_DATABASES.pop(db_path.resolve(strict=False), None)
 
 
 def _assert(condition: bool, message: str) -> None:

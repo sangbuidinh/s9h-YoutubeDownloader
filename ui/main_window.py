@@ -2,28 +2,35 @@ import queue
 import sys
 import threading
 import tkinter as tk
+import time
 import urllib.parse
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
 from tkinter import filedialog, font, ttk
 
 from core.download_modes import DOWNLOAD_MODES, MODE_VIDEO_THUMB
 from core.downloader import (
+    BatchDecision,
     COOKIE_SOURCE_BRIDGE,
     COOKIE_SOURCE_FILE,
     DownloadController,
     DownloadError,
     DownloadOptions,
+    SystemicBlockContext,
     validate_download_environment,
     validate_speed_limit,
     download_items,
 )
 from core.app_settings import (
+    load_api_key_persistence_state,
     load_bridge_cookie_path,
     load_cookie_source,
-    load_last_api_key,
+    load_cookies_path,
     save_bridge_cookie_path,
+    save_cookie_preferences,
     save_cookie_source,
+    save_cookies_path,
     save_last_api_key,
 )
 from core.error_messages import classify_api_error, classify_general_error, format_friendly_error
@@ -44,12 +51,12 @@ from core.state_store import (
     update_manual_status,
 )
 from core.youtube_api import (
-    SHORT_VIDEO_DEFAULT_THRESHOLD_SECONDS,
+    DURATION_FILTER_DEFAULT_HIDE_ABOVE_SECONDS,
+    DURATION_FILTER_DEFAULT_HIDE_BELOW_SECONDS,
     YoutubeApiError,
     fetch_latest_video_page,
     fetch_more_videos,
-    is_short_video,
-    mask_api_key,
+    is_video_visible_by_duration,
     sanitize_log_text,
 )
 from ui.dialogs import (
@@ -63,9 +70,14 @@ from ui.dialogs import (
 
 FILTER_ALL = "Hiển thị tất cả"
 FILTER_NOT_DOWNLOADED = "Chỉ hiển thị video chưa tải"
-SHORT_VIDEO_THRESHOLD_MINUTES = ("1", "2", "3", "5", "10")
-DEFAULT_SHORT_VIDEO_THRESHOLD_MINUTES = str(SHORT_VIDEO_DEFAULT_THRESHOLD_SECONDS // 60)
+DURATION_FILTER_MIN_MINUTES = 1
+DURATION_FILTER_MAX_MINUTES = 9999
+DURATION_FILTER_MAX_DIGITS = 4
+DEFAULT_HIDE_BELOW_MINUTES = DURATION_FILTER_DEFAULT_HIDE_BELOW_SECONDS // 60
+DEFAULT_HIDE_ABOVE_MINUTES = DURATION_FILTER_DEFAULT_HIDE_ABOVE_SECONDS // 60
 COOKIE_STATUS_POLL_MS = 4000
+SHUTDOWN_POLL_MS = 150
+SHUTDOWN_SLOW_WARNING_SECONDS = 10
 TREE_COLUMN_IDS = ("selected", "title", "duration", "published", "status")
 TREE_DATA_COLUMNS = ("title", "duration", "published", "status")
 TREE_FIXED_COLUMNS = ("selected",)
@@ -83,13 +95,42 @@ COOKIE_SOURCE_LABELS = {
 COOKIE_SOURCE_VALUES_BY_LABEL = {label: value for value, label in COOKIE_SOURCE_LABELS.items()}
 
 
+@dataclass(frozen=True)
+class _ChannelRequestContext:
+    save_folder: str
+    download_mode: str
+    hide_below_enabled: bool
+    hide_below_minutes: int
+    hide_above_enabled: bool
+    hide_above_minutes: int
+
+
+@dataclass(frozen=True)
+class _FetchRequestToken:
+    generation: int
+    request_id: int
+    channel_input: str
+    context: _ChannelRequestContext
+
+
+@dataclass(frozen=True)
+class _LoadMoreRequestToken:
+    generation: int
+    request_id: int
+    channel_id: str
+    uploads_playlist_id: str
+    page_token: str
+    start_order: int
+    context: _ChannelRequestContext
+
+
 class YouTubeDownloaderWindow:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("YouTube Downloaderbs")
         self._app_icon_image: tk.PhotoImage | None = None
         self._apply_window_icon()
-        self.root.geometry("1440x680")
+        self.root.geometry("1440x700")
         self.root.minsize(1000, 640)
 
         self.events: queue.Queue = queue.Queue()
@@ -101,27 +142,52 @@ class YouTubeDownloaderWindow:
         self.next_page_token = ""
         self.fetching = False
         self.loading_more = False
+        self._channel_generation = 0
+        self._channel_request_sequence = 0
+        self._active_fetch_request: _FetchRequestToken | None = None
+        self._active_load_more_request: _LoadMoreRequestToken | None = None
+        self._active_fetch_manual_key = ""
+        self._active_fetch_manual_key_request_id: int | None = None
+        self._loaded_channel_generation: int | None = None
+        self._loaded_channel_context: _ChannelRequestContext | None = None
         self.downloading = False
         self.download_controller: DownloadController | None = None
+        self.download_worker: threading.Thread | None = None
         self.download_stop_requested = False
         self.exit_after_download_stop = False
         self.close_requested = False
         self.cancel_download = False
+        self.shutdown_in_progress = False
+        self.shutdown_started_at: float | None = None
+        self._shutdown_poll_after_id = None
+        self._download_finish_poll_after_id = None
+        self._root_destroyed = False
+        self._shutdown_slow_warning_logged = False
+        self._shutdown_cancel_reissued = False
+        self._download_terminal_received = False
+        self._download_terminal_outcome = ""
+        self._download_terminal_message = ""
         self.status_editor = None
 
-        self.api_key_var = tk.StringVar(value=load_last_api_key())
+        api_key_state = load_api_key_persistence_state()
+        self._api_key_storage_available = api_key_state.storage_available
+        self._api_key_persistence_status = api_key_state.status
+
+        self.api_key_var = tk.StringVar(value=api_key_state.api_key)
         self.channel_var = tk.StringVar()
         self.channel_display_var = tk.StringVar(value="Hiển thị: -")
         self.save_folder_var = tk.StringVar()
         self.cookies_enabled_var = tk.BooleanVar(value=False)
-        self.cookies_path_var = tk.StringVar()
+        self.cookies_path_var = tk.StringVar(value=load_cookies_path())
         self.cookie_source_var = tk.StringVar(value=COOKIE_SOURCE_LABELS[load_cookie_source()])
         self.bridge_cookie_path_var = tk.StringVar(value=load_bridge_cookie_path())
         self.cookie_status_var = tk.StringVar()
         self.speed_limit_var = tk.StringVar()
         self.download_mode_var = tk.StringVar(value=MODE_VIDEO_THUMB)
-        self.show_short_videos_var = tk.BooleanVar(value=False)
-        self.short_video_threshold_var = tk.StringVar(value=DEFAULT_SHORT_VIDEO_THRESHOLD_MINUTES)
+        self.hide_below_enabled_var = tk.BooleanVar(value=True)
+        self.hide_below_minutes_var = tk.StringVar(value=str(DEFAULT_HIDE_BELOW_MINUTES))
+        self.hide_above_enabled_var = tk.BooleanVar(value=True)
+        self.hide_above_minutes_var = tk.StringVar(value=str(DEFAULT_HIDE_ABOVE_MINUTES))
         self.filter_var = tk.StringVar(value=FILTER_ALL)
         self.search_var = tk.StringVar()
         self.search_status_var = tk.StringVar()
@@ -136,8 +202,11 @@ class YouTubeDownloaderWindow:
         self.tree_column_fit_in_progress = False
 
         self._build_ui()
+        self._log_api_key_persistence_startup_status()
         self.channel_var.trace_add("write", lambda *_args: self._update_channel_input_display())
         self.search_var.trace_add("write", lambda *_args: self._on_search_text_changed())
+        self.hide_below_minutes_var.trace_add("write", self._on_duration_filter_text_changed)
+        self.hide_above_minutes_var.trace_add("write", self._on_duration_filter_text_changed)
         self.cookies_path_var.trace_add("write", lambda *_args: self._refresh_cookie_status())
         self.bridge_cookie_path_var.trace_add("write", lambda *_args: self._refresh_cookie_status())
         self._update_channel_input_display()
@@ -146,6 +215,7 @@ class YouTubeDownloaderWindow:
         self._update_download_button_text()
         self._update_more_button_state()
         self._update_stop_button_state()
+        self._refresh_interaction_control_states()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(100, self._process_events)
         self.root.after(300, self._poll_progress_queue)
@@ -442,7 +512,6 @@ class YouTubeDownloaderWindow:
         ttk.Label(source_frame, text="YouTube API Key").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=2)
         self.api_key_entry = ttk.Entry(source_frame, textvariable=self.api_key_var)
         self.api_key_entry.grid(row=0, column=1, columnspan=2, sticky="ew", pady=2)
-
         ttk.Label(source_frame, text="URL kênh / ID kênh / Handle").grid(
             row=1, column=0, sticky="w", padx=(0, 8), pady=2
         )
@@ -491,29 +560,51 @@ class YouTubeDownloaderWindow:
             row=0, column=1, sticky="w", padx=(8, 0)
         )
 
-        self.short_videos_check = ttk.Checkbutton(
-            filter_frame,
-            text="Hiển thị video ngắn",
-            variable=self.show_short_videos_var,
-            command=self._on_short_video_filter_changed,
+        duration_validate = (self.root.register(self._validate_duration_filter_text), "%P")
+
+        below_frame = ttk.Frame(filter_frame)
+        below_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 2))
+        self.hide_below_check = ttk.Checkbutton(
+            below_frame,
+            text="Ẩn video dưới:",
+            variable=self.hide_below_enabled_var,
+            command=self._on_duration_filter_changed,
             style="Modern.TCheckbutton",
         )
-        self.short_videos_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 2))
-
-        threshold_frame = ttk.Frame(filter_frame)
-        threshold_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=2)
-        ttk.Label(threshold_frame, text="Ẩn video dưới:").grid(row=0, column=0, sticky="w", padx=(0, 4))
-        self.threshold_box = ttk.Combobox(
-            threshold_frame,
-            textvariable=self.short_video_threshold_var,
-            values=SHORT_VIDEO_THRESHOLD_MINUTES,
-            state="readonly",
-            width=4,
+        self.hide_below_check.grid(row=0, column=0, sticky="w", padx=(0, 4))
+        self.hide_below_entry = ttk.Entry(
+            below_frame,
+            textvariable=self.hide_below_minutes_var,
+            validate="key",
+            validatecommand=duration_validate,
+            width=5,
+            justify="center",
         )
-        self.threshold_box.grid(row=0, column=1, sticky="w")
-        self.threshold_box.bind("<<ComboboxSelected>>", lambda _event: self._on_short_video_filter_changed())
-        self._block_combobox_mousewheel(self.threshold_box)
-        ttk.Label(threshold_frame, text="phút").grid(row=0, column=2, sticky="w", padx=(4, 0))
+        self.hide_below_entry.grid(row=0, column=1, sticky="w")
+        self.hide_below_entry.bind("<FocusOut>", lambda _event: self._restore_empty_duration_filter_entry("below"))
+        ttk.Label(below_frame, text="phút").grid(row=0, column=2, sticky="w", padx=(4, 0))
+
+        above_frame = ttk.Frame(filter_frame)
+        above_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=2)
+        self.hide_above_check = ttk.Checkbutton(
+            above_frame,
+            text="Ẩn video trên:",
+            variable=self.hide_above_enabled_var,
+            command=self._on_duration_filter_changed,
+            style="Modern.TCheckbutton",
+        )
+        self.hide_above_check.grid(row=0, column=0, sticky="w", padx=(0, 4))
+        self.hide_above_entry = ttk.Entry(
+            above_frame,
+            textvariable=self.hide_above_minutes_var,
+            validate="key",
+            validatecommand=duration_validate,
+            width=5,
+            justify="center",
+        )
+        self.hide_above_entry.grid(row=0, column=1, sticky="w")
+        self.hide_above_entry.bind("<FocusOut>", lambda _event: self._restore_empty_duration_filter_entry("above"))
+        ttk.Label(above_frame, text="phút").grid(row=0, column=2, sticky="w", padx=(4, 0))
 
         table_group = ttk.LabelFrame(right, text="Danh sách video", padding=(12, 10), style="Grouped.TLabelframe")
         table_group.grid(row=0, column=0, sticky="nsew", pady=(0, 12))
@@ -757,8 +848,22 @@ class YouTubeDownloaderWindow:
         log_scroll.grid(row=0, column=1, sticky="ns")
         self.log_text.configure(yscrollcommand=log_scroll.set)
 
+    def _log_api_key_persistence_startup_status(self) -> None:
+        status = getattr(self, "_api_key_persistence_status", "")
+        storage_available = bool(getattr(self, "_api_key_storage_available", False))
+        if not storage_available:
+            self._append_log("[WARNING] Không thể dùng bảo vệ Windows để lưu API key trên máy này.")
+        if status == "decrypt_failed":
+            self._append_log("[WARNING] Không thể giải mã API key đã lưu; dữ liệu bảo vệ được giữ nguyên.")
+        elif status == "unsupported_payload":
+            self._append_log("[WARNING] Dữ liệu API key đã lưu không hợp lệ; dữ liệu bảo vệ được giữ nguyên.")
+        elif status == "secure_storage_unavailable" and storage_available:
+            self._append_log("[WARNING] Không thể dùng kho bảo vệ Windows cho API key đã lưu.")
+        elif status == "settings_write_failed":
+            self._append_log("[WARNING] Không thể cập nhật cài đặt API key đã lưu.")
+
     def start_fetch(self) -> None:
-        if self.fetching or self.downloading:
+        if self.fetching or self.loading_more or self.downloading or self.shutdown_in_progress:
             return
 
         channel_input = self.channel_var.get().strip()
@@ -769,69 +874,80 @@ class YouTubeDownloaderWindow:
             return
 
         manual_key = self.api_key_var.get().strip()
-        save_folder = self.save_folder_var.get().strip()
-        download_mode = self.download_mode_var.get()
-        show_short_videos = self.show_short_videos_var.get()
-        threshold_minutes = self._short_video_threshold_minutes()
+        if not self._validate_duration_filter_inputs():
+            return
+        self._apply_live_duration_filter_if_valid()
+        context = self._capture_channel_request_context()
 
+        self._channel_generation += 1
+        request_token = _FetchRequestToken(
+            generation=self._channel_generation,
+            request_id=self._next_channel_request_id(),
+            channel_input=channel_input,
+            context=context,
+        )
+        self._active_fetch_request = request_token
+        self._active_fetch_manual_key = manual_key
+        self._active_fetch_manual_key_request_id = request_token.request_id
         self.fetching = True
-        self.loading_more = False
-        self.next_page_token = ""
-        self.fetch_button.configure(state="disabled")
-        self._update_more_button_state()
-        self.selected_orders.clear()
-        self.videos = []
+        self._refresh_interaction_control_states()
         self.apply_filter()
 
-        worker = threading.Thread(
-            target=self._fetch_worker,
-            args=(channel_input, manual_key, save_folder, download_mode, show_short_videos, threshold_minutes),
-            daemon=True,
-        )
-        worker.start()
+        try:
+            worker = threading.Thread(
+                target=self._fetch_worker,
+                args=(request_token, manual_key),
+                daemon=True,
+            )
+            worker.start()
+        except Exception as exc:
+            self._active_fetch_request = None
+            self.fetching = False
+            self._restore_loaded_generation_after_failed_fetch()
+            self._clear_pending_fetch_manual_key(request_token)
+            self._refresh_interaction_control_states()
+            friendly = self._friendly_general_message(str(exc) or "Could not start fetch worker")
+            self._append_log(friendly)
+            self._show_error_dialog(friendly)
 
     def _fetch_worker(
         self,
-        channel_input: str,
+        request_token: _FetchRequestToken,
         manual_key: str,
-        save_folder: str,
-        download_mode: str,
-        show_short_videos: bool,
-        threshold_minutes: int,
     ) -> None:
         try:
+            context = request_token.context
+            log = lambda message: self._queue_channel_request_log(request_token, message)
             channel, videos, next_page_token = fetch_latest_video_page(
-                channel_input,
+                request_token.channel_input,
                 manual_key,
-                progress=self._thread_log,
-                min_visible_duration_seconds=threshold_minutes * 60,
+                progress=log,
+                hide_below_duration_enabled=context.hide_below_enabled,
+                min_visible_duration_seconds=context.hide_below_minutes * 60,
+                hide_above_duration_enabled=context.hide_above_enabled,
+                max_visible_duration_seconds=context.hide_above_minutes * 60,
             )
-            self._thread_log("[INFO] Checking local files...")
+            log("[INFO] Checking local files...")
             apply_statuses(
                 videos,
-                save_folder,
+                context.save_folder,
                 channel.channel_name,
                 channel.channel_id,
-                download_mode=download_mode,
-                warning_callback=self._thread_log,
+                download_mode=context.download_mode,
+                warning_callback=log,
             )
-            if manual_key.strip():
-                if save_last_api_key(manual_key):
-                    self._thread_log(f"[INFO] Saved last API key: {mask_api_key(manual_key)}")
-                else:
-                    self._thread_log("[WARNING] Không thể lưu API key gần nhất.")
-            hidden_short_videos = self._short_video_count(videos, threshold_minutes)
-            if not show_short_videos and hidden_short_videos:
-                self._thread_log(
-                    f"[INFO] Đã ẩn {hidden_short_videos} video ngắn dưới {threshold_minutes} phút."
-                )
-            self.events.put(("fetch_done", channel, videos, next_page_token))
-            visible_count = len(videos) if show_short_videos else len(videos) - hidden_short_videos
-            self._thread_log(f"[SUCCESS] Đã nạp {visible_count} video sau khi lọc video ngắn.")
+            hidden_by_duration = self._duration_hidden_count(videos, context)
+            if hidden_by_duration:
+                log(f"[INFO] Đã ẩn {hidden_by_duration} video theo thời lượng.")
+            visible_count = len(videos) - hidden_by_duration
+            log(f"[SUCCESS] Đã nạp {visible_count} video sau khi lọc thời lượng.")
+            if not next_page_token:
+                log("[INFO] Không còn video nào.")
+            self.events.put(("fetch_done", request_token, channel, videos, next_page_token))
         except YoutubeApiError as exc:
-            self.events.put(("fetch_error", self._friendly_api_message(exc)))
+            self.events.put(("fetch_error", request_token, self._friendly_api_message(exc)))
         except Exception as exc:
-            self.events.put(("fetch_error", self._friendly_general_message(str(exc) or "Network error")))
+            self.events.put(("fetch_error", request_token, self._friendly_general_message(str(exc) or "Network error")))
 
     def _update_channel_input_display(self) -> None:
         self.channel_display_var.set(self._format_channel_display(self.channel_var.get()))
@@ -860,7 +976,7 @@ class YouTubeDownloaderWindow:
         self.channel_display_var.set(self._shorten_middle(f"Kênh: {channel_name} • {channel_id}", max_length=72))
 
     def start_load_more(self) -> None:
-        if self.loading_more or self.fetching or self.downloading:
+        if self.loading_more or self.fetching or self.downloading or self.shutdown_in_progress:
             return
         if not self.channel_info or not self.next_page_token:
             self._append_log("[INFO] Không còn video nào.")
@@ -868,56 +984,79 @@ class YouTubeDownloaderWindow:
             self._update_more_button_state()
             return
 
-        self.loading_more = True
-        self._update_more_button_state()
-        worker = threading.Thread(
-            target=self._load_more_worker,
-            args=(
-                self.channel_info.uploads_playlist_id,
-                self.next_page_token,
-                len(self.videos) + 1,
-                self.api_key_var.get().strip(),
-                self.show_short_videos_var.get(),
-                self._short_video_threshold_minutes(),
-            ),
-            daemon=True,
+        if self._loaded_channel_generation is None:
+            self._update_more_button_state()
+            return
+
+        if not self._validate_duration_filter_inputs():
+            return
+        self._apply_live_duration_filter_if_valid()
+
+        context = self._loaded_channel_context
+        if context is None:
+            self._update_more_button_state()
+            return
+
+        request_token = _LoadMoreRequestToken(
+            generation=self._loaded_channel_generation,
+            request_id=self._next_channel_request_id(),
+            channel_id=str(self.channel_info.channel_id or ""),
+            uploads_playlist_id=str(self.channel_info.uploads_playlist_id or ""),
+            page_token=str(self.next_page_token or ""),
+            start_order=len(self.videos) + 1,
+            context=context,
         )
-        worker.start()
+        self._active_load_more_request = request_token
+        self.loading_more = True
+        self._refresh_interaction_control_states()
+        try:
+            worker = threading.Thread(
+                target=self._load_more_worker,
+                args=(request_token, self.api_key_var.get().strip()),
+                daemon=True,
+            )
+            worker.start()
+        except Exception as exc:
+            self._active_load_more_request = None
+            self.loading_more = False
+            self._refresh_interaction_control_states()
+            friendly = self._friendly_general_message(str(exc) or "Could not start load-more worker")
+            self._append_log(friendly)
+            self._show_error_dialog(friendly)
 
     def _load_more_worker(
         self,
-        uploads_playlist_id: str,
-        page_token: str,
-        start_order: int,
+        request_token: _LoadMoreRequestToken,
         manual_key: str,
-        show_short_videos: bool,
-        threshold_minutes: int,
     ) -> None:
         try:
-            self._thread_log("[INFO] Đang nạp thêm 100 video tiếp theo...")
+            context = request_token.context
+            log = lambda message: self._queue_channel_request_log(request_token, message)
+            log("[INFO] Đang nạp thêm 100 video tiếp theo...")
             videos, next_page_token = fetch_more_videos(
-                uploads_playlist_id,
-                page_token,
-                start_order,
+                request_token.uploads_playlist_id,
+                request_token.page_token,
+                request_token.start_order,
                 manual_key,
-                progress=self._thread_log,
-                min_visible_duration_seconds=threshold_minutes * 60,
+                progress=log,
+                hide_below_duration_enabled=context.hide_below_enabled,
+                min_visible_duration_seconds=context.hide_below_minutes * 60,
+                hide_above_duration_enabled=context.hide_above_enabled,
+                max_visible_duration_seconds=context.hide_above_minutes * 60,
             )
-            self.events.put(("load_more_done", videos, next_page_token))
-            hidden_short_videos = self._short_video_count(videos, threshold_minutes)
-            if not show_short_videos and hidden_short_videos:
-                self._thread_log(
-                    f"[INFO] Đã ẩn {hidden_short_videos} video ngắn dưới {threshold_minutes} phút."
-                )
+            hidden_by_duration = self._duration_hidden_count(videos, context)
+            if hidden_by_duration:
+                log(f"[INFO] Đã ẩn {hidden_by_duration} video theo thời lượng.")
             if videos:
-                visible_count = len(videos) if show_short_videos else len(videos) - hidden_short_videos
-                self._thread_log(f"[SUCCESS] Đã nạp thêm {visible_count} video sau khi lọc video ngắn.")
+                visible_count = len(videos) - hidden_by_duration
+                log(f"[SUCCESS] Đã nạp thêm {visible_count} video sau khi lọc thời lượng.")
             if not next_page_token:
-                self._thread_log("[INFO] Không còn video nào.")
+                log("[INFO] Không còn video nào.")
+            self.events.put(("load_more_done", request_token, videos, next_page_token))
         except YoutubeApiError as exc:
-            self.events.put(("load_more_error", self._friendly_api_message(exc)))
+            self.events.put(("load_more_error", request_token, self._friendly_api_message(exc)))
         except Exception as exc:
-            self.events.put(("load_more_error", self._friendly_general_message(str(exc) or "Network error")))
+            self.events.put(("load_more_error", request_token, self._friendly_general_message(str(exc) or "Network error")))
 
     def _block_combobox_mousewheel(self, combobox: ttk.Combobox) -> None:
         combobox.bind("<MouseWheel>", self._ignore_combobox_mousewheel, add="+")
@@ -928,7 +1067,7 @@ class YouTubeDownloaderWindow:
         return "break"
 
     def choose_save_folder(self) -> None:
-        if self.downloading:
+        if self._channel_request_busy() or self.downloading or self.shutdown_in_progress:
             return
         folder = filedialog.askdirectory(title="Chọn thư mục lưu")
         if not folder:
@@ -955,6 +1094,8 @@ class YouTubeDownloaderWindow:
         )
         if path:
             self.cookies_path_var.set(path)
+            if not save_cookies_path(path):
+                self._append_log("[WARNING] Không thể ghi nhớ đường dẫn file cookies.")
             self._refresh_cookie_status()
 
     def choose_bridge_cookie_file(self) -> None:
@@ -966,7 +1107,8 @@ class YouTubeDownloaderWindow:
         )
         if path:
             self.bridge_cookie_path_var.set(path)
-            save_bridge_cookie_path(path)
+            if not save_bridge_cookie_path(path):
+                self._append_log("[WARNING] Không thể ghi nhớ đường dẫn Cookie Bridge.")
             self._refresh_cookie_status()
 
     def _current_cookie_source(self) -> str:
@@ -981,8 +1123,10 @@ class YouTubeDownloaderWindow:
         self._refresh_cookie_status()
 
     def _poll_cookie_status(self) -> None:
+        if self._root_destroyed:
+            return
         self._refresh_cookie_status()
-        self.root.after(COOKIE_STATUS_POLL_MS, self._poll_cookie_status)
+        self._after(COOKIE_STATUS_POLL_MS, self._poll_cookie_status)
 
     def _refresh_cookie_status(self) -> None:
         if not self.cookies_enabled_var.get():
@@ -991,27 +1135,32 @@ class YouTubeDownloaderWindow:
 
         if self._current_cookie_source() == COOKIE_SOURCE_BRIDGE:
             self.cookie_status_var.set(
-                self._cookie_file_metadata_status("Cookie Bridge", self.bridge_cookie_path_var.get().strip())
+                self._cookie_file_metadata_status("Cookie Bridge", self.bridge_cookie_path_var.get())
             )
             return
 
         self.cookie_status_var.set(
-            self._cookie_file_metadata_status("File cookie", self.cookies_path_var.get().strip())
+            self._cookie_file_metadata_status("File cookie", self.cookies_path_var.get())
         )
 
     def _cookie_file_metadata_status(self, label: str, path_text: str) -> str:
+        if not isinstance(path_text, str):
+            return f"{label}: không tìm thấy"
+        path_text = path_text.strip()
         if not path_text:
             return f"{label}: chưa chọn file"
+        if "\x00" in path_text or len(path_text) > 32767:
+            return f"{label}: không tìm thấy"
 
-        path = Path(path_text)
         try:
+            path = Path(path_text)
             stat = path.stat()
             if not path.is_file():
                 raise OSError
-        except OSError:
+            updated = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        except (OSError, ValueError, OverflowError):
             return f"{label}: không tìm thấy"
 
-        updated = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
         return f"{label}: tìm thấy \u2022 {stat.st_size} byte \u2022 cập nhật {updated}"
 
     def _on_download_mode_changed(self) -> None:
@@ -1028,10 +1177,12 @@ class YouTubeDownloaderWindow:
             )
             self.apply_filter()
 
-    def _on_short_video_filter_changed(self) -> None:
-        if self.downloading:
-            return
-        self.apply_filter()
+    def _on_duration_filter_changed(self) -> None:
+        self._refresh_duration_entry_states()
+        self._apply_live_duration_filter_if_valid()
+
+    def _on_duration_filter_text_changed(self, *_args) -> None:
+        self._apply_live_duration_filter_if_valid()
 
     def open_select_by_date_dialog(self) -> None:
         if self.downloading:
@@ -1102,7 +1253,7 @@ class YouTubeDownloaderWindow:
         self._append_log("[INFO] Đang chọn video theo ngày đăng...")
         matched_orders: set[int] = set()
         for video in self.videos:
-            if not self._video_allowed_by_short_video_setting(video):
+            if not self._video_allowed_by_duration_filter(video):
                 continue
             upload_date = self._upload_date_for_video(video)
             if upload_date is None:
@@ -1175,7 +1326,13 @@ class YouTubeDownloaderWindow:
         self.cookie_path_entry.configure(state=entry_state)
 
     def start_download(self) -> None:
-        if self.downloading:
+        if self._channel_request_busy():
+            self._append_log("[INFO] Hãy chờ quá trình nạp danh sách video hoàn tất trước khi tải.")
+            return
+        if self.downloading or self.shutdown_in_progress:
+            return
+        if self.download_worker is not None and self.download_worker.is_alive():
+            self._append_log("[WARNING] Tiến trình tải trước đó vẫn đang kết thúc.")
             return
         if not self.channel_info or not self.videos:
             self._append_log(self._friendly_general_message("No videos loaded"))
@@ -1206,8 +1363,12 @@ class YouTubeDownloaderWindow:
             cookie_source=self._current_cookie_source(),
             bridge_cookie_path=self.bridge_cookie_path_var.get().strip(),
         )
-        save_cookie_source(options.cookie_source)
-        save_bridge_cookie_path(options.bridge_cookie_path)
+        if not save_cookie_preferences(
+            options.cookie_source,
+            options.cookies_path,
+            options.bridge_cookie_path,
+        ):
+            self._append_log("[WARNING] Không thể lưu tùy chọn đường dẫn cookies; phiên hiện tại vẫn tiếp tục.")
 
         try:
             validate_download_environment(options)
@@ -1222,18 +1383,27 @@ class YouTubeDownloaderWindow:
         self.exit_after_download_stop = False
         self.close_requested = False
         self.cancel_download = False
-        self.download_controller = DownloadController()
+        self.shutdown_in_progress = False
+        self.shutdown_started_at = None
+        self._shutdown_slow_warning_logged = False
+        self._shutdown_cancel_reissued = False
+        self._download_terminal_received = False
+        self._download_terminal_outcome = ""
+        self._download_terminal_message = ""
+        self.download_controller = DownloadController(
+            systemic_block_callback=lambda context: self.events.put(("systemic_download_block", context))
+        )
         self._clear_progress_queue()
         self._reset_progress_sticky()
         self.progress_current_var.set("Đang tải: Sẵn sàng")
         self.progress_detail_var.set("Đang xử lý: -")
         self._set_download_controls_locked(True)
-        worker = threading.Thread(
+        self.download_worker = threading.Thread(
             target=self._download_worker,
             args=(selected, options, self.download_controller),
-            daemon=True,
+            daemon=False,
         )
-        worker.start()
+        self.download_worker.start()
 
     def stop_download(self) -> None:
         if not self.downloading:
@@ -1243,7 +1413,13 @@ class YouTubeDownloaderWindow:
             log_message="[WARNING] Người dùng đã dừng tải.",
         )
 
-    def _request_download_stop(self, exit_after: bool, log_message: str) -> None:
+    def _request_download_stop(
+        self,
+        exit_after: bool,
+        log_message: str,
+        info_message: str = "[INFO] Đang dừng tiến trình tải...",
+        emit_stop_progress: bool = True,
+    ) -> None:
         if not self.downloading:
             return
 
@@ -1259,14 +1435,18 @@ class YouTubeDownloaderWindow:
         self.download_stop_requested = True
         if first_stop_request or (exit_after and not was_close_requested):
             self._append_log(log_message)
-            self._enqueue_progress_event(ProgressEvent(kind="stop_requested"))
-            self._append_log("[INFO] Đang dừng tiến trình tải...")
+            if emit_stop_progress:
+                self._enqueue_progress_event(ProgressEvent(kind="stop_requested"))
+            if info_message:
+                self._append_log(info_message)
 
         self._update_stop_button_state()
         if self.download_controller is not None:
             self.download_controller.request_cancel()
 
     def _download_worker(self, selected, options: DownloadOptions, controller: DownloadController) -> None:
+        outcome = "completed"
+        message = ""
         try:
             download_items(
                 selected,
@@ -1276,17 +1456,16 @@ class YouTubeDownloaderWindow:
                 cancel_controller=controller,
                 progress_callback=self._enqueue_progress_event,
             )
-            self.events.put(("download_done",))
         except DownloadError as exc:
-            self._enqueue_progress_event(
-                ProgressEvent(kind="error", phase="Lỗi", message=self._friendly_general_message(str(exc)))
-            )
-            self.events.put(("download_error", self._friendly_general_message(str(exc))))
+            outcome = "error"
+            message = self._friendly_general_message(str(exc))
+            self._enqueue_progress_event(ProgressEvent(kind="error", phase="Lỗi", message=message))
         except Exception as exc:
-            self._enqueue_progress_event(
-                ProgressEvent(kind="error", phase="Lỗi", message=self._friendly_general_message(str(exc)))
-            )
-            self.events.put(("download_error", self._friendly_general_message(str(exc))))
+            outcome = "error"
+            message = self._friendly_general_message(str(exc))
+            self._enqueue_progress_event(ProgressEvent(kind="error", phase="Lỗi", message=message))
+        finally:
+            self.events.put(("download_worker_finished", outcome, message))
 
     def apply_filter(self) -> None:
         self._destroy_status_editor()
@@ -1297,7 +1476,7 @@ class YouTubeDownloaderWindow:
 
         self.visible_orders = []
         for video in self.videos:
-            if not self._video_allowed_by_short_video_setting(video):
+            if not self._video_allowed_by_duration_filter(video):
                 continue
             if self.filter_var.get() == FILTER_NOT_DOWNLOADED and not should_show_not_downloaded(video):
                 continue
@@ -1876,28 +2055,203 @@ class YouTubeDownloaderWindow:
         loaded_orders = {video.display_order for video in self.videos}
         self.selected_orders.intersection_update(loaded_orders)
 
-    def _video_allowed_by_short_video_setting(self, video) -> bool:
-        return self.show_short_videos_var.get() or not is_short_video(
+    def _video_allowed_by_duration_filter(self, video, context: _ChannelRequestContext | None = None) -> bool:
+        effective_context = context if context is not None else self._loaded_channel_context
+        if effective_context is None:
+            return True
+        return is_video_visible_by_duration(
             video,
-            self._short_video_threshold_seconds(),
+            hide_below_enabled=effective_context.hide_below_enabled,
+            min_duration_seconds=effective_context.hide_below_minutes * 60,
+            hide_above_enabled=effective_context.hide_above_enabled,
+            max_duration_seconds=effective_context.hide_above_minutes * 60,
         )
 
-    def _short_video_count(self, videos: list, threshold_minutes: int | None = None) -> int:
-        threshold_seconds = (threshold_minutes or self._short_video_threshold_minutes()) * 60
-        return sum(1 for video in videos if is_short_video(video, threshold_seconds))
+    def _duration_hidden_count(self, videos: list, context: _ChannelRequestContext) -> int:
+        return sum(
+            1
+            for video in videos
+            if not is_video_visible_by_duration(
+                video,
+                hide_below_enabled=context.hide_below_enabled,
+                min_duration_seconds=context.hide_below_minutes * 60,
+                hide_above_enabled=context.hide_above_enabled,
+                max_duration_seconds=context.hide_above_minutes * 60,
+            )
+        )
 
-    def _short_video_threshold_minutes(self) -> int:
+    def _validate_duration_filter_text(self, proposed: str) -> bool:
         try:
-            value = int(self.short_video_threshold_var.get())
-        except ValueError:
-            value = int(DEFAULT_SHORT_VIDEO_THRESHOLD_MINUTES)
-        if str(value) not in SHORT_VIDEO_THRESHOLD_MINUTES:
-            value = int(DEFAULT_SHORT_VIDEO_THRESHOLD_MINUTES)
-            self.short_video_threshold_var.set(str(value))
+            return (
+                proposed == ""
+                or (
+                    len(proposed) <= DURATION_FILTER_MAX_DIGITS
+                    and proposed.isascii()
+                    and proposed.isdecimal()
+                )
+            )
+        except Exception:
+            return False
+
+    def _restore_empty_duration_filter_entry(self, which: str) -> None:
+        if which == "below" and self.hide_below_minutes_var.get() == "":
+            self.hide_below_minutes_var.set(str(DEFAULT_HIDE_BELOW_MINUTES))
+        elif which == "above" and self.hide_above_minutes_var.get() == "":
+            self.hide_above_minutes_var.set(str(DEFAULT_HIDE_ABOVE_MINUTES))
+
+    def _normalize_empty_duration_filter_entries(self) -> None:
+        self._restore_empty_duration_filter_entry("below")
+        self._restore_empty_duration_filter_entry("above")
+
+    def _parse_duration_filter_minutes(self, which: str) -> int | None:
+        default = DEFAULT_HIDE_BELOW_MINUTES if which == "below" else DEFAULT_HIDE_ABOVE_MINUTES
+        var = self.hide_below_minutes_var if which == "below" else self.hide_above_minutes_var
+        raw_text = var.get()
+        if raw_text == "":
+            return default
+        if (
+            not isinstance(raw_text, str)
+            or not 1 <= len(raw_text) <= DURATION_FILTER_MAX_DIGITS
+            or not raw_text.isascii()
+            or not raw_text.isdecimal()
+        ):
+            return None
+        value = int(raw_text)
+        if not self._duration_filter_value_in_range(value):
+            return None
         return value
 
-    def _short_video_threshold_seconds(self) -> int:
-        return self._short_video_threshold_minutes() * 60
+    def _duration_filter_minutes_or_default(self, which: str) -> int:
+        parsed = self._parse_duration_filter_minutes(which)
+        if parsed is not None:
+            return parsed
+        return DEFAULT_HIDE_BELOW_MINUTES if which == "below" else DEFAULT_HIDE_ABOVE_MINUTES
+
+    def _duration_filter_minutes(self, which: str) -> int:
+        parser = getattr(self, "_parse_duration_filter_minutes", None)
+        if callable(parser):
+            parsed = parser(which)
+            if parsed is not None:
+                return parsed
+            return DEFAULT_HIDE_BELOW_MINUTES if which == "below" else DEFAULT_HIDE_ABOVE_MINUTES
+
+        default = DEFAULT_HIDE_BELOW_MINUTES if which == "below" else DEFAULT_HIDE_ABOVE_MINUTES
+        var = self.hide_below_minutes_var if which == "below" else self.hide_above_minutes_var
+        raw_text = var.get()
+        if raw_text == "":
+            return default
+        if (
+            not isinstance(raw_text, str)
+            or not 1 <= len(raw_text) <= DURATION_FILTER_MAX_DIGITS
+            or not raw_text.isascii()
+            or not raw_text.isdecimal()
+        ):
+            return default
+        value = int(raw_text)
+        if not DURATION_FILTER_MIN_MINUTES <= value <= DURATION_FILTER_MAX_MINUTES:
+            return default
+        return value
+
+    def _current_duration_filter_values(self) -> tuple[bool, int, bool, int] | None:
+        below_enabled = bool(self.hide_below_enabled_var.get())
+        above_enabled = bool(self.hide_above_enabled_var.get())
+        below_minutes = self._parse_duration_filter_minutes("below")
+        above_minutes = self._parse_duration_filter_minutes("above")
+
+        if below_enabled and below_minutes is None:
+            return None
+        if above_enabled and above_minutes is None:
+            return None
+
+        if below_minutes is None:
+            below_minutes = DEFAULT_HIDE_BELOW_MINUTES
+        if above_minutes is None:
+            above_minutes = DEFAULT_HIDE_ABOVE_MINUTES
+
+        if below_enabled and above_enabled and above_minutes <= below_minutes:
+            return None
+
+        return below_enabled, below_minutes, above_enabled, above_minutes
+
+    def _apply_live_duration_filter_if_valid(self) -> bool:
+        if self.fetching or self.loading_more or self.downloading or self.shutdown_in_progress:
+            return False
+
+        values = self._current_duration_filter_values()
+        if values is None:
+            return False
+
+        context = self._loaded_channel_context
+        if context is None:
+            return True
+
+        below_enabled, below_minutes, above_enabled, above_minutes = values
+        updated_context = replace(
+            context,
+            hide_below_enabled=below_enabled,
+            hide_below_minutes=below_minutes,
+            hide_above_enabled=above_enabled,
+            hide_above_minutes=above_minutes,
+        )
+        changed = updated_context != context
+        if changed:
+            self._loaded_channel_context = updated_context
+            self.apply_filter()
+        return True
+
+    def _validate_duration_filter_inputs(self) -> bool:
+        self._normalize_empty_duration_filter_entries()
+        below_enabled = bool(self.hide_below_enabled_var.get())
+        above_enabled = bool(self.hide_above_enabled_var.get())
+        below_minutes = self._parse_duration_filter_minutes("below")
+        above_minutes = self._parse_duration_filter_minutes("above")
+
+        if below_enabled and below_minutes is None:
+            self._show_duration_filter_error(
+                "“Ẩn video dưới” phải là số nguyên từ 1 đến 9999 phút.",
+                "hide_below_entry",
+            )
+            return False
+        if above_enabled and above_minutes is None:
+            self._show_duration_filter_error(
+                "“Ẩn video trên” phải là số nguyên từ 1 đến 9999 phút.",
+                "hide_above_entry",
+            )
+            return False
+        if below_enabled and above_enabled and above_minutes <= below_minutes:
+            self._show_duration_filter_error(
+                "Số phút “Ẩn video trên” phải lớn hơn số phút “Ẩn video dưới”.",
+                "hide_above_entry",
+            )
+            return False
+        return True
+
+    def _duration_filter_value_in_range(self, value: int) -> bool:
+        return DURATION_FILTER_MIN_MINUTES <= value <= DURATION_FILTER_MAX_MINUTES
+
+    def _show_duration_filter_error(self, message: str, focus_attr: str) -> None:
+        self._show_error_dialog(message)
+        widget = getattr(self, focus_attr, None)
+        if widget is None:
+            return
+        try:
+            widget.focus_set()
+        except Exception:
+            pass
+
+    def _capture_channel_request_context(self) -> _ChannelRequestContext:
+        download_mode = self.download_mode_var.get()
+        if download_mode not in DOWNLOAD_MODES:
+            download_mode = MODE_VIDEO_THUMB
+        self._normalize_empty_duration_filter_entries()
+        return _ChannelRequestContext(
+            save_folder=self.save_folder_var.get().strip(),
+            download_mode=download_mode,
+            hide_below_enabled=bool(self.hide_below_enabled_var.get()),
+            hide_below_minutes=self._duration_filter_minutes("below"),
+            hide_above_enabled=bool(self.hide_above_enabled_var.get()),
+            hide_above_minutes=self._duration_filter_minutes("above"),
+        )
 
     def _update_header_checkbox(self) -> None:
         visible = set(self.visible_orders)
@@ -2045,6 +2399,7 @@ class YouTubeDownloaderWindow:
             and not self.loading_more
             and not self.fetching
             and not self.downloading
+            and not self.shutdown_in_progress
         )
         self.more_button.configure(state="normal" if can_load_more else "disabled")
 
@@ -2054,45 +2409,78 @@ class YouTubeDownloaderWindow:
             self.stop_button.configure(state="normal" if enabled else "disabled")
 
     def _set_download_controls_locked(self, locked: bool) -> None:
-        normal_state = "disabled" if locked else "normal"
-        readonly_state = "disabled" if locked else "readonly"
-        self.api_key_entry.configure(state=normal_state)
-        self.channel_entry.configure(state=normal_state)
-        self.fetch_button.configure(state=normal_state if not self.fetching else "disabled")
-        self.select_by_date_button.configure(state=normal_state)
-        self.choose_folder_button.configure(state=normal_state)
-        self.cookies_check.configure(state=normal_state)
-        self.mode_box.configure(state=readonly_state)
-        self.speed_limit_entry.configure(state=normal_state)
-        self.filter_box.configure(state=readonly_state)
-        self.short_videos_check.configure(state=normal_state)
-        self.threshold_box.configure(state=readonly_state)
-        self.download_button.configure(state="disabled" if locked else "normal")
+        self._refresh_interaction_control_states(force_download_locked=locked)
+
+    def _channel_request_busy(self) -> bool:
+        return bool(getattr(self, "fetching", False) or getattr(self, "loading_more", False))
+
+    def _refresh_interaction_control_states(self, force_download_locked: bool | None = None) -> None:
+        channel_busy = self._channel_request_busy()
+        download_busy = bool(self.downloading)
+        shutdown_busy = bool(self.shutdown_in_progress)
+        download_locked = bool(force_download_locked) if force_download_locked is not None else download_busy
+        semantic_locked = channel_busy or download_locked or shutdown_busy
+        download_only_locked = download_locked or shutdown_busy
+
+        semantic_state = "disabled" if semantic_locked else "normal"
+        semantic_combo_state = "disabled" if semantic_locked else "readonly"
+        download_state = "disabled" if download_only_locked else "normal"
+        download_combo_state = "disabled" if download_only_locked else "readonly"
+        self._configure_widget_state("api_key_entry", semantic_state)
+        self._configure_widget_state("channel_entry", semantic_state)
+        self._configure_widget_state("fetch_button", semantic_state)
+        self._configure_widget_state("choose_folder_button", semantic_state)
+        self._configure_widget_state("mode_box", semantic_combo_state)
+        self._configure_widget_state("hide_below_check", semantic_state)
+        self._configure_widget_state("hide_above_check", semantic_state)
+        self._refresh_duration_entry_states(locked=semantic_locked)
+        self._configure_widget_state("download_button", "disabled" if semantic_locked else "normal")
+
+        self._configure_widget_state("select_by_date_button", download_state)
+        self._configure_widget_state("cookies_check", download_state)
+        self._configure_widget_state("speed_limit_entry", download_state)
+        self._configure_widget_state("filter_box", download_combo_state)
         self._update_cookies_state()
         self._update_more_button_state()
         self._update_stop_button_state()
         self._update_download_button_text()
 
+    def _configure_widget_state(self, attr_name: str, state: str) -> None:
+        widget = getattr(self, attr_name, None)
+        if widget is not None:
+            widget.configure(state=state)
+
+    def _refresh_duration_entry_states(self, locked: bool | None = None) -> None:
+        if locked is None:
+            locked = bool(self._channel_request_busy() or self.downloading or self.shutdown_in_progress)
+        below_state = "disabled" if locked or not bool(self.hide_below_enabled_var.get()) else "normal"
+        above_state = "disabled" if locked or not bool(self.hide_above_enabled_var.get()) else "normal"
+        self._configure_widget_state("hide_below_entry", below_state)
+        self._configure_widget_state("hide_above_entry", above_state)
+
     def _finish_download_ui(self) -> None:
-        should_exit = self.exit_after_download_stop
+        if self.shutdown_in_progress or self.exit_after_download_stop:
+            self._schedule_shutdown_poll()
+            return
         self.downloading = False
+        self.download_worker = None
         self.download_controller = None
         self.download_stop_requested = False
         self.cancel_download = False
-        if should_exit:
-            self.close_requested = True
-            self.root.after(0, self.root.destroy)
-            return
-
         self.exit_after_download_stop = False
         self.close_requested = False
+        self._download_terminal_received = False
+        self._download_terminal_outcome = ""
+        self._download_terminal_message = ""
         self._set_download_controls_locked(False)
 
     def _on_close(self) -> None:
+        if self._root_destroyed or self.shutdown_in_progress:
+            return
         if self.close_requested:
             return
         if not self.downloading:
-            self.root.destroy()
+            self._destroy_root_once()
             return
         if self._confirm_exit_while_downloading():
             self._exit_while_downloading()
@@ -2107,17 +2495,184 @@ class YouTubeDownloaderWindow:
         )
 
     def _exit_while_downloading(self) -> None:
-        if self.close_requested:
+        if self.shutdown_in_progress:
             return
-        self.close_requested = True
-        self.cancel_download = True
-        self.exit_after_download_stop = True
-        self.download_stop_requested = True
-        self._append_log("[WARNING] Người dùng chọn thoát ứng dụng khi đang tải.")
+        self.shutdown_in_progress = True
+        self.shutdown_started_at = time.monotonic()
+        self._shutdown_slow_warning_logged = False
+        self._shutdown_cancel_reissued = False
+        self._request_download_stop(
+            exit_after=True,
+            log_message="[WARNING] Người dùng chọn thoát ứng dụng khi đang tải.",
+            info_message="[INFO] Đang dừng tiến trình và chờ hoàn tất dọn dẹp...",
+            emit_stop_progress=False,
+        )
+        self.progress_current_var.set("Đang tải: Đang dừng để thoát...")
+        self.progress_detail_var.set("Đang xử lý: Chờ tiến trình tải kết thúc an toàn")
+        self._set_download_controls_locked(True)
         self._update_stop_button_state()
-        if self.download_controller is not None:
+        self._schedule_shutdown_poll()
+
+    def _after(self, delay_ms: int, callback):
+        if self._root_destroyed:
+            return None
+        try:
+            return self.root.after(delay_ms, callback)
+        except tk.TclError:
+            return None
+
+    def _cancel_after_id(self, after_id) -> None:
+        if after_id is None:
+            return
+        try:
+            self.root.after_cancel(after_id)
+        except tk.TclError:
+            pass
+
+    def _schedule_shutdown_poll(self) -> None:
+        if self._root_destroyed or not self.shutdown_in_progress:
+            return
+        if self._shutdown_poll_after_id is not None:
+            return
+        self._shutdown_poll_after_id = self._after(SHUTDOWN_POLL_MS, self._poll_shutdown_completion)
+
+    def _poll_shutdown_completion(self) -> None:
+        if self._root_destroyed:
+            return
+        self._shutdown_poll_after_id = None
+
+        worker_alive = self._download_worker_alive()
+        controller_active = self._controller_has_active_process()
+        terminal_received = self._download_terminal_received or self.download_worker is None
+
+        if terminal_received and not worker_alive and not controller_active:
+            self.download_worker = None
+            self.download_controller = None
+            self._clear_progress_queue()
+            self._destroy_root_once()
+            return
+
+        self._handle_slow_shutdown(controller_active)
+        self._schedule_shutdown_poll()
+
+    def _handle_slow_shutdown(self, controller_active: bool) -> None:
+        if self.shutdown_started_at is None:
+            return
+        elapsed = time.monotonic() - self.shutdown_started_at
+        if elapsed < SHUTDOWN_SLOW_WARNING_SECONDS:
+            return
+        if not self._shutdown_slow_warning_logged:
+            self._append_log(
+                "[WARNING] Tiến trình đang mất nhiều thời gian để dừng; "
+                "ứng dụng vẫn chờ dọn dẹp an toàn."
+            )
+            self._shutdown_slow_warning_logged = True
+        if controller_active and not self._shutdown_cancel_reissued and self.download_controller is not None:
             self.download_controller.request_cancel()
-        self.root.after(0, self.root.destroy)
+            self._shutdown_cancel_reissued = True
+
+    def _schedule_download_finish_poll(self) -> None:
+        if self._root_destroyed or self.shutdown_in_progress:
+            return
+        if self._download_finish_poll_after_id is not None:
+            return
+        self._download_finish_poll_after_id = self._after(SHUTDOWN_POLL_MS, self._poll_download_finish_completion)
+
+    def _poll_download_finish_completion(self) -> None:
+        if self._root_destroyed:
+            return
+        self._download_finish_poll_after_id = None
+        if self.shutdown_in_progress:
+            self._schedule_shutdown_poll()
+            return
+        if not self._download_terminal_received:
+            return
+        if self._download_worker_alive() or self._controller_has_active_process():
+            self._schedule_download_finish_poll()
+            return
+        self._finish_download_ui()
+
+    def _download_worker_alive(self) -> bool:
+        worker = self.download_worker
+        return bool(worker is not None and worker.is_alive())
+
+    def _controller_has_active_process(self) -> bool:
+        controller = self.download_controller
+        return bool(controller is not None and controller.has_active_process())
+
+    def _destroy_root_once(self) -> None:
+        if self._root_destroyed:
+            return
+        self._root_destroyed = True
+        for attr_name in ("_shutdown_poll_after_id", "_download_finish_poll_after_id"):
+            after_id = getattr(self, attr_name, None)
+            setattr(self, attr_name, None)
+            self._cancel_after_id(after_id)
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+
+    def _next_channel_request_id(self) -> int:
+        self._channel_request_sequence += 1
+        return self._channel_request_sequence
+
+    def _queue_channel_request_log(self, request_token, message: str) -> None:
+        self.events.put(("channel_request_log", request_token, sanitize_log_text(message)))
+
+    def _restore_loaded_generation_after_failed_fetch(self) -> None:
+        if self._loaded_channel_generation is not None:
+            self._channel_generation = self._loaded_channel_generation
+
+    def _clear_pending_fetch_manual_key(self, token: _FetchRequestToken | None = None) -> None:
+        if token is not None and self._active_fetch_manual_key_request_id != token.request_id:
+            return
+        self._active_fetch_manual_key = ""
+        self._active_fetch_manual_key_request_id = None
+
+    def _persist_accepted_fetch_manual_key(self, token: _FetchRequestToken) -> None:
+        if self._active_fetch_manual_key_request_id != token.request_id:
+            return
+        manual_key = self._active_fetch_manual_key.strip()
+        self._clear_pending_fetch_manual_key(token)
+        if not manual_key:
+            return
+        if not save_last_api_key(manual_key):
+            self._append_log("[WARNING] Không thể lưu API key bằng bảo vệ Windows.")
+
+    def _is_current_channel_request_log(self, request_token) -> bool:
+        if isinstance(request_token, _FetchRequestToken):
+            return self._is_current_fetch_request(request_token)
+        if isinstance(request_token, _LoadMoreRequestToken):
+            return self._is_current_load_more_request(request_token)
+        return False
+
+    def _is_current_fetch_request(self, token: _FetchRequestToken) -> bool:
+        active = self._active_fetch_request
+        return bool(
+            isinstance(token, _FetchRequestToken)
+            and isinstance(active, _FetchRequestToken)
+            and token.generation == self._channel_generation
+            and token.request_id == active.request_id
+            and token.generation == active.generation
+        )
+
+    def _is_current_load_more_request(self, token: _LoadMoreRequestToken) -> bool:
+        active = self._active_load_more_request
+        channel = self.channel_info
+        return bool(
+            isinstance(token, _LoadMoreRequestToken)
+            and isinstance(active, _LoadMoreRequestToken)
+            and token.generation == self._channel_generation
+            and token.generation == self._loaded_channel_generation
+            and token.request_id == active.request_id
+            and token.generation == active.generation
+            and channel is not None
+            and str(getattr(channel, "channel_id", "") or "") == token.channel_id
+            and str(getattr(channel, "uploads_playlist_id", "") or "") == token.uploads_playlist_id
+            and str(self.next_page_token or "") == token.page_token
+            and len(self.videos) + 1 == token.start_order
+        )
 
     def _thread_log(self, message: str) -> None:
         self.events.put(("log", sanitize_log_text(message)))
@@ -2133,6 +2688,8 @@ class YouTubeDownloaderWindow:
             pass
 
     def _poll_progress_queue(self) -> None:
+        if self._root_destroyed:
+            return
         latest = None
         try:
             while True:
@@ -2144,7 +2701,7 @@ class YouTubeDownloaderWindow:
             current_line, detail_line = self._localized_progress_lines(display_event)
             self.progress_current_var.set(current_line)
             self.progress_detail_var.set(detail_line)
-        self.root.after(300, self._poll_progress_queue)
+        self._after(300, self._poll_progress_queue)
 
     def _localized_progress_lines(self, event: ProgressEvent) -> tuple[str, str]:
         current_line, detail_line = format_progress_event_lines(event)
@@ -2255,56 +2812,186 @@ class YouTubeDownloaderWindow:
             return "Không tìm thấy kênh"
         return None
 
+    def _handle_systemic_download_block(self, context: SystemicBlockContext) -> None:
+        controller = self.download_controller
+        if self._systemic_block_should_stop(controller, context):
+            self._submit_systemic_stop(controller, context)
+            return
+
+        reason_line = (context.reason or "").splitlines()[0] if context.reason else context.failure_kind.value
+        self.progress_current_var.set("Đang tải: Tạm dừng")
+        self.progress_detail_var.set(f"Đang xử lý: {reason_line}")
+        self._append_log(f"[WARNING] Danh sách tải đã tạm dừng: {context.failure_kind.value}")
+
+        retry_text = "Thử lại video hiện tại"
+        skip_text = "Bỏ qua video này"
+        stop_text = "Dừng danh sách"
+        buttons = []
+        if context.retry_allowed:
+            buttons.append({"text": retry_text, "value": BatchDecision.RETRY_CURRENT.value, "width": 24})
+        buttons.extend(
+            (
+                {"text": skip_text, "value": BatchDecision.SKIP_CURRENT.value, "width": 18},
+                {"text": stop_text, "value": BatchDecision.STOP_BATCH.value, "width": 18},
+            )
+        )
+
+        controller = self.download_controller
+        if self._systemic_block_should_stop(controller, context):
+            self._submit_systemic_stop(controller, context)
+            return
+
+        decision = show_app_dialog(
+            self.root,
+            title="Danh sách tải đã tạm dừng",
+            message=self._systemic_block_dialog_message(context),
+            buttons=tuple(buttons),
+            default_button=retry_text if context.retry_allowed else skip_text,
+            cancel_button=stop_text,
+            width=620,
+        )
+        if decision not in {item.value for item in BatchDecision}:
+            decision = BatchDecision.STOP_BATCH.value
+
+        controller = self.download_controller
+        if self._systemic_block_should_stop(controller, context):
+            self._submit_systemic_stop(controller, context)
+            return
+        if controller is not None and not controller.submit_systemic_decision(context.block_id, decision):
+            self._append_log("[INFO] Quyết định tạm dừng đã hết hiệu lực.")
+
+    def _systemic_block_should_stop(
+        self,
+        controller: DownloadController | None,
+        context: SystemicBlockContext,
+    ) -> bool:
+        if (
+            not self.downloading
+            or self.download_stop_requested
+            or controller is None
+            or controller.is_cancel_requested()
+        ):
+            return True
+        is_active = getattr(controller, "is_systemic_block_active", None)
+        if is_active is not None and not is_active(context.block_id):
+            return True
+        return False
+
+    def _submit_systemic_stop(
+        self,
+        controller: DownloadController | None,
+        context: SystemicBlockContext,
+    ) -> None:
+        if controller is not None:
+            controller.submit_systemic_decision(context.block_id, BatchDecision.STOP_BATCH.value)
+
+    def _systemic_block_dialog_message(self, context: SystemicBlockContext) -> str:
+        title = context.title or context.video_id or "-"
+        part = self._localized_systemic_part(context.part)
+        cookie_source = context.cookie_source or "-"
+        cookie_path = context.cookie_path or "-"
+        retry_guidance = (
+            "Hệ thống chỉ thử lại khi file cookie nguồn đã thay đổi sau lần lỗi."
+            if context.retry_allowed
+            else "Lần thử lại cookie đã được dùng cho phần này; bạn có thể bỏ qua video hoặc dừng danh sách."
+        )
+        return "\n".join(
+            [
+                f"Lý do: {context.reason}",
+                f"Video: {title}",
+                f"Phần: {part}",
+                f"Nguồn cookie: {cookie_source}",
+                f"File cookie: {cookie_path}",
+                "",
+                "Các file và phần đã tải xong sẽ được giữ nguyên.",
+                retry_guidance,
+            ]
+        )
+
+    def _localized_systemic_part(self, part: str) -> str:
+        if part == "video":
+            return "Video"
+        if part == "audio":
+            return "MP3"
+        if part == "thumb":
+            return "Thumbnail"
+        return part or "-"
+
     def _process_events(self) -> None:
+        if self._root_destroyed:
+            return
         try:
             while True:
                 event = self.events.get_nowait()
                 self._handle_event(event)
         except queue.Empty:
             pass
-        self.root.after(100, self._process_events)
+        self._after(100, self._process_events)
 
     def _handle_event(self, event) -> None:
         kind = event[0]
         if kind == "log":
             self._append_log(event[1])
+        elif kind == "channel_request_log":
+            token = event[1]
+            if not self._is_current_channel_request_log(token):
+                return
+            self._append_log(event[2])
         elif kind == "fetch_done":
-            self.channel_info = event[1]
-            self.videos = event[2]
-            self.next_page_token = event[3]
+            token = event[1]
+            if not self._is_current_fetch_request(token):
+                return
+            self.channel_info = event[2]
+            self.selected_orders.clear()
+            self.videos = event[3]
+            self.next_page_token = event[4]
+            self._loaded_channel_generation = token.generation
+            self._loaded_channel_context = token.context
+            self._active_fetch_request = None
             self.fetching = False
-            self.fetch_button.configure(state="normal")
+            self._persist_accepted_fetch_manual_key(token)
+            self._refresh_interaction_control_states()
             self._set_resolved_channel_display(self.channel_info)
             self.apply_filter()
-            self._update_more_button_state()
-            if not self.next_page_token:
-                self._append_log("[INFO] Không còn video nào.")
         elif kind == "fetch_error":
-            self._append_log(event[1])
-            self.next_page_token = ""
+            token = event[1]
+            if not self._is_current_fetch_request(token):
+                return
+            self._append_log(event[2])
+            self._active_fetch_request = None
             self.fetching = False
-            self.fetch_button.configure(state="normal")
-            self._update_more_button_state()
+            self._restore_loaded_generation_after_failed_fetch()
+            self._clear_pending_fetch_manual_key(token)
+            self._refresh_interaction_control_states()
         elif kind == "load_more_done":
-            more_videos = event[1]
-            self.next_page_token = event[2]
+            token = event[1]
+            if not self._is_current_load_more_request(token):
+                return
+            more_videos = event[2]
+            next_page_token = event[3]
             self.videos.extend(more_videos)
-            self.loading_more = False
             if self.channel_info:
                 apply_statuses(
                     self.videos,
-                    self.save_folder_var.get().strip(),
+                    token.context.save_folder,
                     self.channel_info.channel_name,
                     self.channel_info.channel_id,
-                    download_mode=self.download_mode_var.get(),
+                    download_mode=token.context.download_mode,
                     warning_callback=self._append_log,
                 )
-            self.apply_filter()
-            self._update_more_button_state()
-        elif kind == "load_more_error":
-            self._append_log(event[1])
+            self.next_page_token = next_page_token
+            self._active_load_more_request = None
             self.loading_more = False
-            self._update_more_button_state()
+            self._refresh_interaction_control_states()
+            self.apply_filter()
+        elif kind == "load_more_error":
+            token = event[1]
+            if not self._is_current_load_more_request(token):
+                return
+            self._append_log(event[2])
+            self.loading_more = False
+            self._active_load_more_request = None
+            self._refresh_interaction_control_states()
         elif kind == "status_update":
             order, status = event[1], event[2]
             for video in self.videos:
@@ -2312,11 +2999,32 @@ class YouTubeDownloaderWindow:
                     video.status = status
                     break
             self.apply_filter()
+        elif kind == "systemic_download_block":
+            self._handle_systemic_download_block(event[1])
+        elif kind == "download_worker_finished":
+            outcome = event[1] if len(event) > 1 else "completed"
+            message = event[2] if len(event) > 2 else ""
+            self._handle_download_worker_finished(outcome, message)
         elif kind == "download_done":
-            self._finish_download_ui()
+            self._handle_download_worker_finished("completed", "")
         elif kind == "download_error":
-            self._append_log(event[1])
-            self._finish_download_ui()
+            self._handle_download_worker_finished("error", event[1])
+
+    def _handle_download_worker_finished(self, outcome: str, message: str = "") -> None:
+        if self._download_terminal_received:
+            return
+        self._download_terminal_received = True
+        self._download_terminal_outcome = outcome or "completed"
+        self._download_terminal_message = message or ""
+        if self._download_terminal_outcome == "error" and self._download_terminal_message:
+            self._append_log(self._download_terminal_message)
+
+        if self.shutdown_in_progress or self.exit_after_download_stop:
+            self._schedule_shutdown_poll()
+            self._poll_shutdown_completion()
+            return
+
+        self._poll_download_finish_completion()
 
 
 def main() -> None:

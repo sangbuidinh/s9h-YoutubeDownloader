@@ -31,11 +31,14 @@ def main() -> int:
     _test_fresh_download_validation_can_delete_invalid_output()
     _test_stream_interrupted_retry()
     _test_video_audio_mode_extracts_from_local_mp4()
-    _test_video_failure_removes_existing_thumb()
-    _test_video_failure_removes_existing_audio_and_thumb_in_combined_mode()
+    _test_video_failure_preserves_existing_thumb()
+    _test_video_failure_preserves_existing_audio_and_thumb_in_combined_mode()
     _test_audio_failure_does_not_remove_thumb_or_video()
     _test_thumbnail_failure_does_not_remove_video_or_audio()
     _test_move_single_file_can_replace_invalid_existing_video()
+    _test_staged_mp4_validation_precedes_promotion()
+    _test_invalid_staged_mp4_preserves_existing_final()
+    _test_existing_valid_final_mp4_skips_download()
     print("Premiere-safe download smoke tests passed")
     return 0
 
@@ -88,12 +91,12 @@ def _test_base_command_flags() -> None:
         "--socket-timeout": "60",
         "--http-chunk-size": "1M",
         "-N": "4",
-        "--cookies": str(cookies_path),
         "--limit-rate": "2M",
     }
     for option, value in expected_options.items():
         _assert(_option_value(command, option) == value, f"{option} was not preserved as {value}")
     _assert("--newline" in command, "--newline missing")
+    _assert(downloader.YTDLP_COOKIES_OPTION not in command, "base command passed canonical cookies")
     _assert("--ffmpeg-location" in command, "--ffmpeg-location missing")
     _assert("--js-runtimes" in command, "Deno runtime flags missing")
     _assert(any(str(value).startswith("deno:") for value in command), "Deno executable path missing")
@@ -129,7 +132,7 @@ def _test_thumbnail_url_first_and_jpeg_only() -> None:
         old_direct = downloader._download_thumbnail_from_url
         old_run = downloader._run_ytdlp_with_retries
         try:
-            def direct_first(_url, _temp_path, _final_path, _log=None):
+            def direct_first(_url, _temp_path, _final_path, _log=None, _cancel_controller=None):
                 calls.append("url")
                 raise downloader.DownloadError("thumbnail download failed")
 
@@ -290,10 +293,10 @@ def _test_stream_interrupted_retry() -> None:
                 DownloadOptions(".", CHANNEL_ID, CHANNEL_NAME, cookies_enabled=False),
                 lambda _message: None,
             )
-        except downloader.YtdlpExecutionError:
+        except downloader.DownloadCancelled:
             pass
         else:
-            raise AssertionError("bot-check error was swallowed")
+            raise AssertionError("bot-check safe-stop was swallowed")
     finally:
         downloader._run_ytdlp = old_run
         downloader._sleep_with_cancel = old_sleep
@@ -374,7 +377,7 @@ def _test_video_audio_mode_extracts_from_local_mp4() -> None:
     _assert("yt-dlp-audio" not in calls, "combined mode called yt-dlp audio extraction")
 
 
-def _test_video_failure_removes_existing_thumb() -> None:
+def _test_video_failure_preserves_existing_thumb() -> None:
     with TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         db_path = root / "data" / "download_state.sqlite3"
@@ -420,11 +423,15 @@ def _test_video_failure_removes_existing_thumb() -> None:
 
         _assert("video" in calls, "video download did not run")
         _assert("thumb" not in calls, "thumbnail ran after video failure")
-        _assert(not paths.thumb_path.exists(), "existing thumbnail was not removed after video failure")
-        _assert(state_store.part_status_from_entry(entry, PART_THUMB) == state_store.STATUS_ERROR, "thumb state was not marked error")
+        _assert(paths.thumb_path.exists(), "existing thumbnail was removed after video failure")
+        _assert(paths.thumb_path.read_bytes() == b"old thumb", "existing thumbnail content changed after video failure")
+        _assert(
+            state_store.part_status_from_entry(entry, PART_THUMB) != state_store.STATUS_ERROR,
+            "thumb state was marked error after unrelated video failure",
+        )
 
 
-def _test_video_failure_removes_existing_audio_and_thumb_in_combined_mode() -> None:
+def _test_video_failure_preserves_existing_audio_and_thumb_in_combined_mode() -> None:
     with TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         db_path = root / "data" / "download_state.sqlite3"
@@ -473,10 +480,18 @@ def _test_video_failure_removes_existing_audio_and_thumb_in_combined_mode() -> N
                 downloader._extract_mp3_from_video = old_extract_mp3
                 downloader._download_thumbnail = old_download_thumbnail
 
-        _assert(not paths.audio_path.exists(), "existing MP3 was not removed after video failure")
-        _assert(not paths.thumb_path.exists(), "existing thumbnail was not removed after video failure")
-        _assert(state_store.part_status_from_entry(entry, PART_AUDIO) == state_store.STATUS_ERROR, "audio state was not marked error")
-        _assert(state_store.part_status_from_entry(entry, PART_THUMB) == state_store.STATUS_ERROR, "thumb state was not marked error")
+        _assert(paths.audio_path.exists(), "existing MP3 was removed after video failure")
+        _assert(paths.thumb_path.exists(), "existing thumbnail was removed after video failure")
+        _assert(paths.audio_path.read_bytes() == b"old mp3", "existing MP3 content changed after video failure")
+        _assert(paths.thumb_path.read_bytes() == b"old thumb", "existing thumbnail content changed after video failure")
+        _assert(
+            state_store.part_status_from_entry(entry, PART_AUDIO) != state_store.STATUS_ERROR,
+            "audio state was marked error after unrelated video failure",
+        )
+        _assert(
+            state_store.part_status_from_entry(entry, PART_THUMB) != state_store.STATUS_ERROR,
+            "thumb state was marked error after unrelated video failure",
+        )
 
 
 def _test_audio_failure_does_not_remove_thumb_or_video() -> None:
@@ -593,6 +608,141 @@ def _test_move_single_file_can_replace_invalid_existing_video() -> None:
         _assert(final_path.read_bytes() == b"new mp4", "fresh replacement did not overwrite invalid existing MP4")
 
 
+def _test_staged_mp4_validation_precedes_promotion() -> None:
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        staging = root / "stage"
+        staging.mkdir()
+        final_path = root / "out" / "video.mp4"
+        final_path.parent.mkdir()
+        final_path.write_bytes(b"old mp4")
+        calls = []
+        validations = []
+
+        def run_ytdlp(command, _options, _log, _cancel_controller=None, _cookie_retry_state=None):
+            calls.append("download")
+            _output_path(command).write_bytes(b"new mp4")
+
+        def validate(path, _log, delete_invalid, _cancel_controller):
+            calls.append("validate")
+            validations.append((path, delete_invalid))
+
+        def promote(source, target, *_args, **_kwargs):
+            calls.append("promote")
+            downloader.os.replace(source, target)
+
+        old_run = downloader._run_ytdlp_with_retries
+        old_ready = downloader._premiere_safe_mp4_ready_for_download
+        old_validate = downloader._validate_premiere_safe_mp4_for_download
+        old_promote = downloader._atomic_promote_with_retry
+        try:
+            downloader._run_ytdlp_with_retries = run_ytdlp
+            downloader._premiere_safe_mp4_ready_for_download = lambda _path, _controller: False
+            downloader._validate_premiere_safe_mp4_for_download = validate
+            downloader._atomic_promote_with_retry = promote
+            downloader._download_video(
+                "video-atomic",
+                "video-atomic",
+                staging,
+                final_path,
+                DownloadOptions(str(root), CHANNEL_ID, CHANNEL_NAME),
+                lambda _message: None,
+            )
+        finally:
+            downloader._run_ytdlp_with_retries = old_run
+            downloader._premiere_safe_mp4_ready_for_download = old_ready
+            downloader._validate_premiere_safe_mp4_for_download = old_validate
+            downloader._atomic_promote_with_retry = old_promote
+
+        _assert(calls == ["download", "validate", "promote"], f"MP4 call order changed: {calls}")
+        _assert(validations and validations[0][0].parent == staging, "MP4 validation did not use staged path")
+        _assert(validations[0][0] != final_path, "MP4 validation was performed on final path before promotion")
+        _assert(validations[0][1] is True, "staged invalid MP4 cleanup flag was not preserved")
+        _assert(final_path.read_bytes() == b"new mp4", "valid staged MP4 was not promoted")
+
+
+def _test_invalid_staged_mp4_preserves_existing_final() -> None:
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        staging = root / "stage"
+        staging.mkdir()
+        final_path = root / "out" / "video.mp4"
+        final_path.parent.mkdir()
+        final_path.write_bytes(b"old mp4")
+        promoted = []
+        validated = []
+
+        def run_ytdlp(command, _options, _log, _cancel_controller=None, _cookie_retry_state=None):
+            _output_path(command).write_bytes(b"bad mp4")
+
+        def validate(path, _log, _delete_invalid, _cancel_controller):
+            validated.append(path)
+            raise downloader.DownloadError("premiere_safe_mp4_validation_failed: invalid")
+
+        old_run = downloader._run_ytdlp_with_retries
+        old_ready = downloader._premiere_safe_mp4_ready_for_download
+        old_validate = downloader._validate_premiere_safe_mp4_for_download
+        old_promote = downloader._atomic_promote_with_retry
+        try:
+            downloader._run_ytdlp_with_retries = run_ytdlp
+            downloader._premiere_safe_mp4_ready_for_download = lambda _path, _controller: False
+            downloader._validate_premiere_safe_mp4_for_download = validate
+            downloader._atomic_promote_with_retry = lambda *_args, **_kwargs: promoted.append("promote")
+            try:
+                downloader._download_video(
+                    "video-invalid",
+                    "video-invalid",
+                    staging,
+                    final_path,
+                    DownloadOptions(str(root), CHANNEL_ID, CHANNEL_NAME),
+                    lambda _message: None,
+                )
+            except downloader.DownloadError:
+                pass
+            else:
+                raise AssertionError("invalid staged MP4 did not fail")
+        finally:
+            downloader._run_ytdlp_with_retries = old_run
+            downloader._premiere_safe_mp4_ready_for_download = old_ready
+            downloader._validate_premiere_safe_mp4_for_download = old_validate
+            downloader._atomic_promote_with_retry = old_promote
+
+        _assert(validated and validated[0].parent == staging, "invalid MP4 was not validated in staging")
+        _assert(promoted == [], "invalid staged MP4 was promoted")
+        _assert(final_path.read_bytes() == b"old mp4", "invalid staged MP4 replaced old final")
+
+
+def _test_existing_valid_final_mp4_skips_download() -> None:
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        staging = root / "stage"
+        staging.mkdir()
+        final_path = root / "out" / "video.mp4"
+        final_path.parent.mkdir()
+        final_path.write_bytes(b"valid mp4")
+        calls = []
+
+        old_run = downloader._run_ytdlp_with_retries
+        old_ready = downloader._premiere_safe_mp4_ready_for_download
+        try:
+            downloader._run_ytdlp_with_retries = lambda *_args, **_kwargs: calls.append("download")
+            downloader._premiere_safe_mp4_ready_for_download = lambda _path, _controller: True
+            downloader._download_video(
+                "video-skip",
+                "video-skip",
+                staging,
+                final_path,
+                DownloadOptions(str(root), CHANNEL_ID, CHANNEL_NAME),
+                lambda _message: None,
+            )
+        finally:
+            downloader._run_ytdlp_with_retries = old_run
+            downloader._premiere_safe_mp4_ready_for_download = old_ready
+
+        _assert(calls == [], "existing valid MP4 did not skip download")
+        _assert(final_path.read_bytes() == b"valid mp4", "existing valid MP4 was changed")
+
+
 def _seed_video_and_thumb_downloaded(db_path: Path, video, paths, save_base_folder: Path) -> None:
     _seed_downloaded_parts(db_path, video, paths, save_base_folder, (PART_VIDEO, PART_THUMB))
 
@@ -651,6 +801,13 @@ def _option_value(command: list[str], option: str) -> str | None:
         return command[command.index(option) + 1]
     except (ValueError, IndexError):
         return None
+
+
+def _output_path(command: list[str]) -> Path:
+    template = Path(command[command.index("-o") + 1])
+    if "%(ext)s" not in template.name:
+        return template
+    return template.with_name(template.name.replace("%(ext)s", "mp4"))
 
 
 def _assert(condition: bool, message: str) -> None:

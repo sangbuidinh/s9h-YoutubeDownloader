@@ -1,19 +1,41 @@
 import argparse
 import json
+import os
 import sqlite3
 import sys
+import threading
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from core.filename_utils import normalize_output_stem
 from core.runtime_paths import db_file
 
 
-SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 4
+SCHEMA_VERSION = CURRENT_SCHEMA_VERSION
+LEGACY_SCHEMA_VERSION = 1
+SCHEMA_VERSION_KEY = "schema_version"
+APP_MIGRATION_LEDGER_TABLE = "app_schema_migrations"
+SQLITE_BUSY_TIMEOUT_MS = 5000
+MIGRATION_BACKUP_TIMESTAMP_FORMAT = "%Y%m%d-%H%M%S-%f"
 PLATFORM_YOUTUBE = "youtube"
 FILE_PARTS = ("video", "thumb", "audio")
+DOWNLOAD_STATE_ARCHIVE_TABLE = "download_state_archive"
+VIDEO_IDENTITY_INDEX = "uq_download_items_video_identity"
+ARCHIVE_VIDEO_INDEX = "idx_download_state_archive_video"
+VIDEO_IDENTITY_ARCHIVE_REASON_V4 = "video_identity_consolidation_v4"
 REQUIRED_TABLES = (
+    "app_meta",
+    APP_MIGRATION_LEDGER_TABLE,
+    "channels",
+    "download_items",
+    "download_files",
+    DOWNLOAD_STATE_ARCHIVE_TABLE,
+)
+CORE_REQUIRED_TABLES = (
     "app_meta",
     "channels",
     "download_items",
@@ -21,105 +43,1624 @@ REQUIRED_TABLES = (
 )
 NULL_COUNTER_KEY = "<NULL>"
 
-SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS app_meta (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
+REQUIRED_COLUMNS = {
+    "app_meta": ("key", "value", "updated_at"),
+    APP_MIGRATION_LEDGER_TABLE: ("version", "name", "applied_at"),
+    "channels": (
+        "id",
+        "platform",
+        "channel_id",
+        "channel_name",
+        "save_base_folder_raw",
+        "save_base_folder_norm",
+        "created_at",
+        "updated_at",
+    ),
+    "download_items": (
+        "id",
+        "channel_db_id",
+        "platform",
+        "channel_id",
+        "video_id",
+        "save_base_folder_raw",
+        "save_base_folder_norm",
+        "original_title",
+        "sanitized_filename_base",
+        "display_order_at_download",
+        "status",
+        "manual_status",
+        "manual_override",
+        "downloaded_at",
+        "updated_at",
+        "created_at",
+    ),
+    "download_files": (
+        "id",
+        "item_id",
+        "part",
+        "status",
+        "filename_raw",
+        "filename_norm",
+        "path_raw",
+        "path_norm",
+        "is_valid",
+        "validation_reason",
+        "created_at",
+        "updated_at",
+    ),
+    DOWNLOAD_STATE_ARCHIVE_TABLE: (
+        "id",
+        "entity_type",
+        "source_table",
+        "source_row_id",
+        "platform",
+        "channel_id",
+        "video_id",
+        "reason",
+        "payload_json",
+        "archived_at",
+    ),
+}
 
-CREATE TABLE IF NOT EXISTS channels (
-    id INTEGER PRIMARY KEY,
-    platform TEXT NOT NULL,
-    channel_id TEXT NOT NULL,
-    channel_name TEXT NULL,
-    save_base_folder_raw TEXT NULL,
-    save_base_folder_norm TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE(platform, channel_id, save_base_folder_norm)
-);
+REQUIRED_INDEXES = {
+    "idx_download_items_channel": ("download_items", ("channel_db_id",)),
+    "idx_download_items_channel_folder": (
+        "download_items",
+        ("platform", "channel_id", "save_base_folder_norm"),
+    ),
+    "idx_download_files_path_norm": ("download_files", ("path_norm",)),
+    "uq_download_items_video_identity": ("download_items", ("platform", "channel_id", "video_id")),
+    ARCHIVE_VIDEO_INDEX: (
+        DOWNLOAD_STATE_ARCHIVE_TABLE,
+        ("platform", "channel_id", "video_id"),
+    ),
+}
+REQUIRED_UNIQUE_INDEXES = {VIDEO_IDENTITY_INDEX}
 
-CREATE TABLE IF NOT EXISTS download_items (
-    id INTEGER PRIMARY KEY,
-    channel_db_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-    platform TEXT NOT NULL,
-    channel_id TEXT NOT NULL,
-    video_id TEXT NOT NULL,
-    save_base_folder_raw TEXT NULL,
-    save_base_folder_norm TEXT NOT NULL,
-    original_title TEXT NULL,
-    sanitized_filename_base TEXT NOT NULL,
-    display_order_at_download INTEGER NULL,
-    status TEXT NULL,
-    manual_status TEXT NULL,
-    manual_override INTEGER NULL CHECK(manual_override IN (0, 1) OR manual_override IS NULL),
-    downloaded_at TEXT NULL,
-    updated_at TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    UNIQUE(platform, channel_id, video_id, save_base_folder_norm),
-    FOREIGN KEY(channel_db_id) REFERENCES channels(id) ON DELETE CASCADE
-);
+CURRENT_SCHEMA_STATEMENTS = (
+    """
+    CREATE TABLE IF NOT EXISTS app_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS app_schema_migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS channels (
+        id INTEGER PRIMARY KEY,
+        platform TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        channel_name TEXT NULL,
+        save_base_folder_raw TEXT NULL,
+        save_base_folder_norm TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(platform, channel_id, save_base_folder_norm)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS download_items (
+        id INTEGER PRIMARY KEY,
+        channel_db_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+        platform TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        video_id TEXT NOT NULL,
+        save_base_folder_raw TEXT NULL,
+        save_base_folder_norm TEXT NOT NULL,
+        original_title TEXT NULL,
+        sanitized_filename_base TEXT NOT NULL,
+        display_order_at_download INTEGER NULL,
+        status TEXT NULL,
+        manual_status TEXT NULL,
+        manual_override INTEGER NULL CHECK(manual_override IN (0, 1) OR manual_override IS NULL),
+        downloaded_at TEXT NULL,
+        updated_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(platform, channel_id, video_id, save_base_folder_norm),
+        FOREIGN KEY(channel_db_id) REFERENCES channels(id) ON DELETE CASCADE
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS download_files (
+        id INTEGER PRIMARY KEY,
+        item_id INTEGER NOT NULL REFERENCES download_items(id) ON DELETE CASCADE,
+        part TEXT NOT NULL CHECK(part IN ('video', 'thumb', 'audio')),
+        status TEXT NULL,
+        filename_raw TEXT NULL,
+        filename_norm TEXT NULL,
+        path_raw TEXT NULL,
+        path_norm TEXT NULL,
+        is_valid INTEGER NOT NULL DEFAULT 1 CHECK(is_valid IN (0, 1)),
+        validation_reason TEXT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(item_id, part),
+        FOREIGN KEY(item_id) REFERENCES download_items(id) ON DELETE CASCADE
+    )
+    """,
+    f"""
+    CREATE TABLE IF NOT EXISTS {DOWNLOAD_STATE_ARCHIVE_TABLE} (
+        id INTEGER PRIMARY KEY,
+        entity_type TEXT NOT NULL
+            CHECK(entity_type IN ('download_item', 'download_file')),
+        source_table TEXT NOT NULL,
+        source_row_id INTEGER NOT NULL,
+        platform TEXT NULL,
+        channel_id TEXT NULL,
+        video_id TEXT NULL,
+        reason TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        archived_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_download_items_channel
+    ON download_items(channel_db_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_download_items_channel_folder
+    ON download_items(platform, channel_id, save_base_folder_norm)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_download_files_path_norm
+    ON download_files(path_norm)
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_download_items_video_identity
+    ON download_items(platform, channel_id, video_id)
+    """,
+    f"""
+    CREATE INDEX IF NOT EXISTS {ARCHIVE_VIDEO_INDEX}
+    ON {DOWNLOAD_STATE_ARCHIVE_TABLE}(platform, channel_id, video_id)
+    """,
+)
 
-CREATE TABLE IF NOT EXISTS download_files (
-    id INTEGER PRIMARY KEY,
-    item_id INTEGER NOT NULL REFERENCES download_items(id) ON DELETE CASCADE,
-    part TEXT NOT NULL CHECK(part IN ('video', 'thumb', 'audio')),
-    status TEXT NULL,
-    filename_raw TEXT NULL,
-    filename_norm TEXT NULL,
-    path_raw TEXT NULL,
-    path_norm TEXT NULL,
-    is_valid INTEGER NOT NULL DEFAULT 1 CHECK(is_valid IN (0, 1)),
-    validation_reason TEXT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE(item_id, part),
-    FOREIGN KEY(item_id) REFERENCES download_items(id) ON DELETE CASCADE
-);
+SCHEMA_SQL = ";\n".join(statement.strip() for statement in CURRENT_SCHEMA_STATEMENTS) + ";\n"
 
-DROP INDEX IF EXISTS idx_download_items_identity;
+_INITIALIZED_DATABASES: dict[Path, "DatabaseFileIdentity"] = {}
+_INITIALIZATION_LOCK = threading.RLock()
 
-CREATE INDEX IF NOT EXISTS idx_download_items_channel
-ON download_items(channel_db_id);
 
-CREATE INDEX IF NOT EXISTS idx_download_items_channel_folder
-ON download_items(platform, channel_id, save_base_folder_norm);
+class DatabaseSchemaError(RuntimeError):
+    pass
 
-DROP INDEX IF EXISTS idx_download_files_item_part;
 
-CREATE INDEX IF NOT EXISTS idx_download_files_path_norm
-ON download_files(path_norm);
+class DatabaseTooNewError(DatabaseSchemaError):
+    pass
 
-"""
+
+class DatabaseMigrationError(DatabaseSchemaError):
+    pass
+
+
+class DatabaseBackupError(DatabaseMigrationError):
+    pass
+
+
+class DatabaseValidationError(DatabaseSchemaError):
+    pass
+
+
+class DatabaseLockError(DatabaseSchemaError):
+    pass
+
+
+class DatabasePathError(DatabaseSchemaError):
+    pass
+
+
+class DatabaseFileChangedError(DatabaseSchemaError):
+    pass
+
+
+class ManagedSQLiteConnection(sqlite3.Connection):
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
+@dataclass(frozen=True)
+class DatabaseFileIdentity:
+    device: int
+    inode: int
+    creation_marker_ns: int | None = None
+
+
+@dataclass(frozen=True)
+class Migration:
+    version: int
+    name: str
+    apply: Callable[[sqlite3.Connection], None]
+
+
+@dataclass(frozen=True)
+class SQLiteIndexMetadata:
+    name: str
+    table_name: str
+    columns: tuple[str | None, ...]
+    unique: bool
+    partial: bool
+    origin: str | None
+
+
+@dataclass(frozen=True)
+class DuplicateVideoMergePlan:
+    survivor_item_id: int
+    item_updates: dict
+    part_updates: dict[str, dict]
+    duplicate_item_ids: tuple[int, ...]
 
 
 def connect_db(path: Path | None = None) -> sqlite3.Connection:
-    db_path = path or db_file()
-    conn = sqlite3.connect(db_path)
-    _apply_pragmas(conn)
-    return conn
+    return open_database_connection(path)
+
+
+def open_database_connection(path: Path | None = None) -> sqlite3.Connection:
+    db_path = _resolve_database_path(path)
+    expected_identity = _ensure_initialized_database(db_path, allow_new=True)
+    return _open_existing_database_connection(db_path, expected_identity, allow_retry=True)
 
 
 def init_db(path: Path | None = None) -> Path:
-    db_path = path or db_file()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    now = _now_iso()
-    with closing(connect_db(db_path)) as conn:
-        conn.executescript(SCHEMA_SQL)
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO app_meta(key, value, updated_at)
-            VALUES (?, ?, ?)
-            """,
-            ("schema_version", str(SCHEMA_VERSION), now),
-        )
-        conn.commit()
+    return initialize_database(path)
+
+
+def initialize_database(path: Path | None = None) -> Path:
+    db_path = _resolve_database_path(path)
+    _ensure_initialized_database(db_path, allow_new=True)
     return db_path
 
 
+def _ensure_initialized_database(db_path: Path, *, allow_new: bool) -> DatabaseFileIdentity:
+    with _INITIALIZATION_LOCK:
+        cached_identity = _INITIALIZED_DATABASES.get(db_path)
+        if cached_identity is not None:
+            current_identity = _capture_database_identity_for_cache_hit(db_path, cached_identity)
+            if current_identity == cached_identity:
+                return cached_identity
+            _invalidate_cached_database_identity(db_path, cached_identity)
+            allow_new = False
+
+        _bootstrap_database(db_path, allow_new=allow_new)
+        identity = _capture_database_identity(db_path)
+        _INITIALIZED_DATABASES[db_path] = identity
+        return identity
+
+
+def validate_database_schema(conn: sqlite3.Connection) -> None:
+    schema_version = _read_schema_version(conn)
+    if schema_version != CURRENT_SCHEMA_VERSION:
+        raise DatabaseValidationError(
+            f"Schema version {schema_version!r} does not match current version {CURRENT_SCHEMA_VERSION}"
+        )
+
+    _validate_schema_for_version(conn, CURRENT_SCHEMA_VERSION)
+
+    foreign_key_violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if foreign_key_violations:
+        raise DatabaseValidationError("Foreign-key check failed")
+
+
+def _bootstrap_database(db_path: Path, *, allow_new: bool) -> None:
+    try:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise DatabasePathError(f"Database directory is not writable: {db_path.parent}") from exc
+
+    if db_path.exists() and not db_path.is_file():
+        raise DatabasePathError(f"Database path is not a regular file: {db_path}")
+    if not db_path.exists() and not allow_new:
+        raise DatabaseFileChangedError(f"Database file disappeared: {db_path}")
+
+    try:
+        with closing(_connect_bootstrap_connection(db_path, allow_create=allow_new)) as conn:
+            conn.row_factory = sqlite3.Row
+            schema_version = _read_schema_version(conn)
+
+            if schema_version is not None and schema_version > CURRENT_SCHEMA_VERSION:
+                raise DatabaseTooNewError(
+                    f"Database {db_path} has schema version {schema_version}; "
+                    f"this app supports up to {CURRENT_SCHEMA_VERSION}"
+                )
+
+            existing_user_tables = _user_table_names(conn)
+            if schema_version is None:
+                if not existing_user_tables:
+                    if not allow_new:
+                        raise DatabaseFileChangedError(
+                            f"Replacement database is empty or uninitialized: {db_path}"
+                        )
+                    _configure_bootstrap_journal(conn)
+                    _create_new_database(conn)
+                    return
+                schema_version = _detect_legacy_schema_version(conn, existing_user_tables)
+
+            if schema_version == CURRENT_SCHEMA_VERSION:
+                _configure_bootstrap_journal(conn)
+                validate_database_schema(conn)
+                return
+
+            if schema_version < LEGACY_SCHEMA_VERSION:
+                raise DatabaseSchemaError(f"Unsupported old schema version: {schema_version}")
+            _validate_schema_for_version(conn, schema_version)
+
+            _create_migration_backup(conn, db_path, schema_version, CURRENT_SCHEMA_VERSION)
+            _configure_bootstrap_journal(conn)
+            _migrate_database(conn, schema_version, CURRENT_SCHEMA_VERSION)
+    except sqlite3.OperationalError as exc:
+        message = str(exc).casefold()
+        if _is_sqlite_lock_error(exc):
+            raise DatabaseLockError(f"Database is locked after busy timeout: {db_path}") from exc
+        if "unable to open" in message or "readonly" in message or "read-only" in message:
+            raise DatabasePathError(f"Database path is not writable: {db_path}") from exc
+        raise
+
+
+def _create_new_database(conn: sqlite3.Connection) -> None:
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _create_current_schema(conn)
+        now = _now_iso()
+        _record_completed_application_migrations(conn, CURRENT_SCHEMA_VERSION, now)
+        _write_schema_version(conn, CURRENT_SCHEMA_VERSION, now)
+        validate_database_schema(conn)
+        conn.commit()
+    except Exception:
+        _abort_transaction(conn)
+        raise
+
+
+def _migrate_database(conn: sqlite3.Connection, from_version: int, to_version: int) -> None:
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _ensure_application_ledger_for_existing_version(conn, from_version)
+        for version in range(from_version + 1, to_version + 1):
+            migration = MIGRATIONS_BY_VERSION.get(version)
+            if migration is None:
+                raise DatabaseMigrationError(f"No migration defined for schema version {version}")
+            try:
+                migration.apply(conn)
+                now = _now_iso()
+                _record_migration(conn, version, migration.name, now)
+                _write_schema_version(conn, version, now)
+            except DatabaseSchemaError:
+                raise
+            except Exception as exc:
+                raise DatabaseMigrationError(
+                    f"Migration {version} ({migration.name}) failed: {type(exc).__name__}: {exc}"
+                ) from exc
+        validate_database_schema(conn)
+        conn.commit()
+    except Exception:
+        _abort_transaction(conn)
+        raise
+
+
+def _migrate_to_v2(conn: sqlite3.Connection) -> None:
+    # The v1 runtime repeatedly dropped these obsolete indexes during init_db().
+    # From v2 onward this cleanup is a one-time migration step only.
+    conn.execute("DROP INDEX IF EXISTS idx_download_items_identity")
+    conn.execute("DROP INDEX IF EXISTS idx_download_files_item_part")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_download_items_channel ON download_items(channel_db_id)")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_download_items_channel_folder
+        ON download_items(platform, channel_id, save_base_folder_norm)
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_download_files_path_norm ON download_files(path_norm)")
+
+
+def _migrate_to_v3(conn: sqlite3.Connection) -> None:
+    _create_application_ledger_table(conn)
+
+
+def _migrate_to_v4(conn: sqlite3.Connection) -> None:
+    _create_download_state_archive_table(conn)
+    for group in _duplicate_video_identity_groups(conn):
+        _consolidate_duplicate_video_identity(conn, group)
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_download_items_video_identity
+        ON download_items(platform, channel_id, video_id)
+        """
+    )
+
+
+def _create_download_state_archive_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {DOWNLOAD_STATE_ARCHIVE_TABLE} (
+            id INTEGER PRIMARY KEY,
+            entity_type TEXT NOT NULL
+                CHECK(entity_type IN ('download_item', 'download_file')),
+            source_table TEXT NOT NULL,
+            source_row_id INTEGER NOT NULL,
+            platform TEXT NULL,
+            channel_id TEXT NULL,
+            video_id TEXT NULL,
+            reason TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            archived_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        f"""
+        CREATE INDEX IF NOT EXISTS {ARCHIVE_VIDEO_INDEX}
+        ON {DOWNLOAD_STATE_ARCHIVE_TABLE}(platform, channel_id, video_id)
+        """
+    )
+
+
+def _duplicate_video_identity_groups(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT
+            platform,
+            channel_id,
+            video_id,
+            COUNT(*) AS row_count
+        FROM download_items
+        GROUP BY platform, channel_id, video_id
+        HAVING COUNT(*) > 1
+        ORDER BY platform, channel_id, video_id
+        """
+    ).fetchall()
+
+
+def _consolidate_duplicate_video_identity(conn: sqlite3.Connection, group: sqlite3.Row) -> None:
+    platform = group["platform"]
+    channel_id = group["channel_id"]
+    video_id = group["video_id"]
+    item_rows = _download_item_rows_for_identity(conn, platform, channel_id, video_id)
+    if len(item_rows) <= 1:
+        return
+
+    item_ids = [int(row["id"]) for row in item_rows]
+    file_rows = _download_file_rows_for_item_ids(conn, item_ids)
+    archived_at = _now_iso()
+    _archive_duplicate_video_group(conn, item_rows, file_rows, archived_at)
+    plan = build_duplicate_video_merge_plan(item_rows, file_rows)
+    _apply_duplicate_video_merge_plan(conn, plan)
+    _delete_duplicate_item_rows(conn, plan.duplicate_item_ids)
+    _verify_consolidated_video_identity(conn, platform, channel_id, video_id, plan.survivor_item_id)
+
+
+def _download_item_rows_for_identity(
+    conn: sqlite3.Connection,
+    platform: str,
+    channel_id: str,
+    video_id: str,
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT *
+        FROM download_items
+        WHERE platform = ? AND channel_id = ? AND video_id = ?
+        ORDER BY id
+        """,
+        (platform, channel_id, video_id),
+    ).fetchall()
+
+
+def _download_file_rows_for_item_ids(conn: sqlite3.Connection, item_ids: list[int]) -> list[sqlite3.Row]:
+    if not item_ids:
+        return []
+    placeholders = ",".join("?" for _ in item_ids)
+    return conn.execute(
+        f"""
+        SELECT *
+        FROM download_files
+        WHERE item_id IN ({placeholders})
+        ORDER BY item_id, part, id
+        """,
+        tuple(item_ids),
+    ).fetchall()
+
+
+def _archive_duplicate_video_group(
+    conn: sqlite3.Connection,
+    item_rows: list[sqlite3.Row],
+    file_rows: list[sqlite3.Row],
+    archived_at: str,
+) -> None:
+    item_identity_by_id = {
+        int(row["id"]): (row["platform"], row["channel_id"], row["video_id"])
+        for row in item_rows
+    }
+    for row in item_rows:
+        _archive_state_row(
+            conn,
+            entity_type="download_item",
+            source_table="download_items",
+            row=row,
+            platform=row["platform"],
+            channel_id=row["channel_id"],
+            video_id=row["video_id"],
+            archived_at=archived_at,
+        )
+    for row in file_rows:
+        platform, channel_id, video_id = item_identity_by_id[int(row["item_id"])]
+        _archive_state_row(
+            conn,
+            entity_type="download_file",
+            source_table="download_files",
+            row=row,
+            platform=platform,
+            channel_id=channel_id,
+            video_id=video_id,
+            archived_at=archived_at,
+        )
+
+
+def _archive_state_row(
+    conn: sqlite3.Connection,
+    *,
+    entity_type: str,
+    source_table: str,
+    row: sqlite3.Row,
+    platform: str | None,
+    channel_id: str | None,
+    video_id: str | None,
+    archived_at: str,
+) -> None:
+    conn.execute(
+        f"""
+        INSERT INTO {DOWNLOAD_STATE_ARCHIVE_TABLE}(
+            entity_type,
+            source_table,
+            source_row_id,
+            platform,
+            channel_id,
+            video_id,
+            reason,
+            payload_json,
+            archived_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            entity_type,
+            source_table,
+            int(row["id"]),
+            platform,
+            channel_id,
+            video_id,
+            VIDEO_IDENTITY_ARCHIVE_REASON_V4,
+            _row_payload_json(row),
+            archived_at,
+        ),
+    )
+
+
+def _row_payload_json(row: sqlite3.Row) -> str:
+    payload = {key: row[key] for key in row.keys()}
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def build_duplicate_video_merge_plan(
+    item_rows: list[sqlite3.Row],
+    file_rows: list[sqlite3.Row],
+) -> DuplicateVideoMergePlan:
+    if len(item_rows) < 2:
+        raise DatabaseMigrationError("Duplicate video merge requires at least two item rows")
+
+    sorted_items = sorted(item_rows, key=lambda row: int(row["id"]))
+    survivor = sorted_items[0]
+    platform = survivor["platform"]
+    channel_id = survivor["channel_id"]
+    video_id = survivor["video_id"]
+    for row in sorted_items:
+        if (row["platform"], row["channel_id"], row["video_id"]) != (platform, channel_id, video_id):
+            raise DatabaseMigrationError("Duplicate video group contains mixed identities")
+
+    folder_row = _select_item_folder_metadata_row(sorted_items, survivor)
+    item_updates = {
+        "channel_db_id": int(folder_row["channel_db_id"]),
+        "platform": platform,
+        "channel_id": channel_id,
+        "video_id": video_id,
+        "save_base_folder_raw": folder_row["save_base_folder_raw"],
+        "save_base_folder_norm": folder_row["save_base_folder_norm"],
+        "original_title": _select_text_from_most_recent_item(sorted_items, "original_title"),
+        "sanitized_filename_base": _select_sanitized_filename_base(sorted_items, video_id),
+        "display_order_at_download": _select_value_from_most_recent_item(
+            sorted_items,
+            "display_order_at_download",
+            require_text=False,
+        ),
+        "manual_status": None,
+        "manual_override": None,
+        "downloaded_at": _select_earliest_non_empty_timestamp(sorted_items, "downloaded_at"),
+        "updated_at": _select_valid_timestamp(sorted_items, "updated_at", latest=True) or survivor["updated_at"],
+        "created_at": _select_valid_timestamp(sorted_items, "created_at", latest=False) or survivor["created_at"],
+    }
+
+    manual_row = _select_valid_manual_override_row(sorted_items)
+    if manual_row is not None:
+        item_updates["manual_status"] = manual_row["manual_status"]
+        item_updates["manual_override"] = 1
+
+    part_updates = {}
+    for part in FILE_PARTS:
+        part_rows = [row for row in file_rows if row["part"] == part]
+        if part_rows:
+            part_updates[part] = _merge_duplicate_file_part(part_rows)
+
+    entry = {
+        "channel_id": channel_id,
+        "save_base_folder": item_updates["save_base_folder_raw"] or "",
+        "video_id": video_id,
+        "original_title": item_updates["original_title"],
+        "sanitized_filename_base": item_updates["sanitized_filename_base"],
+    }
+    if item_updates["manual_override"] == 1:
+        entry["manual_override"] = True
+        entry["manual_status"] = item_updates["manual_status"]
+    for part, updates in part_updates.items():
+        _set_if_not_none(entry, f"{part}_filename", updates["filename_raw"])
+        _set_if_not_none(entry, f"{part}_path", updates["path_raw"])
+        _set_if_not_none(entry, f"{part}_status", updates["status"])
+    item_updates["status"] = _get_effective_status(entry)
+
+    return DuplicateVideoMergePlan(
+        survivor_item_id=int(survivor["id"]),
+        item_updates=item_updates,
+        part_updates=part_updates,
+        duplicate_item_ids=tuple(int(row["id"]) for row in sorted_items[1:]),
+    )
+
+
+def _select_item_folder_metadata_row(item_rows: list[sqlite3.Row], fallback: sqlite3.Row) -> sqlite3.Row:
+    candidates = [
+        row
+        for row in item_rows
+        if _has_text(row["save_base_folder_raw"]) or _has_text(row["save_base_folder_norm"])
+    ]
+    if not candidates:
+        return fallback
+    return max(candidates, key=_item_recency_key)
+
+
+def _select_text_from_most_recent_item(item_rows: list[sqlite3.Row], column_name: str) -> str | None:
+    row = _select_value_from_most_recent_item(item_rows, column_name)
+    if row is None:
+        return None
+    return str(row)
+
+
+def _select_value_from_most_recent_item(
+    item_rows: list[sqlite3.Row],
+    column_name: str,
+    *,
+    require_text: bool = True,
+):
+    if require_text:
+        candidates = [row for row in item_rows if _has_text(row[column_name])]
+    else:
+        candidates = [row for row in item_rows if row[column_name] is not None]
+    if not candidates:
+        return None
+    return max(candidates, key=_item_recency_key)[column_name]
+
+
+def _select_sanitized_filename_base(item_rows: list[sqlite3.Row], video_id: str) -> str:
+    raw_value = _select_text_from_most_recent_item(item_rows, "sanitized_filename_base")
+    if not _has_text(raw_value):
+        raw_value = f"yt_{video_id}"
+    return normalize_output_stem(str(raw_value))
+
+
+def _select_valid_manual_override_row(item_rows: list[sqlite3.Row]) -> sqlite3.Row | None:
+    from core.state_store import SUPPORTED_STATUS_VALUES
+
+    candidates = [
+        row
+        for row in item_rows
+        if row["manual_override"] == 1 and row["manual_status"] in SUPPORTED_STATUS_VALUES
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=_item_recency_key)
+
+
+def _merge_duplicate_file_part(file_rows: list[sqlite3.Row]) -> dict:
+    selected = max(file_rows, key=_file_part_candidate_key)
+    created_at = _select_valid_timestamp(file_rows, "created_at", latest=False) or selected["created_at"]
+    updated_at = _select_valid_timestamp(file_rows, "updated_at", latest=True) or selected["updated_at"]
+    filename_raw = selected["filename_raw"]
+    path_raw = selected["path_raw"]
+    status = selected["status"]
+    filename_norm = _normalize_filename_text(filename_raw) if filename_raw is not None else None
+    path_norm = _normalize_path_text(path_raw) if path_raw is not None else None
+    is_valid, validation_reason = _file_validity(filename_raw, path_raw, status)
+    return {
+        "part": selected["part"],
+        "status": status,
+        "filename_raw": filename_raw,
+        "filename_norm": filename_norm,
+        "path_raw": path_raw,
+        "path_norm": path_norm,
+        "is_valid": is_valid,
+        "validation_reason": validation_reason,
+        "created_at": created_at,
+        "updated_at": updated_at,
+    }
+
+
+def _file_part_candidate_key(row: sqlite3.Row) -> tuple:
+    return (
+        _file_status_rank(row["status"]),
+        1 if _has_text(row["filename_raw"]) and _has_text(row["path_raw"]) and row["is_valid"] == 1 else 0,
+        *_row_updated_key(row),
+        int(row["id"]),
+    )
+
+
+def _file_status_rank(status: str | None) -> int:
+    from core.state_store import STATUS_DOWNLOADED, STATUS_ERROR, STATUS_NOT_DOWNLOADED
+
+    if status == STATUS_DOWNLOADED:
+        return 3
+    if status == STATUS_ERROR:
+        return 2
+    if status == STATUS_NOT_DOWNLOADED:
+        return 1
+    return 0
+
+
+def _item_recency_key(row: sqlite3.Row) -> tuple:
+    return (*_row_updated_key(row), int(row["id"]))
+
+
+def _row_updated_key(row: sqlite3.Row) -> tuple[int, float]:
+    parsed = _parse_timestamp(row["updated_at"])
+    if parsed is None:
+        return (0, 0.0)
+    return (1, parsed)
+
+
+def _select_valid_timestamp(rows: list[sqlite3.Row], column_name: str, *, latest: bool) -> str | None:
+    candidates = []
+    for row in rows:
+        parsed = _parse_timestamp(row[column_name])
+        if parsed is not None:
+            candidates.append((parsed, int(row["id"]), row[column_name]))
+    if not candidates:
+        return None
+    selected = max(candidates) if latest else min(candidates)
+    return selected[2]
+
+
+def _select_earliest_non_empty_timestamp(rows: list[sqlite3.Row], column_name: str) -> str | None:
+    candidates = []
+    for row in rows:
+        value = row[column_name]
+        if not _has_text(value):
+            continue
+        parsed = _parse_timestamp(value)
+        candidates.append((1 if parsed is not None else 0, parsed or 0.0, str(value), int(row["id"]), value))
+    if not candidates:
+        return None
+    valid_candidates = [candidate for candidate in candidates if candidate[0] == 1]
+    selected_pool = valid_candidates or candidates
+    return min(selected_pool, key=lambda item: (item[1], item[2], item[3]))[4]
+
+
+def _parse_timestamp(value) -> float | None:
+    if not _has_text(value):
+        return None
+    text = str(value).strip()
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _apply_duplicate_video_merge_plan(conn: sqlite3.Connection, plan: DuplicateVideoMergePlan) -> None:
+    updates = plan.item_updates
+    _release_folder_unique_collisions(conn, plan)
+    conn.execute(
+        """
+        UPDATE download_items
+        SET channel_db_id = ?,
+            platform = ?,
+            channel_id = ?,
+            video_id = ?,
+            save_base_folder_raw = ?,
+            save_base_folder_norm = ?,
+            original_title = ?,
+            sanitized_filename_base = ?,
+            display_order_at_download = ?,
+            status = ?,
+            manual_status = ?,
+            manual_override = ?,
+            downloaded_at = ?,
+            updated_at = ?,
+            created_at = ?
+        WHERE id = ?
+        """,
+        (
+            updates["channel_db_id"],
+            updates["platform"],
+            updates["channel_id"],
+            updates["video_id"],
+            updates["save_base_folder_raw"],
+            updates["save_base_folder_norm"],
+            updates["original_title"],
+            updates["sanitized_filename_base"],
+            updates["display_order_at_download"],
+            updates["status"],
+            updates["manual_status"],
+            updates["manual_override"],
+            updates["downloaded_at"],
+            updates["updated_at"],
+            updates["created_at"],
+            plan.survivor_item_id,
+        ),
+    )
+    for part, part_updates in plan.part_updates.items():
+        _upsert_survivor_file_part(conn, plan.survivor_item_id, part, part_updates)
+
+
+def _release_folder_unique_collisions(conn: sqlite3.Connection, plan: DuplicateVideoMergePlan) -> None:
+    if not plan.duplicate_item_ids:
+        return
+    updates = plan.item_updates
+    target_norm = updates["save_base_folder_norm"]
+    for item_id in plan.duplicate_item_ids:
+        row = conn.execute(
+            """
+            SELECT id
+            FROM download_items
+            WHERE id = ?
+              AND platform = ?
+              AND channel_id = ?
+              AND video_id = ?
+              AND save_base_folder_norm = ?
+            """,
+            (
+                item_id,
+                updates["platform"],
+                updates["channel_id"],
+                updates["video_id"],
+                target_norm,
+            ),
+        ).fetchone()
+        if row is None:
+            continue
+        conn.execute(
+            """
+            UPDATE download_items
+            SET save_base_folder_norm = ?
+            WHERE id = ?
+            """,
+            (f"__phase2b_v4_released_{item_id}", item_id),
+        )
+
+
+def _upsert_survivor_file_part(
+    conn: sqlite3.Connection,
+    item_id: int,
+    part: str,
+    updates: dict,
+) -> None:
+    row = conn.execute(
+        "SELECT id FROM download_files WHERE item_id = ? AND part = ?",
+        (item_id, part),
+    ).fetchone()
+    if row is None:
+        conn.execute(
+            """
+            INSERT INTO download_files(
+                item_id,
+                part,
+                status,
+                filename_raw,
+                filename_norm,
+                path_raw,
+                path_norm,
+                is_valid,
+                validation_reason,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                item_id,
+                part,
+                updates["status"],
+                updates["filename_raw"],
+                updates["filename_norm"],
+                updates["path_raw"],
+                updates["path_norm"],
+                updates["is_valid"],
+                updates["validation_reason"],
+                updates["created_at"],
+                updates["updated_at"],
+            ),
+        )
+        return
+
+    conn.execute(
+        """
+        UPDATE download_files
+        SET status = ?,
+            filename_raw = ?,
+            filename_norm = ?,
+            path_raw = ?,
+            path_norm = ?,
+            is_valid = ?,
+            validation_reason = ?,
+            created_at = ?,
+            updated_at = ?
+        WHERE item_id = ? AND part = ?
+        """,
+        (
+            updates["status"],
+            updates["filename_raw"],
+            updates["filename_norm"],
+            updates["path_raw"],
+            updates["path_norm"],
+            updates["is_valid"],
+            updates["validation_reason"],
+            updates["created_at"],
+            updates["updated_at"],
+            item_id,
+            part,
+        ),
+    )
+
+
+def _delete_duplicate_item_rows(conn: sqlite3.Connection, item_ids: tuple[int, ...]) -> None:
+    if not item_ids:
+        return
+    conn.execute(
+        f"DELETE FROM download_items WHERE id IN ({','.join('?' for _ in item_ids)})",
+        item_ids,
+    )
+
+
+def _verify_consolidated_video_identity(
+    conn: sqlite3.Connection,
+    platform: str,
+    channel_id: str,
+    video_id: str,
+    survivor_item_id: int,
+) -> None:
+    rows = conn.execute(
+        """
+        SELECT id
+        FROM download_items
+        WHERE platform = ? AND channel_id = ? AND video_id = ?
+        ORDER BY id
+        """,
+        (platform, channel_id, video_id),
+    ).fetchall()
+    if len(rows) != 1 or int(rows[0]["id"]) != survivor_item_id:
+        raise DatabaseMigrationError(
+            f"Video identity consolidation failed for {platform}/{channel_id}/{video_id}"
+        )
+
+
+MIGRATIONS = (
+    Migration(2, "phase_2a_bootstrap_metadata", _migrate_to_v2),
+    Migration(3, "create_app_schema_migrations_ledger", _migrate_to_v3),
+    Migration(4, "canonicalize_video_scoped_download_items", _migrate_to_v4),
+)
+MIGRATIONS_BY_VERSION = {migration.version: migration for migration in MIGRATIONS}
+APPLICATION_MIGRATION_NAMES = {LEGACY_SCHEMA_VERSION: "initial_schema"}
+APPLICATION_MIGRATION_NAMES.update({migration.version: migration.name for migration in MIGRATIONS})
+_EXPECTED_MIGRATION_VERSIONS = tuple(range(LEGACY_SCHEMA_VERSION + 1, CURRENT_SCHEMA_VERSION + 1))
+if (
+    len(MIGRATIONS_BY_VERSION) != len(MIGRATIONS)
+    or tuple(sorted(MIGRATIONS_BY_VERSION)) != _EXPECTED_MIGRATION_VERSIONS
+    or tuple(sorted(APPLICATION_MIGRATION_NAMES)) != tuple(range(LEGACY_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION + 1))
+):
+    raise RuntimeError("SQLite migrations must be unique and sequential")
+
+
+def _resolve_database_path(path: Path | None = None) -> Path:
+    return Path(path or db_file()).expanduser().resolve(strict=False)
+
+
+def _connect_bootstrap_connection(path: Path, *, allow_create: bool) -> sqlite3.Connection:
+    if allow_create and not path.exists():
+        conn = sqlite3.connect(
+            path,
+            timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+            factory=ManagedSQLiteConnection,
+        )
+    else:
+        conn = _connect_existing_sqlite_file(path)
+    conn.row_factory = sqlite3.Row
+    _apply_connection_pragmas(conn)
+    return conn
+
+
+def _connect_existing_sqlite_file(path: Path) -> sqlite3.Connection:
+    return sqlite3.connect(
+        f"{path.resolve(strict=False).as_uri()}?mode=rw",
+        uri=True,
+        timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+        factory=ManagedSQLiteConnection,
+    )
+
+
+def _connect_configured(path: Path) -> sqlite3.Connection:
+    conn = _connect_existing_sqlite_file(path)
+    try:
+        conn.row_factory = sqlite3.Row
+        _apply_connection_pragmas(conn)
+        return conn
+    except Exception:
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
+        raise
+
+
+def _apply_connection_pragmas(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+
+
+def _configure_bootstrap_journal(conn: sqlite3.Connection) -> None:
+    row = conn.execute("PRAGMA journal_mode=WAL").fetchone()
+    mode = str(row[0] if row else "").casefold()
+    if mode != "wal":
+        raise DatabaseSchemaError(f"SQLite did not enable WAL journal mode; got {mode!r}")
+
+
+def _create_current_schema(conn: sqlite3.Connection) -> None:
+    for statement in CURRENT_SCHEMA_STATEMENTS:
+        conn.execute(statement)
+
+
+def _read_schema_version(conn: sqlite3.Connection) -> int | None:
+    if "app_meta" not in _sqlite_table_names(conn):
+        return None
+    row = conn.execute("SELECT value FROM app_meta WHERE key = ?", (SCHEMA_VERSION_KEY,)).fetchone()
+    if row is None:
+        return None
+    value = str(row["value"] if isinstance(row, sqlite3.Row) else row[0])
+    if not value.isdecimal():
+        raise DatabaseSchemaError(f"Schema version is not a strict integer: {value!r}")
+    return int(value)
+
+
+def _write_schema_version(conn: sqlite3.Connection, version: int, now: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO app_meta(key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+        """,
+        (SCHEMA_VERSION_KEY, str(version), now),
+    )
+
+
+def _record_migration(
+    conn: sqlite3.Connection,
+    version: int,
+    name: str,
+    applied_at: str,
+) -> None:
+    expected_name = APPLICATION_MIGRATION_NAMES.get(version)
+    if expected_name != name:
+        raise DatabaseMigrationError(f"Migration name mismatch for version {version}: {name!r}")
+    conn.execute(
+        f"""
+        INSERT INTO {APP_MIGRATION_LEDGER_TABLE}(version, name, applied_at)
+        VALUES (?, ?, ?)
+        """,
+        (version, name, applied_at),
+    )
+
+
+def _record_completed_application_migrations(
+    conn: sqlite3.Connection,
+    through_version: int,
+    applied_at: str,
+) -> None:
+    _create_application_ledger_table(conn)
+    for version in range(LEGACY_SCHEMA_VERSION, through_version + 1):
+        _record_migration(conn, version, APPLICATION_MIGRATION_NAMES[version], applied_at)
+
+
+def _ensure_application_ledger_for_existing_version(conn: sqlite3.Connection, through_version: int) -> None:
+    _create_application_ledger_table(conn)
+    existing_rows = _read_application_migration_rows(conn)
+    existing_by_version = {version: name for version, name in existing_rows}
+    duplicate_versions = _duplicate_versions(existing_rows)
+    if duplicate_versions:
+        raise DatabaseValidationError(f"Application migration ledger has duplicate versions: {duplicate_versions}")
+
+    for version, name in existing_rows:
+        expected_name = APPLICATION_MIGRATION_NAMES.get(version)
+        if expected_name is None:
+            raise DatabaseValidationError(f"Application migration ledger has unknown version: {version}")
+        if version > through_version:
+            raise DatabaseValidationError(
+                f"Application migration ledger version {version} is beyond metadata version {through_version}"
+            )
+        if name != expected_name:
+            raise DatabaseValidationError(
+                f"Application migration ledger version {version} has name {name!r}; expected {expected_name!r}"
+            )
+
+    now = _now_iso()
+    for version in range(LEGACY_SCHEMA_VERSION, through_version + 1):
+        if version not in existing_by_version:
+            _record_migration(conn, version, APPLICATION_MIGRATION_NAMES[version], now)
+
+
+def _validate_application_migration_ledger(conn: sqlite3.Connection, schema_version: int) -> None:
+    _validate_required_columns_for_tables(conn, {APP_MIGRATION_LEDGER_TABLE})
+    rows = _read_application_migration_rows(conn)
+    duplicate_versions = _duplicate_versions(rows)
+    if duplicate_versions:
+        raise DatabaseValidationError(f"Application migration ledger has duplicate versions: {duplicate_versions}")
+
+    versions = set()
+    for version, name in rows:
+        versions.add(version)
+        expected_name = APPLICATION_MIGRATION_NAMES.get(version)
+        if expected_name is None:
+            if version > CURRENT_SCHEMA_VERSION:
+                raise DatabaseTooNewError(
+                    f"Application migration ledger contains unsupported version {version}; "
+                    f"this app supports up to {CURRENT_SCHEMA_VERSION}"
+                )
+            raise DatabaseValidationError(f"Application migration ledger has unknown version: {version}")
+        if name != expected_name:
+            raise DatabaseValidationError(
+                f"Application migration ledger version {version} has name {name!r}; expected {expected_name!r}"
+            )
+        if version > schema_version:
+            raise DatabaseValidationError(
+                f"Application migration ledger version {version} is beyond metadata version {schema_version}"
+            )
+
+    required_versions = set(range(LEGACY_SCHEMA_VERSION, schema_version + 1))
+    missing_versions = sorted(required_versions - versions)
+    if missing_versions:
+        raise DatabaseValidationError(f"Application migration ledger is missing versions: {missing_versions}")
+
+
+def _create_application_ledger_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {APP_MIGRATION_LEDGER_TABLE} (
+            version INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            applied_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def _read_application_migration_rows(conn: sqlite3.Connection) -> list[tuple[int, str]]:
+    if APP_MIGRATION_LEDGER_TABLE not in _sqlite_table_names(conn):
+        return []
+    try:
+        rows = conn.execute(
+            f"SELECT version, name FROM {APP_MIGRATION_LEDGER_TABLE} ORDER BY version"
+        ).fetchall()
+    except sqlite3.Error as exc:
+        raise DatabaseValidationError(f"Application migration ledger is not readable: {exc}") from exc
+    parsed = []
+    for row in rows:
+        version = row["version"] if isinstance(row, sqlite3.Row) else row[0]
+        name = row["name"] if isinstance(row, sqlite3.Row) else row[1]
+        try:
+            parsed.append((int(version), str(name)))
+        except (TypeError, ValueError) as exc:
+            raise DatabaseValidationError(f"Application migration ledger has invalid version: {version!r}") from exc
+    return parsed
+
+
+def _duplicate_versions(rows: list[tuple[int, str]]) -> list[int]:
+    seen = set()
+    duplicates = set()
+    for version, _name in rows:
+        if version in seen:
+            duplicates.add(version)
+        seen.add(version)
+    return sorted(duplicates)
+
+
+def _validate_schema_for_version(conn: sqlite3.Connection, schema_version: int) -> None:
+    if schema_version < LEGACY_SCHEMA_VERSION or schema_version > CURRENT_SCHEMA_VERSION:
+        raise DatabaseSchemaError(f"Unsupported schema version: {schema_version}")
+
+    _validate_required_tables(conn, CORE_REQUIRED_TABLES)
+    _validate_required_columns_for_tables(conn, set(CORE_REQUIRED_TABLES))
+
+    if schema_version >= 2:
+        _validate_required_indexes(conn, schema_version)
+    if schema_version >= 3:
+        _validate_required_tables(conn, (APP_MIGRATION_LEDGER_TABLE,))
+        _validate_application_migration_ledger(conn, schema_version)
+    if schema_version >= 4:
+        _validate_required_tables(conn, (DOWNLOAD_STATE_ARCHIVE_TABLE,))
+        _validate_required_columns_for_tables(conn, {DOWNLOAD_STATE_ARCHIVE_TABLE})
+        _validate_video_identity_consistency(conn)
+
+
+def _validate_required_tables(conn: sqlite3.Connection, table_names: tuple[str, ...]) -> None:
+    existing = _sqlite_table_names(conn)
+    missing = [table_name for table_name in table_names if table_name not in existing]
+    if missing:
+        raise DatabaseValidationError(f"Missing required tables: {', '.join(missing)}")
+
+
+def _validate_required_indexes(conn: sqlite3.Connection, schema_version: int) -> None:
+    for index_name, (table_name, expected_columns) in _required_indexes_for_version(schema_version).items():
+        expected_unique = index_name in REQUIRED_UNIQUE_INDEXES
+        metadata = _get_index_metadata(conn, index_name)
+        if (
+            metadata is None
+            or metadata.table_name != table_name
+            or metadata.columns != expected_columns
+            or metadata.unique is not expected_unique
+            or metadata.partial
+        ):
+            raise DatabaseValidationError(
+                f"Index {index_name} on {table_name} is missing or does not match required schema"
+            )
+
+
+def _required_indexes_for_version(schema_version: int) -> dict[str, tuple[str, tuple[str, ...]]]:
+    if schema_version >= 4:
+        return REQUIRED_INDEXES
+    return {
+        index_name: index_spec
+        for index_name, index_spec in REQUIRED_INDEXES.items()
+        if index_name not in {VIDEO_IDENTITY_INDEX, ARCHIVE_VIDEO_INDEX}
+    }
+
+
+def _validate_video_identity_consistency(conn: sqlite3.Connection) -> None:
+    duplicates = conn.execute(
+        """
+        SELECT DISTINCT a.platform, a.channel_id, a.video_id
+        FROM download_items a
+        JOIN download_items b
+          ON b.platform = a.platform
+         AND b.channel_id = a.channel_id
+         AND b.video_id = a.video_id
+         AND b.id <> a.id
+        ORDER BY a.platform, a.channel_id, a.video_id
+        LIMIT 10
+        """
+    ).fetchall()
+    if duplicates:
+        sample = ", ".join(
+            f"{row['platform']}/{row['channel_id']}/{row['video_id']}"
+            for row in duplicates
+        )
+        raise DatabaseValidationError(f"Duplicate video identity rows found: {sample}")
+
+    orphan = conn.execute(
+        """
+        SELECT df.id
+        FROM download_files df
+        LEFT JOIN download_items di ON di.id = df.item_id
+        WHERE di.id IS NULL
+        LIMIT 1
+        """
+    ).fetchone()
+    if orphan is not None:
+        raise DatabaseValidationError("download_files contains orphan rows")
+
+    invalid_parts = conn.execute(
+        f"""
+        SELECT DISTINCT part
+        FROM download_files
+        WHERE part NOT IN ({','.join('?' for _ in FILE_PARTS)})
+        ORDER BY part
+        LIMIT 10
+        """,
+        FILE_PARTS,
+    ).fetchall()
+    if invalid_parts:
+        sample = ", ".join(str(row["part"]) for row in invalid_parts)
+        raise DatabaseValidationError(f"download_files contains invalid parts: {sample}")
+
+    duplicate_parts = conn.execute(
+        """
+        SELECT DISTINCT a.item_id, a.part
+        FROM download_files a
+        JOIN download_files b
+          ON b.item_id = a.item_id
+         AND b.part = a.part
+         AND b.id <> a.id
+        ORDER BY a.item_id, a.part
+        LIMIT 10
+        """
+    ).fetchall()
+    if duplicate_parts:
+        sample = ", ".join(
+            f"{row['item_id']}/{row['part']}" for row in duplicate_parts
+        )
+        raise DatabaseValidationError(f"download_files contains duplicate item/part rows: {sample}")
+
+
+def _detect_legacy_schema_version(
+    conn: sqlite3.Connection,
+    existing_user_tables: set[str],
+) -> int:
+    required_legacy_tables = {"app_meta", "channels", "download_items", "download_files"}
+    if not required_legacy_tables.issubset(existing_user_tables):
+        raise DatabaseSchemaError("Unversioned database is not a supported legacy schema")
+    _validate_required_columns_for_tables(conn, required_legacy_tables)
+    return LEGACY_SCHEMA_VERSION
+
+
+def _validate_required_columns_for_tables(conn: sqlite3.Connection, table_names: set[str]) -> None:
+    for table_name in table_names:
+        existing_columns = _table_columns(conn, table_name)
+        required_columns = REQUIRED_COLUMNS[table_name]
+        missing_columns = [column for column in required_columns if column not in existing_columns]
+        if missing_columns:
+            raise DatabaseSchemaError(
+                f"Table {table_name} is missing required columns: {', '.join(missing_columns)}"
+            )
+
+
+def _create_migration_backup(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    from_version: int,
+    to_version: int,
+) -> Path:
+    timestamp = datetime.now(timezone.utc).strftime(MIGRATION_BACKUP_TIMESTAMP_FORMAT)
+    backup_path = db_path.with_name(f"{db_path.name}.pre-migration-v{from_version}-to-v{to_version}-{timestamp}.bak")
+    try:
+        with closing(sqlite3.connect(backup_path)) as backup_conn:
+            conn.backup(backup_conn)
+    except Exception as exc:
+        raise DatabaseBackupError(f"Failed to create migration backup at {backup_path}: {exc}") from exc
+    return backup_path
+
+
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({quote_identifier(table_name)})").fetchall()
+    return {row["name"] if isinstance(row, sqlite3.Row) else row[1] for row in rows}
+
+
+def _get_index_metadata(conn: sqlite3.Connection, index_name: str) -> SQLiteIndexMetadata | None:
+    row = conn.execute(
+        """
+        SELECT name, tbl_name, sql
+        FROM sqlite_master
+        WHERE type = 'index' AND name = ?
+        """,
+        (index_name,),
+    ).fetchone()
+    if row is None:
+        return None
+
+    table_name = str(_row_value(row, "tbl_name", 1))
+    index_list_row = None
+    for pragma_row in conn.execute(f"PRAGMA index_list({quote_identifier(table_name)})").fetchall():
+        pragma_name = _row_value(pragma_row, "name", 1)
+        if pragma_name == index_name:
+            index_list_row = pragma_row
+            break
+    if index_list_row is None:
+        return None
+
+    xinfo_rows = conn.execute(f"PRAGMA index_xinfo({quote_identifier(index_name)})").fetchall()
+    key_rows = [xinfo_row for xinfo_row in xinfo_rows if int(_row_value(xinfo_row, "key", 5)) == 1]
+    key_rows.sort(key=lambda xinfo_row: int(_row_value(xinfo_row, "seqno", 0)))
+    columns = tuple(
+        None if _row_value(xinfo_row, "name", 2) is None else str(_row_value(xinfo_row, "name", 2))
+        for xinfo_row in key_rows
+    )
+    origin = _row_value(index_list_row, "origin", 3)
+    return SQLiteIndexMetadata(
+        name=str(_row_value(row, "name", 0)),
+        table_name=table_name,
+        columns=columns,
+        unique=bool(int(_row_value(index_list_row, "unique", 2))),
+        partial=bool(int(_row_value(index_list_row, "partial", 4))),
+        origin=str(origin) if origin is not None else None,
+    )
+
+
+def _row_value(row, key: str, index: int):
+    return row[key] if isinstance(row, sqlite3.Row) else row[index]
+
+
+def _user_table_names(conn: sqlite3.Connection) -> set[str]:
+    return {table for table in _sqlite_table_names(conn) if not table.startswith("sqlite_")}
+
+
+def quote_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def _open_existing_database_connection(
+    db_path: Path,
+    expected_identity: DatabaseFileIdentity,
+    *,
+    allow_retry: bool,
+) -> sqlite3.Connection:
+    try:
+        conn = _connect_configured(db_path)
+    except sqlite3.Error as exc:
+        return _handle_connection_open_failure(
+            db_path,
+            expected_identity,
+            exc,
+            allow_retry=allow_retry,
+        )
+
+    try:
+        try:
+            current_identity = _capture_database_identity(db_path)
+        except DatabaseFileChangedError as exc:
+            _invalidate_cached_database_identity(db_path, expected_identity)
+            raise DatabaseFileChangedError(
+                f"Database file disappeared before post-open validation: {db_path}"
+            ) from exc
+        except DatabasePathError as exc:
+            _invalidate_cached_database_identity(db_path, expected_identity)
+            raise DatabaseFileChangedError(
+                f"Database path changed before post-open validation: {db_path}"
+            ) from exc
+
+        if current_identity == expected_identity:
+            return conn
+
+        conn.close()
+        conn = None
+        _invalidate_cached_database_identity(db_path, expected_identity)
+        if not allow_retry:
+            raise DatabaseFileChangedError(f"Database file kept changing during open: {db_path}")
+        replacement_identity = _revalidate_replacement_database(db_path)
+        return _open_existing_database_connection(
+            db_path,
+            replacement_identity,
+            allow_retry=False,
+        )
+    except Exception:
+        if conn is not None:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+        raise
+
+
+def _handle_connection_open_failure(
+    db_path: Path,
+    expected_identity: DatabaseFileIdentity,
+    exc: sqlite3.Error,
+    *,
+    allow_retry: bool,
+) -> sqlite3.Connection:
+    try:
+        current_identity = _capture_database_identity(db_path)
+    except DatabaseFileChangedError as identity_exc:
+        _invalidate_cached_database_identity(db_path, expected_identity)
+        raise DatabaseFileChangedError(
+            f"Database file disappeared before the connection could be opened: {db_path}"
+        ) from identity_exc
+    except DatabasePathError as identity_exc:
+        _invalidate_cached_database_identity(db_path, expected_identity)
+        raise DatabaseFileChangedError(
+            f"Database path is no longer a regular initialized file: {db_path}"
+        ) from identity_exc
+
+    if current_identity != expected_identity:
+        _invalidate_cached_database_identity(db_path, expected_identity)
+        if allow_retry:
+            replacement_identity = _revalidate_replacement_database(db_path)
+            return _open_existing_database_connection(
+                db_path,
+                replacement_identity,
+                allow_retry=False,
+            )
+        raise DatabaseFileChangedError(f"Database file kept changing during open: {db_path}") from exc
+
+    if _is_sqlite_lock_error(exc):
+        raise DatabaseLockError(f"Database is locked after busy timeout: {db_path}") from exc
+
+    raise DatabasePathError(f"Could not open SQLite database: {db_path}: {exc}") from exc
+
+
+def _revalidate_replacement_database(db_path: Path) -> DatabaseFileIdentity:
+    try:
+        return _ensure_initialized_database(db_path, allow_new=False)
+    except (
+        DatabaseTooNewError,
+        DatabaseFileChangedError,
+        DatabaseMigrationError,
+        DatabaseSchemaError,
+    ):
+        raise
+    except sqlite3.DatabaseError as exc:
+        raise DatabaseSchemaError(f"Replacement database is not a valid SQLite database: {db_path}") from exc
+
+
+def _invalidate_cached_database_identity(
+    db_path: Path,
+    expected_identity: DatabaseFileIdentity | None = None,
+) -> None:
+    normalized_path = _resolve_database_path(db_path)
+    with _INITIALIZATION_LOCK:
+        if expected_identity is None:
+            _INITIALIZED_DATABASES.pop(normalized_path, None)
+            return
+        if _INITIALIZED_DATABASES.get(normalized_path) == expected_identity:
+            _INITIALIZED_DATABASES.pop(normalized_path, None)
+
+
+def _is_sqlite_lock_error(exc: sqlite3.Error) -> bool:
+    message = str(exc).casefold()
+    return "locked" in message or "busy" in message
+
+
+def _capture_database_identity_for_cache_hit(
+    db_path: Path,
+    cached_identity: DatabaseFileIdentity,
+) -> DatabaseFileIdentity:
+    try:
+        return _capture_database_identity(db_path)
+    except DatabaseFileChangedError:
+        _invalidate_cached_database_identity(db_path, cached_identity)
+        raise DatabaseFileChangedError(f"Initialized database file disappeared: {db_path}")
+    except DatabasePathError:
+        _invalidate_cached_database_identity(db_path, cached_identity)
+        raise
+
+
+def _capture_database_identity(db_path: Path) -> DatabaseFileIdentity:
+    try:
+        stat_result = db_path.stat()
+    except FileNotFoundError as exc:
+        raise DatabaseFileChangedError(f"Database file disappeared: {db_path}") from exc
+    except OSError as exc:
+        raise DatabasePathError(f"Could not stat database file: {db_path}") from exc
+    if not db_path.is_file():
+        raise DatabasePathError(f"Database path is not a regular file: {db_path}")
+
+    device = int(getattr(stat_result, "st_dev", 0))
+    inode = int(getattr(stat_result, "st_ino", 0) or 0)
+    creation_marker_ns = None
+    if inode == 0:
+        creation_marker_ns = getattr(stat_result, "st_birthtime_ns", None)
+        if creation_marker_ns is None and os.name == "nt":
+            creation_marker_ns = getattr(stat_result, "st_ctime_ns", None)
+        if creation_marker_ns is None:
+            raise DatabaseFileChangedError(
+                f"Database file identity is not stable on this filesystem: {db_path}"
+            )
+    return DatabaseFileIdentity(device=device, inode=inode, creation_marker_ns=creation_marker_ns)
+
+
 def quick_sqlite_state_check(path: Path | None = None) -> dict:
-    db_path = path or db_file()
+    db_path = _resolve_database_path(path)
     result = {
         "ok": False,
         "db_path": str(db_path),
@@ -128,6 +1669,8 @@ def quick_sqlite_state_check(path: Path | None = None) -> dict:
         "required_tables_present": False,
         "missing_tables": list(REQUIRED_TABLES),
         "download_items_count": 0,
+        "video_identity_duplicates": 0,
+        "archive_rows": 0,
         "simple_read_succeeded": False,
         "reasons": [],
     }
@@ -149,6 +1692,13 @@ def quick_sqlite_state_check(path: Path | None = None) -> dict:
 
             item_count = conn.execute("SELECT COUNT(*) AS count FROM download_items").fetchone()["count"]
             result["download_items_count"] = item_count
+            result["video_identity_duplicates"] = _video_identity_duplicate_count(conn)
+            if result["video_identity_duplicates"]:
+                result["reasons"].append("duplicate_video_identities")
+                return result
+            result["archive_rows"] = conn.execute(
+                f"SELECT COUNT(*) AS count FROM {DOWNLOAD_STATE_ARCHIVE_TABLE}"
+            ).fetchone()["count"]
 
             conn.execute("SELECT id FROM download_items LIMIT 1").fetchone()
             result["simple_read_succeeded"] = True
@@ -170,7 +1720,7 @@ def is_sqlite_state_usable(path: Path | None = None) -> bool:
 
 
 def sqlite_has_any_items(path: Path | None = None) -> bool:
-    db_path = path or db_file()
+    db_path = _resolve_database_path(path)
     if not db_path.exists():
         return False
 
@@ -187,12 +1737,16 @@ def sqlite_has_any_items(path: Path | None = None) -> bool:
 
 
 def get_sqlite_state_summary(path: Path | None = None) -> dict:
-    db_path = path or db_file()
+    db_path = _resolve_database_path(path)
     summary = {
         "db_path": str(db_path),
         "channels": 0,
         "download_items": 0,
         "download_files": 0,
+        "video_identity_duplicates": 0,
+        "archive_rows": 0,
+        "archive_item_rows": 0,
+        "archive_file_rows": 0,
         "status_counts": {},
         "manual_override_counts": {},
         "manual_status_counts": {},
@@ -212,23 +1766,36 @@ def get_sqlite_state_summary(path: Path | None = None) -> dict:
                     ]
 
             if "download_items" in table_names:
+                summary["video_identity_duplicates"] = _video_identity_duplicate_count(conn)
                 summary["status_counts"] = _counts_by_nullable_text(conn, "status")
                 summary["manual_override_counts"] = _manual_override_counts(conn)
                 summary["manual_status_counts"] = _counts_by_nullable_text(conn, "manual_status")
+            if DOWNLOAD_STATE_ARCHIVE_TABLE in table_names:
+                archive_counts = {
+                    row["entity_type"]: row["count"]
+                    for row in conn.execute(
+                        f"""
+                        SELECT entity_type, COUNT(*) AS count
+                        FROM {DOWNLOAD_STATE_ARCHIVE_TABLE}
+                        GROUP BY entity_type
+                        """
+                    )
+                }
+                summary["archive_item_rows"] = archive_counts.get("download_item", 0)
+                summary["archive_file_rows"] = archive_counts.get("download_file", 0)
+                summary["archive_rows"] = summary["archive_item_rows"] + summary["archive_file_rows"]
     except sqlite3.Error as exc:
         summary["error"] = f"sqlite_error:{type(exc).__name__}: {exc}"
     return summary
 
 
 def load_state(path: Path | None = None) -> dict:
-    db_path = path or db_file()
+    db_path = _resolve_database_path(path)
     if not db_path.exists():
         return _empty_state()
 
     state = _empty_state()
-    video_key_norms: dict[str, dict[str, str]] = {}
-    with closing(_connect_read_only(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
+    with closing(open_database_connection(db_path)) as conn:
         item_rows = conn.execute(
             """
             SELECT
@@ -260,13 +1827,7 @@ def load_state(path: Path | None = None) -> dict:
         for row in item_rows:
             channel = _ensure_state_channel(state, row)
             entry = _row_to_item_entry(row)
-            video_key = _state_video_key(
-                channel["videos"],
-                video_key_norms.setdefault(row["channel_id"], {}),
-                row["video_id"],
-                row["save_base_folder_norm"],
-            )
-            channel["videos"][video_key] = entry
+            channel["videos"][row["video_id"]] = entry
             item_id_to_entry[row["id"]] = entry
 
         if item_id_to_entry:
@@ -296,16 +1857,15 @@ def get_channel_video_entries(
     if not channel_id:
         return {}
 
-    db_path = path or db_file()
+    db_path = _resolve_database_path(path)
     if not db_path.exists():
         return {}
 
     where_sql, params = _channel_items_where(channel_id, save_base_folder)
     item_id_to_entry: dict[int, dict] = {}
-    entries_by_video_id: dict[str, list[dict]] = {}
+    entries_by_video_id: dict[str, dict] = {}
 
-    with closing(_connect_read_only(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
+    with closing(open_database_connection(db_path)) as conn:
         item_rows = conn.execute(
             f"""
             SELECT
@@ -336,7 +1896,7 @@ def get_channel_video_entries(
         for row in item_rows:
             entry = _row_to_item_entry(row)
             item_id_to_entry[row["id"]] = entry
-            entries_by_video_id.setdefault(row["video_id"], []).append(entry)
+            entries_by_video_id[row["video_id"]] = entry
 
         if item_id_to_entry:
             file_rows = conn.execute(
@@ -353,11 +1913,7 @@ def get_channel_video_entries(
                 if entry is not None:
                     _apply_file_row(entry, row)
 
-    return {
-        video_id: _merge_duplicate_video_entries(entries)
-        for video_id, entries in entries_by_video_id.items()
-        if entries
-    }
+    return entries_by_video_id
 
 
 def get_video_entry(
@@ -369,13 +1925,12 @@ def get_video_entry(
     if not channel_id or not video_id:
         return None
 
-    db_path = path or db_file()
+    db_path = _resolve_database_path(path)
     if not db_path.exists():
         return None
 
-    with closing(_connect_read_only(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
-        entry = _merged_entry_for_video(conn, channel_id, video_id)
+    with closing(open_database_connection(db_path)) as conn:
+        entry = _entry_for_video(conn, channel_id, video_id)
         return entry if entry else None
 
 
@@ -393,12 +1948,10 @@ def update_manual_status(
     if not channel_id or not video_id:
         return
 
-    db_path = init_db(path or db_file())
     now = _now_iso()
-    with closing(connect_db(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
+    with closing(open_database_connection(path)) as conn:
         try:
-            conn.execute("BEGIN")
+            conn.execute("BEGIN IMMEDIATE")
             item_id = _ensure_item(conn, channel_id, video_id, save_base_folder, now=now)
             _clear_manual_status_for_video(conn, channel_id, video_id, now)
             conn.execute(
@@ -426,33 +1979,31 @@ def clear_manual_status(
     if not channel_id or not video_id:
         return
 
-    db_path = path or db_file()
+    db_path = _resolve_database_path(path)
     if not db_path.exists():
         return
 
     now = _now_iso()
-    with closing(connect_db(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
+    with closing(open_database_connection(db_path)) as conn:
         try:
-            conn.execute("BEGIN")
+            conn.execute("BEGIN IMMEDIATE")
             item_id = _resolve_canonical_item_id(conn, channel_id, video_id)
             if item_id is None:
                 conn.commit()
                 return
-            old_entry = _merged_entry_for_video(conn, channel_id, video_id) or {}
+            old_entry = _entry_for_item_id(conn, item_id)
             previous_manual_status = old_entry.get("manual_status")
-            duplicate_ids = _item_ids_for_video(conn, channel_id, video_id)
             conn.execute(
-                f"""
+                """
                 UPDATE download_items
                 SET manual_status = NULL,
                     manual_override = NULL,
                     updated_at = ?
-                WHERE id IN ({",".join("?" for _ in duplicate_ids)})
+                WHERE id = ?
                 """,
-                (now, *duplicate_ids),
+                (now, item_id),
             )
-            entry = _merged_entry_for_video(conn, channel_id, video_id) or {}
+            entry = _entry_for_item_id(conn, item_id)
             new_status = _status_after_manual_clear(entry, previous_manual_status)
             conn.execute(
                 "UPDATE download_items SET status = ?, updated_at = ? WHERE id = ?",
@@ -487,12 +2038,10 @@ def update_video_part_state(
 
     download_mode = kwargs.get("download_mode") or MODE_VIDEO_THUMB
     item_updates = _common_item_updates_from_kwargs(kwargs)
-    db_path = init_db(path or db_file())
     now = _now_iso()
-    with closing(connect_db(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
+    with closing(open_database_connection(path)) as conn:
         try:
-            conn.execute("BEGIN")
+            conn.execute("BEGIN IMMEDIATE")
             item_id = _ensure_item(
                 conn,
                 channel_id,
@@ -513,7 +2062,7 @@ def update_video_part_state(
             )
             if status == STATUS_DOWNLOADED:
                 _clear_manual_status_for_video(conn, channel_id, video_id, now, downloaded_at=now)
-            entry = _merged_entry_for_video(conn, channel_id, video_id) or _entry_for_item_id(conn, item_id)
+            entry = _entry_for_item_id(conn, item_id)
             new_status = _get_effective_status(entry, download_mode)
             conn.execute(
                 "UPDATE download_items SET status = ?, updated_at = ? WHERE id = ?",
@@ -539,14 +2088,12 @@ def reconcile_downloaded_item_state(
         return STATUS_NOT_DOWNLOADED, STATUS_NOT_DOWNLOADED
 
     mode = download_mode or MODE_VIDEO_THUMB
-    db_path = init_db(path or db_file())
     now = _now_iso()
-    with closing(connect_db(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
+    with closing(open_database_connection(path)) as conn:
         try:
-            conn.execute("BEGIN")
+            conn.execute("BEGIN IMMEDIATE")
             item_id = _ensure_item(conn, channel_id, video_id, save_base_folder, now=now)
-            old_entry = _merged_entry_for_video(conn, channel_id, video_id) or _entry_for_item_id(conn, item_id)
+            old_entry = _entry_for_item_id(conn, item_id)
             old_status = _get_effective_status(old_entry, mode)
             has_downloaded_required_part = any(
                 part_status_from_entry(old_entry, part) == STATUS_DOWNLOADED
@@ -554,7 +2101,7 @@ def reconcile_downloaded_item_state(
             )
             if has_downloaded_required_part:
                 _clear_manual_status_for_video(conn, channel_id, video_id, now)
-            new_entry = _merged_entry_for_video(conn, channel_id, video_id) or _entry_for_item_id(conn, item_id)
+            new_entry = _entry_for_item_id(conn, item_id)
             new_status = _get_effective_status(new_entry, mode)
             if new_status == STATUS_DOWNLOADED:
                 conn.execute(
@@ -587,12 +2134,10 @@ def update_video_state(
     if not isinstance(updates, dict):
         raise ValueError("updates must be a dict")
 
-    db_path = init_db(path or db_file())
     now = _now_iso()
-    with closing(connect_db(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
+    with closing(open_database_connection(path)) as conn:
         try:
-            conn.execute("BEGIN")
+            conn.execute("BEGIN IMMEDIATE")
             item_id = _ensure_item(
                 conn,
                 channel_id,
@@ -653,17 +2198,27 @@ def update_video_state(
 
 
 def _apply_pragmas(conn: sqlite3.Connection) -> None:
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
+    _apply_connection_pragmas(conn)
 
 
 def _abort_transaction(conn: sqlite3.Connection) -> None:
-    conn.execute("ROLL" "BACK")
+    try:
+        conn.rollback()
+    except sqlite3.Error:
+        pass
 
 
 def _connect_read_only(path: Path) -> sqlite3.Connection:
-    return sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    conn = sqlite3.connect(
+        f"{path.resolve().as_uri()}?mode=ro",
+        uri=True,
+        timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+        factory=ManagedSQLiteConnection,
+    )
+    conn.row_factory = sqlite3.Row
+    _apply_connection_pragmas(conn)
+    conn.execute("PRAGMA query_only=ON")
+    return conn
 
 
 def _sqlite_table_names(conn: sqlite3.Connection) -> set[str]:
@@ -705,6 +2260,21 @@ def _manual_override_counts(conn: sqlite3.Connection) -> dict[str, int]:
     return {row["key"]: row["count"] for row in rows}
 
 
+def _video_identity_duplicate_count(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM (
+            SELECT 1
+            FROM download_items
+            GROUP BY platform, channel_id, video_id
+            HAVING COUNT(*) > 1
+        )
+        """
+    ).fetchone()
+    return int(row["count"] if isinstance(row, sqlite3.Row) else row[0])
+
+
 def _channel_items_where(channel_id: str, save_base_folder: str | None = None) -> tuple[str, tuple]:
     clauses = ["di.platform = ?", "di.channel_id = ?"]
     params: list[str] = [PLATFORM_YOUTUBE, channel_id]
@@ -730,33 +2300,22 @@ def _resolve_item_id(
 
 
 def _resolve_canonical_item_id(conn: sqlite3.Connection, channel_id: str, video_id: str) -> int | None:
-    rows = _item_rows_for_video(conn, channel_id, video_id)
-    if not rows:
-        return None
-
-    ranked = []
-    for row in rows:
-        item_id = int(row["id"] if isinstance(row, sqlite3.Row) else row[0])
-        entry = _entry_for_item_id(conn, item_id)
-        ranked.append((item_id, entry))
-    ranked.sort(key=lambda item: _entry_rank(item[1]))
-    return ranked[0][0]
-
-
-def _item_rows_for_video(conn: sqlite3.Connection, channel_id: str, video_id: str) -> list[sqlite3.Row]:
-    return conn.execute(
+    rows = conn.execute(
         """
-        SELECT id, save_base_folder_norm
+        SELECT id
         FROM download_items
         WHERE platform = ? AND channel_id = ? AND video_id = ?
         ORDER BY id
         """,
         (PLATFORM_YOUTUBE, channel_id, video_id),
     ).fetchall()
-
-
-def _item_ids_for_video(conn: sqlite3.Connection, channel_id: str, video_id: str) -> list[int]:
-    return [int(row["id"] if isinstance(row, sqlite3.Row) else row[0]) for row in _item_rows_for_video(conn, channel_id, video_id)]
+    if not rows:
+        return None
+    if len(rows) > 1:
+        raise DatabaseValidationError(
+            f"Duplicate video identity rows found for {PLATFORM_YOUTUBE}/{channel_id}/{video_id}"
+        )
+    return int(rows[0]["id"] if isinstance(rows[0], sqlite3.Row) else rows[0][0])
 
 
 def _clear_manual_status_for_video(
@@ -766,20 +2325,20 @@ def _clear_manual_status_for_video(
     now: str,
     downloaded_at: str | None = None,
 ) -> None:
-    item_ids = _item_ids_for_video(conn, channel_id, video_id)
-    if not item_ids:
+    item_id = _resolve_canonical_item_id(conn, channel_id, video_id)
+    if item_id is None:
         return
     assignments = ["manual_status = NULL", "manual_override = NULL", "updated_at = ?"]
     params: list = [now]
     if downloaded_at is not None:
         assignments.append("downloaded_at = COALESCE(?, downloaded_at)")
         params.append(downloaded_at)
-    params.extend(item_ids)
+    params.append(item_id)
     conn.execute(
         f"""
         UPDATE download_items
         SET {", ".join(assignments)}
-        WHERE id IN ({",".join("?" for _ in item_ids)})
+        WHERE id = ?
         """,
         tuple(params),
     )
@@ -1144,98 +2703,12 @@ def _entry_for_item_id(conn: sqlite3.Connection, item_id: int) -> dict:
     return entry
 
 
-def _merged_entry_for_video(conn: sqlite3.Connection, channel_id: str, video_id: str) -> dict | None:
-    rows = _item_rows_for_video(conn, channel_id, video_id)
-    if not rows:
+def _entry_for_video(conn: sqlite3.Connection, channel_id: str, video_id: str) -> dict | None:
+    item_id = _resolve_canonical_item_id(conn, channel_id, video_id)
+    if item_id is None:
         return None
-    entries = []
-    for row in rows:
-        item_id = int(row["id"] if isinstance(row, sqlite3.Row) else row[0])
-        entry = _entry_for_item_id(conn, item_id)
-        if entry:
-            entries.append(entry)
-    if not entries:
-        return None
-    return _merge_duplicate_video_entries(entries)
-
-
-def _merge_duplicate_video_entries(entries: list[dict]) -> dict:
-    from core.state_store import STATUS_DOWNLOADED, STATUS_ERROR, STATUS_NOT_DOWNLOADED, part_status_from_entry
-
-    if not entries:
-        return {}
-
-    sorted_entries = sorted(entries, key=_entry_rank)
-    merged = dict(sorted_entries[0])
-
-    for key in ("manual_status", "manual_override"):
-        merged.pop(key, None)
-
-    manual_entries = [entry for entry in sorted_entries if entry.get("manual_override") is True]
-    if manual_entries:
-        manual_entry = manual_entries[0]
-        manual_status = manual_entry.get("manual_status")
-        if manual_status:
-            merged["manual_status"] = manual_status
-            merged["manual_override"] = True
-
-    for part in FILE_PARTS:
-        statuses = [part_status_from_entry(entry, part) for entry in sorted_entries]
-        if STATUS_DOWNLOADED in statuses:
-            merged_status = STATUS_DOWNLOADED
-        elif STATUS_ERROR in statuses:
-            merged_status = STATUS_ERROR
-        else:
-            merged_status = STATUS_NOT_DOWNLOADED
-
-        merged[f"{part}_status"] = merged_status
-        metadata_entry = _entry_with_part_metadata(sorted_entries, part, merged_status)
-        if metadata_entry is not None:
-            for suffix in ("filename", "path"):
-                key = f"{part}_{suffix}"
-                if metadata_entry.get(key):
-                    merged[key] = metadata_entry[key]
-
-    if "manual_override" not in merged and not merged.get("status"):
-        merged["status"] = _get_effective_status(merged)
-    return merged
-
-
-def _entry_with_part_metadata(entries: list[dict], part: str, status: str) -> dict | None:
-    from core.state_store import part_status_from_entry
-
-    for entry in entries:
-        if part_status_from_entry(entry, part) == status and (entry.get(f"{part}_filename") or entry.get(f"{part}_path")):
-            return entry
-    for entry in entries:
-        if entry.get(f"{part}_filename") or entry.get(f"{part}_path"):
-            return entry
-    return None
-
-
-def _entry_rank(entry: dict) -> tuple:
-    from core.state_store import STATUS_DOWNLOADED, STATUS_ERROR, STATUS_NOT_DOWNLOADED, part_status_from_entry
-
-    status_rank = {
-        STATUS_DOWNLOADED: 0,
-        STATUS_ERROR: 3,
-        STATUS_NOT_DOWNLOADED: 4,
-    }
-    status = _get_effective_status(entry)
-    downloaded_parts = sum(1 for part in FILE_PARTS if part_status_from_entry(entry, part) == STATUS_DOWNLOADED)
-    errored_parts = sum(1 for part in FILE_PARTS if part_status_from_entry(entry, part) == STATUS_ERROR)
-    folder = (entry.get("save_base_folder") or "").strip()
-    updated_at = entry.get("updated_at") or ""
-    return (
-        0 if entry.get("manual_override") is True else 1,
-        status_rank.get(status, 1),
-        -downloaded_parts,
-        -errored_parts,
-        1 if not folder else 0,
-        "" if updated_at else "1",
-        updated_at,
-        folder.casefold(),
-    )
+    entry = _entry_for_item_id(conn, item_id)
+    return entry if entry else None
 
 
 def _get_effective_status(entry: dict, download_mode: str | None = None) -> str:
@@ -1332,30 +2805,6 @@ def _set_if_not_none(target: dict, key: str, value) -> None:
         target[key] = value
 
 
-def _state_video_key(
-    videos: dict,
-    video_key_norms: dict[str, str],
-    video_id: str,
-    save_base_folder_norm: str,
-) -> str:
-    if video_id not in videos:
-        video_key_norms[video_id] = save_base_folder_norm
-        return video_id
-    if video_key_norms.get(video_id) == save_base_folder_norm:
-        return video_id
-
-    # Keep the first video_id key and use a stable composite key if a channel has
-    # the same video saved under multiple output folders.
-    composite_key = f"{video_id}::{save_base_folder_norm}"
-    if composite_key not in videos:
-        return composite_key
-
-    suffix = 2
-    while f"{composite_key}::{suffix}" in videos:
-        suffix += 1
-    return f"{composite_key}::{suffix}"
-
-
 def _normalize_path_text(value) -> str:
     text = _text_or_empty(value).strip().replace("\\", "/")
     while text.endswith("/") and not _is_drive_root(text) and text != "/":
@@ -1405,7 +2854,7 @@ def _now_iso() -> str:
 
 
 def _print_summary(path: Path | None = None) -> int:
-    db_path = path or db_file()
+    db_path = _resolve_database_path(path)
     print(f"DB path: {db_path}")
     if not db_path.exists():
         print("Status: missing")

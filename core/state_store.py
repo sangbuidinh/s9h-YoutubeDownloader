@@ -81,7 +81,21 @@ def initialize_sqlite_state() -> Path:
     from core import db_store
 
     try:
-        return db_store.init_db(db_file())
+        return db_store.initialize_database(db_file())
+    except db_store.DatabaseTooNewError as exc:
+        raise SQLiteStateError(f"Phiên bản cơ sở dữ liệu SQLite mới hơn ứng dụng này. {exc}") from exc
+    except db_store.DatabaseBackupError as exc:
+        raise SQLiteStateError(f"Không thể tạo bản sao lưu SQLite trước khi nâng cấp. {exc}") from exc
+    except db_store.DatabaseMigrationError as exc:
+        raise SQLiteStateError(f"Không thể nâng cấp lược đồ SQLite. {exc}") from exc
+    except db_store.DatabaseLockError as exc:
+        raise SQLiteStateError(f"Cơ sở dữ liệu SQLite đang bị khóa sau thời gian chờ giới hạn. {exc}") from exc
+    except db_store.DatabasePathError as exc:
+        raise SQLiteStateError(f"Không thể ghi vào đường dẫn cơ sở dữ liệu SQLite. {exc}") from exc
+    except db_store.DatabaseFileChangedError as exc:
+        raise SQLiteStateError(f"Tệp cơ sở dữ liệu SQLite đã bị xóa hoặc thay thế. {exc}") from exc
+    except db_store.DatabaseSchemaError as exc:
+        raise SQLiteStateError(f"Lược đồ SQLite không hợp lệ. {exc}") from exc
     except Exception as exc:
         raise SQLiteStateError(f"{SQLITE_OPEN_ERROR_MESSAGE} {type(exc).__name__}: {exc}") from exc
 
@@ -162,6 +176,8 @@ def part_status_from_entry(entry: dict | None, part: str) -> str:
     if legacy == STATUS_MISSING_VIDEO:
         return STATUS_DOWNLOADED if part == PART_THUMB else STATUS_NOT_DOWNLOADED
     if legacy == STATUS_ERROR:
+        if _has_explicit_part_status(entry):
+            return STATUS_NOT_DOWNLOADED
         return STATUS_ERROR
     return STATUS_NOT_DOWNLOADED
 
@@ -226,6 +242,15 @@ def _explicit_part_status_from_entry(entry: dict | None, part: str) -> str:
     if status in (STATUS_NOT_DOWNLOADED, STATUS_DOWNLOADED, STATUS_ERROR):
         return status
     return STATUS_NOT_DOWNLOADED
+
+
+def _has_explicit_part_status(entry: dict | None) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    return any(
+        entry.get(key) in (STATUS_NOT_DOWNLOADED, STATUS_DOWNLOADED, STATUS_ERROR)
+        for key in PART_STATUS_KEYS.values()
+    )
 
 
 def update_manual_status(
