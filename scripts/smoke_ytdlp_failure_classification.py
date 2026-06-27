@@ -1,5 +1,7 @@
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from tempfile import TemporaryDirectory
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +24,9 @@ def main() -> int:
     options_without_cookies = DownloadOptions(".", "channel", "Channel", cookies_enabled=False)
 
     _assert_kind("HTTP Error 429: Too Many Requests", options_without_cookies, YtdlpFailureKind.RATE_LIMIT)
+    _assert_kind("ERROR: HTTP Error 401: Unauthorized", options_without_cookies, YtdlpFailureKind.HTTP_401)
+    _assert_kind("ERROR: HTTP Error 403: Forbidden", options_without_cookies, YtdlpFailureKind.HTTP_403)
+    _assert_kind("ERROR: HTTP Error 429: Too Many Requests", options_without_cookies, YtdlpFailureKind.RATE_LIMIT)
     _assert_kind(
         "Sign in to confirm you're not a bot",
         options_with_cookies,
@@ -48,15 +53,21 @@ def main() -> int:
     _assert_kind("Sign in to confirm your age", options_with_cookies, YtdlpFailureKind.COOKIE_SESSION)
     _assert_kind("Sign in to confirm your identity", options_with_cookies, YtdlpFailureKind.COOKIE_SESSION)
     _assert_kind("Sign in to confirm your account", options_with_cookies, YtdlpFailureKind.COOKIE_SESSION)
-    _assert_kind("Sign in to continue", options_with_cookies, YtdlpFailureKind.COOKIE_SESSION)
-    _assert_kind("Please sign in to continue", options_with_cookies, YtdlpFailureKind.COOKIE_SESSION)
+    _assert_kind("Sign in to continue", options_with_cookies, YtdlpFailureKind.LOGIN_REQUIRED)
+    _assert_kind("Please sign in to continue", options_with_cookies, YtdlpFailureKind.LOGIN_REQUIRED)
     _assert_kind("Please sign in to view this video", options_with_cookies, YtdlpFailureKind.COOKIE_SESSION)
     _assert_kind("You must be signed in to view this video", options_with_cookies, YtdlpFailureKind.COOKIE_SESSION)
     _assert_kind(
         "Authentication is required to view this video",
         options_with_cookies,
-        YtdlpFailureKind.COOKIE_SESSION,
+        YtdlpFailureKind.LOGIN_REQUIRED,
     )
+    _assert_kind("Missing required Visitor Data", options_with_cookies, YtdlpFailureKind.PO_TOKEN_OR_VISITOR_DATA)
+    _assert_kind("PO Token is required for this client", options_with_cookies, YtdlpFailureKind.PO_TOKEN_OR_VISITOR_DATA)
+    _assert_kind("ERROR: Requested format is not available", options_without_cookies, YtdlpFailureKind.FORMAT_UNAVAILABLE)
+    _assert_kind("ERROR: No video formats found", options_without_cookies, YtdlpFailureKind.FORMAT_UNAVAILABLE)
+    _assert_kind("ERROR: No suitable formats", options_without_cookies, YtdlpFailureKind.FORMAT_UNAVAILABLE)
+    _assert_kind("Premiere-safe validation failed", options_without_cookies, YtdlpFailureKind.FORMAT_UNAVAILABLE)
     _assert_kind("cookies are no longer valid", options_with_cookies, YtdlpFailureKind.COOKIE_SESSION)
     _assert_kind("The supplied browser session has expired", options_with_cookies, YtdlpFailureKind.COOKIE_SESSION)
     _assert_not_kind(
@@ -125,6 +136,15 @@ def main() -> int:
     )
     _test_vietnamese_friendly_errors()
     _test_permanent_video_does_not_pause()
+    _test_recovered_http_403_warning_succeeds()
+    _test_warning_403_then_format_fatal_is_not_403()
+    _test_true_fatal_403_retries_with_fatal_logs()
+    _test_cookie_media_403_falls_back_without_delay()
+    _test_cookie_media_403_fallback_then_standard_retries()
+    _test_fatal_http_statuses()
+    _test_stage_tracking()
+    _test_sanitized_fatal_lines()
+    _test_unknown_failure()
 
     print("yt-dlp failure classification smoke passed")
     return 0
@@ -202,10 +222,343 @@ def _test_permanent_video_does_not_pause() -> None:
         downloader._run_ytdlp = old_run_ytdlp
 
 
+def _test_recovered_http_403_warning_succeeds() -> None:
+    logs: list[str] = []
+    command = _python_ytdlp_command(
+        [
+            "WARNING: Unable to download webpage: HTTP Error 403",
+            "[youtube] Downloading another client",
+            "[download] Destination: output.mp4",
+        ],
+        0,
+    )
+    with _progress_phase("Video"):
+        downloader._run_ytdlp_with_retries(
+            command,
+            DownloadOptions(".", "channel", "Channel", cookies_enabled=False),
+            logs.append,
+        )
+
+    joined = "\n".join(logs)
+    _assert(
+        "[YT-DLP START] part=video stage=extract attempt=1 cookies=disabled ipv4=forced fragments=1" in joined,
+        "start diagnostic missing",
+    )
+    _assert("[YT-DLP FAILED]" not in joined, "successful recovered warning logged as failure")
+    _assert("Retrying in" not in joined, "successful recovered warning triggered retry")
+
+
+def _test_warning_403_then_format_fatal_is_not_403() -> None:
+    logs: list[str] = []
+    command = _python_ytdlp_command(
+        [
+            "WARNING: HTTP Error 403",
+            "ERROR: Requested format is not available",
+        ],
+        1,
+    )
+    with _progress_phase("Video"):
+        try:
+            downloader._run_ytdlp_with_retries(
+                command,
+                DownloadOptions(".", "channel", "Channel", cookies_enabled=False),
+                logs.append,
+            )
+        except YtdlpExecutionError as exc:
+            actual = classify_ytdlp_failure_kind(exc, DownloadOptions(".", "channel", "Channel"))
+            _assert(actual == YtdlpFailureKind.FORMAT_UNAVAILABLE, f"expected format_unavailable, got {actual}")
+            _assert(not exc.http_403, "format-unavailable fatal retained sticky http_403")
+        else:
+            raise AssertionError("format-unavailable failure was swallowed")
+
+    joined = "\n".join(logs)
+    _assert("[YT-DLP CLASS] format_unavailable" in joined, "format class log missing")
+    _assert("[YT-DLP FATAL] ERROR: Requested format is not available" in joined, "fatal format line missing")
+    _assert("HTTP 403 during" not in joined, "format fatal used HTTP 403 retry message")
+
+
+def _test_true_fatal_403_retries_with_fatal_logs() -> None:
+    logs: list[str] = []
+    delays: list[int] = []
+    old_sleep = downloader._sleep_with_cancel
+    try:
+        downloader._sleep_with_cancel = lambda seconds, _cancel_controller=None: delays.append(seconds)
+        with _progress_phase("Video"):
+            try:
+                downloader._run_ytdlp_with_retries(
+                    _python_ytdlp_command(["ERROR: Unable to download webpage: HTTP Error 403: Forbidden"], 1),
+                    DownloadOptions(".", "channel", "Channel", cookies_enabled=False),
+                    logs.append,
+                )
+            except downloader.DownloadCancelled:
+                pass
+            else:
+                raise AssertionError("fatal 403 without pause callback did not stop batch after retries")
+    finally:
+        downloader._sleep_with_cancel = old_sleep
+
+    joined = "\n".join(logs)
+    _assert(delays == [10, 30], f"HTTP 403 retry delays changed: {delays}")
+    _assert(joined.count("[YT-DLP START]") == 3, "fatal 403 did not run initial attempt plus two retries")
+    _assert("[YT-DLP CLASS] http_403" in joined, "HTTP 403 class log missing")
+    _assert(
+        "[YT-DLP FATAL] ERROR: Unable to download webpage: HTTP Error 403: Forbidden" in joined,
+        "HTTP 403 fatal line missing",
+    )
+    first_fatal = joined.index("[YT-DLP FATAL]")
+    first_retry = joined.index("Retrying in 10 seconds")
+    _assert(first_fatal < first_retry, "retry was logged before fatal diagnostics")
+    _assert(
+        "[WARNING] HTTP 403 during video/extract. Retrying in 10 seconds (retry 1/2)." in joined,
+        "first retry message changed",
+    )
+    _assert(
+        "[WARNING] HTTP 403 during video/extract. Retrying in 30 seconds (retry 2/2)." in joined,
+        "second retry message changed",
+    )
+
+
+def _test_cookie_media_403_falls_back_without_delay() -> None:
+    logs: list[str] = []
+    calls: list[list[str]] = []
+    delays: list[int] = []
+    old_run_ytdlp = downloader._run_ytdlp
+    old_sleep = downloader._sleep_with_cancel
+    try:
+        def fake_run(command, _cancel_controller=None):
+            calls.append(list(command))
+            if len(calls) == 1:
+                fatal = "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+                raise YtdlpExecutionError(
+                    1,
+                    "yt-dlp failed with HTTP 403",
+                    [fatal],
+                    combined_output=fatal,
+                    failure_kind=YtdlpFailureKind.HTTP_403,
+                    fatal_lines=[fatal],
+                    http_status=403,
+                    stage="extract",
+                    part="video",
+                )
+            return ""
+
+        downloader._run_ytdlp = fake_run
+        downloader._sleep_with_cancel = lambda seconds, _controller=None: delays.append(int(seconds))
+        with TemporaryDirectory(prefix="cookie_fallback_success_") as temp_dir:
+            cookie_path = Path(temp_dir) / "cookies.txt"
+            cookie_path.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+            options = DownloadOptions(
+                ".",
+                "channel",
+                "Channel",
+                cookies_enabled=True,
+                cookies_path=str(cookie_path),
+            )
+            with _progress_phase("Video"):
+                downloader._run_ytdlp_with_retries(
+                    ["yt-dlp", "https://www.youtube.com/watch?v=cookie403"],
+                    options,
+                    logs.append,
+                )
+    finally:
+        downloader._run_ytdlp = old_run_ytdlp
+        downloader._sleep_with_cancel = old_sleep
+
+    _assert(len(calls) == 2, f"cookie fallback call count was wrong: {len(calls)}")
+    _assert(downloader._command_uses_cookies(calls[0]), "first attempt did not use cookies")
+    _assert(not downloader._command_uses_cookies(calls[1]), "fallback attempt still used cookies")
+    _assert(delays == [], f"cookie fallback waited before cookieless retry: {delays}")
+    joined = "\n".join(logs)
+    _assert("[COOKIE FALLBACK]" in joined, "cookie fallback diagnostic missing")
+    _assert("Retrying immediately without cookies" in joined, "cookieless retry message missing")
+    _assert("[COOKIE FALLBACK SUCCESS]" in joined, "cookie fallback success diagnostic missing")
+    _assert("attempt=1 cookies=enabled" in joined, "first attempt cookie state was not logged")
+    _assert("attempt=2 cookies=disabled" in joined, "fallback attempt cookie state was not logged")
+    _assert("Retrying in 10 seconds" not in joined, "HTTP 403 delay ran before cookieless fallback")
+
+
+def _test_cookie_media_403_fallback_then_standard_retries() -> None:
+    logs: list[str] = []
+    calls: list[list[str]] = []
+    delays: list[int] = []
+    old_run_ytdlp = downloader._run_ytdlp
+    old_sleep = downloader._sleep_with_cancel
+    try:
+        def always_media_403(command, _cancel_controller=None):
+            calls.append(list(command))
+            fatal = "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+            raise YtdlpExecutionError(
+                1,
+                "yt-dlp failed with HTTP 403",
+                [fatal],
+                combined_output=fatal,
+                failure_kind=YtdlpFailureKind.HTTP_403,
+                fatal_lines=[fatal],
+                http_status=403,
+                stage="download",
+                part="video",
+            )
+
+        downloader._run_ytdlp = always_media_403
+        downloader._sleep_with_cancel = lambda seconds, _controller=None: delays.append(int(seconds))
+        with TemporaryDirectory(prefix="cookie_fallback_failure_") as temp_dir:
+            cookie_path = Path(temp_dir) / "cookies.txt"
+            cookie_path.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+            options = DownloadOptions(
+                ".",
+                "channel",
+                "Channel",
+                cookies_enabled=True,
+                cookies_path=str(cookie_path),
+            )
+            with _progress_phase("Video"):
+                try:
+                    downloader._run_ytdlp_with_retries(
+                        ["yt-dlp", "https://www.youtube.com/watch?v=cookie403fail"],
+                        options,
+                        logs.append,
+                    )
+                except downloader.DownloadCancelled:
+                    pass
+                else:
+                    raise AssertionError("persistent cookieless HTTP 403 did not stop after retries")
+    finally:
+        downloader._run_ytdlp = old_run_ytdlp
+        downloader._sleep_with_cancel = old_sleep
+
+    _assert(len(calls) == 4, f"persistent fallback call count was wrong: {len(calls)}")
+    _assert(downloader._command_uses_cookies(calls[0]), "initial persistent attempt did not use cookies")
+    _assert(
+        all(not downloader._command_uses_cookies(command) for command in calls[1:]),
+        "one or more post-fallback retries re-enabled cookies",
+    )
+    _assert(delays == [10, 30], f"post-fallback HTTP 403 delays were wrong: {delays}")
+    joined = "\n".join(logs)
+    _assert(joined.count("[COOKIE FALLBACK]") == 1, "cookieless fallback ran more than once")
+    _assert("[COOKIE FALLBACK SUCCESS]" not in joined, "failed fallback was logged as successful")
+
+
+def _test_fatal_http_statuses() -> None:
+    cases = (
+        ("ERROR: HTTP Error 401: Unauthorized", YtdlpFailureKind.HTTP_401, 401),
+        ("ERROR: HTTP Error 429: Too Many Requests", YtdlpFailureKind.RATE_LIMIT, 429),
+    )
+    for output, expected_kind, expected_status in cases:
+        exc = _run_ytdlp_exception([output])
+        actual = classify_ytdlp_failure_kind(exc, DownloadOptions(".", "channel", "Channel"))
+        _assert(actual == expected_kind, f"{output!r}: expected {expected_kind}, got {actual}")
+        _assert(exc.http_status == expected_status, f"{output!r}: status was {exc.http_status}")
+        _assert(not exc.http_403, f"{output!r}: mislabeled as http_403")
+
+
+def _test_stage_tracking() -> None:
+    extract = _run_ytdlp_exception(["ERROR: HTTP Error 401: Unauthorized"], phase="Video")
+    _assert(extract.stage == "extract", f"extract-stage failure reported {extract.stage}")
+    _assert(extract.part == "video", f"video part was not captured: {extract.part}")
+
+    download = _run_ytdlp_exception(
+        [
+            "[download] Destination: output.mp4",
+            "ERROR: Unable to download webpage: HTTP Error 403: Forbidden",
+        ],
+        phase="Video",
+    )
+    _assert(download.stage == "download", f"download-stage failure reported {download.stage}")
+
+    media_data = _run_ytdlp_exception(
+        ["ERROR: unable to download video data: HTTP Error 403: Forbidden"],
+        phase="Video",
+    )
+    _assert(
+        media_data.stage == "download",
+        f"video-data HTTP 403 was not recognized as download stage: {media_data.stage}",
+    )
+
+
+def _test_sanitized_fatal_lines() -> None:
+    cookie_path = r"C:\Users\admin\secret\youtube_cookies.txt"
+    signed_url = (
+        "https://rr1---sn.googlevideo.com/videoplayback?"
+        "expire=123&token=abc123&access_token=secret-token&sig=signed-value&foo=ok"
+    )
+    exc = _run_ytdlp_exception(
+        [
+            f"ERROR: Unable to download {signed_url} --cookies {cookie_path}",
+            "cookie: SID=super-secret",
+            "access_token=standalone-secret",
+            "api_key=AIzaSy012345678901234567890123456789",
+        ]
+    )
+    joined = "\n".join([*exc.fatal_lines, exc.combined_output])
+    forbidden_fragments = (
+        cookie_path,
+        "SID=super-secret",
+        "standalone-secret",
+        "AIzaSy",
+        "token=abc123",
+        "access_token=secret-token",
+        "googlevideo.com",
+        "videoplayback",
+    )
+    for fragment in forbidden_fragments:
+        _assert(fragment not in joined, f"sanitized diagnostics leaked {fragment!r}: {joined}")
+    _assert("<signed-media-url-redacted>" in joined, "signed media URL was not redacted")
+    _assert("<cookies-arg-redacted>" in joined, "cookies argument was not redacted")
+    _assert("<cookie-redacted>" in joined, "cookie line was not redacted")
+    _assert("access_token=***" in joined, "standalone access token was not redacted")
+
+
+def _test_unknown_failure() -> None:
+    exc = _run_ytdlp_exception(["final unexplained extractor failure"])
+    actual = classify_ytdlp_failure_kind(exc, DownloadOptions(".", "channel", "Channel"))
+    _assert(actual == YtdlpFailureKind.UNKNOWN, f"unknown failure classified as {actual}")
+    _assert("final unexplained extractor failure" in "\n".join(exc.fatal_lines), "unknown fatal line missing")
+
+
+def _run_ytdlp_exception(
+    output_lines: list[str],
+    exit_code: int = 1,
+    phase: str = "Video",
+) -> YtdlpExecutionError:
+    with _progress_phase(phase):
+        try:
+            downloader._run_ytdlp(_python_ytdlp_command(output_lines, exit_code))
+        except YtdlpExecutionError as exc:
+            return exc
+    raise AssertionError("yt-dlp command unexpectedly succeeded")
+
+
+def _python_ytdlp_command(output_lines: list[str], exit_code: int) -> list[str]:
+    script_lines = ["import sys"]
+    for line in output_lines:
+        script_lines.append(f"print({line!r}, flush=True)")
+    script_lines.append(f"sys.exit({int(exit_code)})")
+    return [sys.executable, "-c", "\n".join(script_lines), "--force-ipv4", "-N", "1"]
+
+
+class _progress_phase:
+    def __init__(self, phase: str):
+        self.phase = phase
+        self.previous = None
+
+    def __enter__(self):
+        self.previous = downloader._set_progress_context(
+            lambda _event: None,
+            SimpleNamespace(video_id="video123", title="Video", sanitized_filename_base="video"),
+            1,
+            1,
+            self.phase,
+        )
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb):
+        downloader._restore_progress_context(self.previous)
+
+
 def _test_vietnamese_friendly_errors() -> None:
     expected_titles = {
         "bot_check": "YouTube yêu cầu xác minh người dùng",
-        "rate_limit": "YouTube đang giới hạn lượt tải",
+        "rate_limit_429": "YouTube đang giới hạn lượt tải",
         "cookie_session": "Phiên đăng nhập không còn hợp lệ",
         "http_403": "YouTube liên tục từ chối truy cập",
     }

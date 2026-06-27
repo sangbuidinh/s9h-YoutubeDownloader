@@ -90,7 +90,7 @@ def _test_base_command_flags() -> None:
         "--file-access-retries": "10",
         "--socket-timeout": "60",
         "--http-chunk-size": "1M",
-        "-N": "4",
+        "-N": "1",
         "--limit-rate": "2M",
     }
     for option, value in expected_options.items():

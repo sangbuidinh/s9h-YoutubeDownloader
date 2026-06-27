@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 
 
@@ -132,10 +133,18 @@ def friendly_ytdlp_failure_kind_error(kind: str, refreshed_rejected: bool = Fals
     if refreshed_rejected:
         return FRIENDLY_ERRORS["refreshed_cookie_rejected"]
     mapping = {
+        "http_401": "cookie_session_rejected",
         "rate_limit": "rate_limit",
+        "rate_limit_429": "rate_limit",
         "bot_check": "bot_verification",
         "cookie_session": "cookie_session_rejected",
+        "login_required": "cookie_session_rejected",
+        "po_token_or_visitor_data": "bot_verification",
         "http_403": "http_403_repeated",
+        "format_unavailable": "premiere_safe_mp4",
+        "network_timeout": "network",
+        "network": "network",
+        "output_path": "invalid_filename",
     }
     return FRIENDLY_ERRORS.get(mapping.get(kind, ""), FRIENDLY_ERRORS["generic"])
 
@@ -263,7 +272,12 @@ def _contains_cookie_session_rejected(text: str) -> bool:
 
 def _contains_http_403(text: str) -> bool:
     lower = (text or "").lower()
-    return "http error 403" in lower or "403: forbidden" in lower or "forbidden" in lower
+    return (
+        "http error 403" in lower
+        or "403: forbidden" in lower
+        or re.search(r"\b403\b[^\n\r]*\bforbidden\b", lower) is not None
+        or re.search(r"\bforbidden\b[^\n\r]*\b403\b", lower) is not None
+    )
 
 
 def _contains_js_runtime(text: str) -> bool:

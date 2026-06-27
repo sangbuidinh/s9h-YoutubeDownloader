@@ -2826,6 +2826,17 @@ class YouTubeDownloaderWindow:
         retry_text = "Thử lại video hiện tại"
         skip_text = "Bỏ qua video này"
         stop_text = "Dừng danh sách"
+        self._append_log(
+            "[YT-DLP PAUSE] "
+            f"part={context.part or 'unknown'} "
+            f"stage={context.stage or 'unknown'} "
+            f"exit_code={context.exit_code if context.exit_code is not None else 'unknown'} "
+            f"failure_kind={context.failure_kind.value}"
+        )
+        for line in context.output_lines[:4]:
+            if line.strip():
+                self._append_log(f"[YT-DLP PAUSE FATAL] {line}")
+
         buttons = []
         if context.retry_allowed:
             buttons.append({"text": retry_text, "value": BatchDecision.RETRY_CURRENT.value, "width": 24})
@@ -2888,6 +2899,9 @@ class YouTubeDownloaderWindow:
     def _systemic_block_dialog_message(self, context: SystemicBlockContext) -> str:
         title = context.title or context.video_id or "-"
         part = self._localized_systemic_part(context.part)
+        stage = context.stage or "unknown"
+        exit_code = str(context.exit_code) if context.exit_code is not None else "unknown"
+        fatal_line = next((line for line in context.output_lines if line.strip()), "")
         cookie_source = context.cookie_source or "-"
         cookie_path = context.cookie_path or "-"
         retry_guidance = (
@@ -2901,6 +2915,10 @@ class YouTubeDownloaderWindow:
                 f"Video: {title}",
                 f"Phần: {part}",
                 f"Nguồn cookie: {cookie_source}",
+                f"Stage: {stage}",
+                f"Type: {context.failure_kind.value}",
+                f"Exit code: {exit_code}",
+                f"Fatal: {fatal_line}" if fatal_line else "Fatal: -",
                 f"File cookie: {cookie_path}",
                 "",
                 "Các file và phần đã tải xong sẽ được giữ nguyên.",

@@ -33,6 +33,7 @@ def main() -> int:
     _test_cancel_wakes_paused_controller()
     _test_queued_block_after_stop_does_not_open_dialog()
     _test_cancel_while_dialog_returns_retry_uses_stop()
+    _test_systemic_block_ui_logs_diagnostics()
     _test_stale_block_event_does_not_open_dialog()
     _test_no_controller_stops_batch_before_second_video()
     _test_controller_without_callback_stops_batch_before_second_video()
@@ -239,6 +240,51 @@ def _test_cancel_while_dialog_returns_retry_uses_stop() -> None:
 
         _assert(dialog_calls == ["dialog"], f"dialog call count was wrong: {dialog_calls}")
         _assert(len(calls) == 1, f"retry was accepted after cancellation: {len(calls)}")
+
+
+def _test_systemic_block_ui_logs_diagnostics() -> None:
+    controller = DownloadController()
+    window = _fake_window(controller)
+    dialog_messages: list[str] = []
+
+    def fake_dialog(*_args, **kwargs):
+        dialog_messages.append(kwargs.get("message", ""))
+        return BatchDecision.SKIP_CURRENT.value
+
+    context = SystemicBlockContext(
+        block_id="diagnostic-ui",
+        failure_kind=YtdlpFailureKind.RATE_LIMIT,
+        retry_allowed=False,
+        reason="rate limited",
+        part="video",
+        stage="extract",
+        exit_code=1,
+        output_lines=("ERROR: HTTP Error 429: Too Many Requests",),
+    )
+    controller.systemic_block_callback = lambda queued_context: window._handle_systemic_download_block(queued_context)
+
+    with _patched_dialog(fake_dialog):
+        decision = controller.wait_for_systemic_decision(context)
+
+    _assert(decision == BatchDecision.SKIP_CURRENT, f"diagnostic dialog decision was wrong: {decision}")
+    logs = "\n".join(window.logs)
+    _assert(
+        "[YT-DLP PAUSE] part=video stage=extract exit_code=1 failure_kind=rate_limit_429" in logs,
+        f"pause diagnostic log missing: {logs}",
+    )
+    _assert(
+        "[YT-DLP PAUSE FATAL] ERROR: HTTP Error 429: Too Many Requests" in logs,
+        f"pause fatal log missing: {logs}",
+    )
+    _assert(dialog_messages, "diagnostic dialog did not open")
+    dialog = dialog_messages[0]
+    for expected in (
+        "Stage: extract",
+        "Type: rate_limit_429",
+        "Exit code: 1",
+        "Fatal: ERROR: HTTP Error 429: Too Many Requests",
+    ):
+        _assert(expected in dialog, f"dialog missing {expected!r}: {dialog}")
 
 
 def _test_stale_block_event_does_not_open_dialog() -> None:

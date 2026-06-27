@@ -59,6 +59,13 @@ MAX_FINAL_PATH_LENGTH = 240
 FFMPEG_OUTPUT_LINE_LIMIT = 20
 FFMPEG_OUTPUT_LINE_CHAR_LIMIT = 500
 FFMPEG_COMBINED_OUTPUT_LIMIT = 8192
+YTDLP_OUTPUT_TAIL_LIMIT = 200
+YTDLP_FATAL_LINE_LIMIT = 12
+YTDLP_STAGE_EXTRACT = "extract"
+YTDLP_STAGE_DOWNLOAD = "download"
+YTDLP_STAGE_POSTPROCESS = "postprocess"
+YTDLP_STAGE_UNKNOWN = "unknown"
+YTDLP_PART_UNKNOWN = "unknown"
 _STANDALONE_SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)\b(?P<name>key|api_key|token|access_token)="
 )
@@ -83,13 +90,19 @@ FILE_COOKIE_SESSION_ERROR_MESSAGE = (
 
 
 class YtdlpFailureKind(str, Enum):
-    RATE_LIMIT = "rate_limit"
+    HTTP_401 = "http_401"
+    RATE_LIMIT = "rate_limit_429"
     BOT_CHECK = "bot_check"
     COOKIE_SESSION = "cookie_session"
+    LOGIN_REQUIRED = "login_required"
+    PO_TOKEN_OR_VISITOR_DATA = "po_token_or_visitor_data"
     HTTP_403 = "http_403"
+    FORMAT_UNAVAILABLE = "format_unavailable"
     PERMANENT_VIDEO = "permanent_video"
     TOOL_CONFIGURATION = "tool_configuration"
+    NETWORK_TIMEOUT = "network_timeout"
     NETWORK = "network"
+    OUTPUT_PATH = "output_path"
     UNKNOWN = "unknown"
 
 
@@ -136,6 +149,8 @@ class SystemicBlockContext:
     cookie_changed: bool = False
     refreshed_retry_used: bool = False
     output_lines: tuple[str, ...] = ()
+    stage: str = YTDLP_STAGE_UNKNOWN
+    exit_code: int | None = None
 
 
 @dataclass
@@ -277,14 +292,31 @@ class YtdlpExecutionError(DownloadError):
         missing_js_runtime: bool = False,
         combined_output: str = "",
         stream_interrupted: bool = False,
+        failure_kind: YtdlpFailureKind | str | None = None,
+        fatal_lines: list[str] | tuple[str, ...] | None = None,
+        http_status: int | None = None,
+        stage: str = YTDLP_STAGE_UNKNOWN,
+        part: str = YTDLP_PART_UNKNOWN,
     ):
         super().__init__(message)
-        self.exit_code = exit_code
-        self.output_lines = output_lines
-        self.bot_check = bot_check
-        self.http_403 = http_403
-        self.missing_js_runtime = missing_js_runtime
-        self.combined_output = combined_output
+        sanitized_output_lines = _sanitize_ytdlp_output_lines(output_lines)[-YTDLP_OUTPUT_TAIL_LIMIT:]
+        sanitized_fatal_lines = _sanitize_ytdlp_output_lines(fatal_lines or [])
+        self.exit_code = int(exit_code)
+        self.output_lines = sanitized_output_lines
+        self.fatal_lines = tuple((sanitized_fatal_lines or _extract_ytdlp_fatal_lines(sanitized_output_lines))[-YTDLP_FATAL_LINE_LIMIT:])
+        self.combined_output = _bounded_sanitized_ytdlp_output(combined_output or "\n".join(sanitized_output_lines))
+        self.failure_kind = _coerce_ytdlp_failure_kind(failure_kind)
+        status_text = "\n".join(self.fatal_lines) or self.combined_output
+        self.http_status = int(http_status) if http_status is not None else _http_status_from_text(
+            status_text
+        )
+        self.stage = _normalize_ytdlp_stage(stage)
+        self.part = _normalize_ytdlp_part(part)
+        self.bot_check = bool(bot_check or self.failure_kind == YtdlpFailureKind.BOT_CHECK)
+        self.http_403 = bool(http_403 or self.failure_kind == YtdlpFailureKind.HTTP_403 or self.http_status == 403)
+        self.missing_js_runtime = bool(
+            missing_js_runtime or self.failure_kind == YtdlpFailureKind.TOOL_CONFIGURATION
+        )
         self.stream_interrupted = stream_interrupted
 
 
@@ -343,11 +375,13 @@ class _PreparedCookieAttempt:
     canonical_path: str = ""
     canonical_snapshot: _CookieFileSnapshot | None = None
     temp_cookie_path: str = ""
+    cookies_used: bool = False
 
 
 @dataclass
 class _YtdlpAttemptState:
     verified_retry_used: bool = False
+    cookieless_fallback_used: bool = False
 
 
 def _emit_progress_event(progress_callback, event: ProgressEvent) -> None:
@@ -449,15 +483,10 @@ def _emit_ytdlp_error_progress(
 ) -> None:
     options = DownloadOptions("", "", "", cookies_enabled=cookies_enabled)
     failure_kind = classify_ytdlp_failure_kind(exc, options)
-    if failure_kind in {
-        YtdlpFailureKind.RATE_LIMIT,
-        YtdlpFailureKind.BOT_CHECK,
-        YtdlpFailureKind.COOKIE_SESSION,
-        YtdlpFailureKind.HTTP_403,
-    }:
+    if _uses_ytdlp_failure_kind_friendly_error(failure_kind):
         friendly = friendly_ytdlp_failure_kind_error(failure_kind.value)
     else:
-        text = exc.combined_output or "\n".join([str(exc), *exc.output_lines])
+        text = "\n".join(exc.fatal_lines or exc.output_lines) or exc.combined_output
         friendly = classify_ytdlp_error(
             text,
             cookies_enabled=cookies_enabled,
@@ -961,7 +990,12 @@ def download_items(
             _emit_general_error_progress(progress_callback, video, index, video_total, technical)
             _log_friendly_general_error(log, technical, [technical])
 
-    log(f"[SUCCESS] Downloaded: {downloaded_count}")
+    if downloaded_count > 0:
+        log(f"[SUCCESS] Downloaded: {downloaded_count}")
+    elif failed_count > 0 or skipped_count > 0:
+        log("[WARNING] Batch finished with 0 successful downloads.")
+    else:
+        log("[INFO] Downloaded: 0")
     if failed_count > 0:
         log(f"[ERROR] Failed: {failed_count}")
     if skipped_count > 0:
@@ -1263,7 +1297,7 @@ def _base_ytdlp_command(options: DownloadOptions) -> list[str]:
         "--http-chunk-size",
         "1M",
         "-N",
-        "4",
+        "1",
         "--ffmpeg-location",
         str(runtime_file("ffmpeg.exe").parent),
     ]
@@ -1780,10 +1814,17 @@ def _insert_cookie_option(command: list[str], cookie_path: Path) -> list[str]:
 
 
 @contextmanager
-def _prepared_cookie_attempt(command: list[str], options: DownloadOptions, log=None):
+def _prepared_cookie_attempt(
+    command: list[str],
+    options: DownloadOptions,
+    log=None,
+    *,
+    use_cookies: bool | None = None,
+):
     base_command = _strip_cookie_options(list(command))
-    if not options.cookies_enabled:
-        yield _PreparedCookieAttempt(base_command)
+    cookies_requested = options.cookies_enabled if use_cookies is None else bool(use_cookies)
+    if not cookies_requested:
+        yield _PreparedCookieAttempt(base_command, cookies_used=False)
         return
 
     canonical_path = Path(effective_cookies_path(options))
@@ -1814,6 +1855,7 @@ def _prepared_cookie_attempt(command: list[str], options: DownloadOptions, log=N
                     str(canonical_path),
                     last_before,
                     str(temp_cookie_path),
+                    cookies_used=True,
                 )
                 return
 
@@ -1843,13 +1885,24 @@ def _run_ytdlp_with_retries(
     stream_interrupted_retried = False
     base_command = _strip_cookie_options(list(command))
     current_command = list(base_command)
+    attempt_number = 0
+    use_cookies_for_attempt = bool(options.cookies_enabled)
 
     while True:
         _raise_if_cancelled(cancel_controller)
         attempt_info: _PreparedCookieAttempt | None = None
+        attempt_part = _current_ytdlp_part()
         try:
-            with _prepared_cookie_attempt(current_command, options, log) as prepared_attempt:
+            with _prepared_cookie_attempt(
+                current_command,
+                options,
+                log,
+                use_cookies=use_cookies_for_attempt,
+            ) as prepared_attempt:
                 attempt_info = prepared_attempt
+                attempt_number += 1
+                attempt_part = _current_ytdlp_part()
+                log(_ytdlp_start_log_line(prepared_attempt.command, options, attempt_number, attempt_part))
                 stderr = _run_ytdlp(prepared_attempt.command, cancel_controller)
             if (
                 SHOW_TECHNICAL_WARNINGS
@@ -1858,9 +1911,33 @@ def _run_ytdlp_with_retries(
                 and not _deno_runtime_path().exists()
             ):
                 _log_missing_js_runtime_warning(log, [stderr])
+            if attempt_state.cookieless_fallback_used and not prepared_attempt.cookies_used:
+                log(
+                    "[COOKIE FALLBACK SUCCESS] yt-dlp media transfer completed without cookies "
+                    "after the cookie-authenticated media request returned HTTP 403."
+                )
             return
         except YtdlpExecutionError as exc:
+            _attach_ytdlp_attempt_context(exc, attempt_part)
             failure_kind = classify_ytdlp_failure_kind(exc, options)
+            exc.failure_kind = failure_kind
+            _log_ytdlp_attempt_failure(log, exc, failure_kind, attempt_number)
+
+            if _should_retry_video_without_cookies(
+                exc,
+                failure_kind,
+                options,
+                attempt_info,
+                attempt_state,
+            ):
+                attempt_state.cookieless_fallback_used = True
+                use_cookies_for_attempt = False
+                current_command = list(base_command)
+                log(
+                    "[COOKIE FALLBACK] Cookie-authenticated video data request returned HTTP 403. "
+                    "Retrying immediately without cookies."
+                )
+                continue
 
             if (
                 failure_kind == YtdlpFailureKind.HTTP_403
@@ -1870,7 +1947,7 @@ def _run_ytdlp_with_retries(
                 delay = http_403_delays[http_403_retries]
                 http_403_retries += 1
                 log(
-                    "[WARNING] HTTP 403 / Forbidden from yt-dlp. "
+                    f"[WARNING] HTTP 403 during {exc.part}/{exc.stage}. "
                     f"Retrying in {delay} seconds (retry {http_403_retries}/2)."
                 )
                 _sleep_with_cancel(delay, cancel_controller)
@@ -1900,28 +1977,66 @@ def _run_ytdlp_with_retries(
                     attempt_info,
                 ):
                     current_command = list(base_command)
+                    use_cookies_for_attempt = bool(options.cookies_enabled)
                     continue
 
             raise
 
 
+def _should_retry_video_without_cookies(
+    exc: YtdlpExecutionError,
+    failure_kind: YtdlpFailureKind,
+    options: DownloadOptions,
+    attempt_info: _PreparedCookieAttempt | None,
+    attempt_state: _YtdlpAttemptState,
+) -> bool:
+    return bool(
+        options.cookies_enabled
+        and attempt_info is not None
+        and attempt_info.cookies_used
+        and not attempt_state.cookieless_fallback_used
+        and failure_kind == YtdlpFailureKind.HTTP_403
+        and exc.part == PART_VIDEO
+        and _is_video_data_http_403(exc)
+    )
+
+
+def _is_video_data_http_403(exc: YtdlpExecutionError) -> bool:
+    text = "\n".join(exc.fatal_lines or exc.output_lines) or exc.combined_output
+    lower = text.lower()
+    return bool(
+        (exc.http_status == 403 or _contains_http_403_error(text))
+        and (
+            "unable to download video data" in lower
+            or "failed to download video data" in lower
+            or "video data: http error 403" in lower
+        )
+    )
+
+
 def classify_ytdlp_failure_kind(exc: YtdlpExecutionError, options: DownloadOptions) -> YtdlpFailureKind:
-    text = exc.combined_output or "\n".join([str(exc), *exc.output_lines])
-    if _contains_rate_limit_error(text):
-        return YtdlpFailureKind.RATE_LIMIT
-    if exc.bot_check or _contains_bot_check_error(text):
+    if exc.failure_kind is not None:
+        return exc.failure_kind
+
+    fatal_text = "\n".join(exc.fatal_lines or exc.output_lines)
+    if fatal_text:
+        kind = _classify_ytdlp_failure_text(fatal_text)
+        if kind != YtdlpFailureKind.UNKNOWN:
+            return kind
+
+    text = fatal_text or exc.combined_output or "\n".join([str(exc), *exc.output_lines])
+    if exc.bot_check and _contains_bot_check_error(text):
         return YtdlpFailureKind.BOT_CHECK
-    if _contains_permanent_video_error(text):
-        return YtdlpFailureKind.PERMANENT_VIDEO
-    if is_cookie_session_error(text):
-        return YtdlpFailureKind.COOKIE_SESSION
-    if exc.http_403 or _contains_http_403_error(text):
+    if exc.http_403 and _contains_http_403_error(text):
         return YtdlpFailureKind.HTTP_403
-    if exc.missing_js_runtime or _contains_missing_js_runtime_error(text):
+    if exc.missing_js_runtime and _contains_missing_js_runtime_error(text):
         return YtdlpFailureKind.TOOL_CONFIGURATION
-    if exc.stream_interrupted or _contains_stream_interrupted_output(text) or _contains_network_error(text):
-        return YtdlpFailureKind.NETWORK
-    return YtdlpFailureKind.UNKNOWN
+    if exc.stream_interrupted:
+        if _contains_network_timeout_error(text):
+            return YtdlpFailureKind.NETWORK_TIMEOUT
+        if _contains_stream_interrupted_output(text) or _contains_network_error(text):
+            return YtdlpFailureKind.NETWORK
+    return _classify_ytdlp_failure_text(text)
 
 
 def classify_ffmpeg_failure_kind(exc: FFmpegExecutionError) -> FFmpegFailureKind:
@@ -2010,10 +2125,29 @@ def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
 
 def _is_systemic_ytdlp_failure(kind: YtdlpFailureKind) -> bool:
     return kind in {
+        YtdlpFailureKind.HTTP_401,
         YtdlpFailureKind.RATE_LIMIT,
         YtdlpFailureKind.BOT_CHECK,
         YtdlpFailureKind.COOKIE_SESSION,
+        YtdlpFailureKind.LOGIN_REQUIRED,
+        YtdlpFailureKind.PO_TOKEN_OR_VISITOR_DATA,
         YtdlpFailureKind.HTTP_403,
+    }
+
+
+def _uses_ytdlp_failure_kind_friendly_error(kind: YtdlpFailureKind) -> bool:
+    return kind in {
+        YtdlpFailureKind.HTTP_401,
+        YtdlpFailureKind.RATE_LIMIT,
+        YtdlpFailureKind.BOT_CHECK,
+        YtdlpFailureKind.COOKIE_SESSION,
+        YtdlpFailureKind.LOGIN_REQUIRED,
+        YtdlpFailureKind.PO_TOKEN_OR_VISITOR_DATA,
+        YtdlpFailureKind.HTTP_403,
+        YtdlpFailureKind.FORMAT_UNAVAILABLE,
+        YtdlpFailureKind.NETWORK_TIMEOUT,
+        YtdlpFailureKind.NETWORK,
+        YtdlpFailureKind.OUTPUT_PATH,
     }
 
 
@@ -2137,8 +2271,11 @@ def _systemic_block_context(
     friendly = friendly_ytdlp_failure_kind_error(
         failure_kind.value,
         refreshed_rejected=refreshed_retry_used and failure_kind in {
+            YtdlpFailureKind.HTTP_401,
             YtdlpFailureKind.BOT_CHECK,
             YtdlpFailureKind.COOKIE_SESSION,
+            YtdlpFailureKind.LOGIN_REQUIRED,
+            YtdlpFailureKind.PO_TOKEN_OR_VISITOR_DATA,
             YtdlpFailureKind.HTTP_403,
         },
     )
@@ -2158,6 +2295,8 @@ def _systemic_block_context(
         cookie_changed=cookie_changed,
         refreshed_retry_used=refreshed_retry_used,
         output_lines=tuple(_technical_lines_for_ytdlp(exc)[:8]),
+        stage=exc.stage,
+        exit_code=exc.exit_code,
     )
 
 
@@ -2184,7 +2323,118 @@ def _part_from_progress_phase(phase: str) -> str:
         return PART_AUDIO
     if lower in {"thumbnail", "thumb"}:
         return PART_THUMB
+    return YTDLP_PART_UNKNOWN
+
+
+def _normalize_ytdlp_part(part: str) -> str:
+    normalized = (part or "").strip().lower()
+    if normalized in {PART_VIDEO, PART_AUDIO, PART_THUMB}:
+        return normalized
+    return YTDLP_PART_UNKNOWN
+
+
+def _normalize_ytdlp_stage(stage: str) -> str:
+    normalized = (stage or "").strip().lower()
+    if normalized in {YTDLP_STAGE_EXTRACT, YTDLP_STAGE_DOWNLOAD, YTDLP_STAGE_POSTPROCESS}:
+        return normalized
+    return YTDLP_STAGE_UNKNOWN
+
+
+def _current_ytdlp_part() -> str:
+    progress_context = _current_progress_context()
+    if progress_context is None:
+        return YTDLP_PART_UNKNOWN
+    return _normalize_ytdlp_part(_part_from_progress_phase(progress_context.phase))
+
+
+def _attach_ytdlp_attempt_context(exc: YtdlpExecutionError, part: str) -> None:
+    if exc.part == YTDLP_PART_UNKNOWN:
+        exc.part = _normalize_ytdlp_part(part)
+    exc.stage = _normalize_ytdlp_stage(exc.stage)
+
+
+def _ytdlp_start_log_line(command: list[str], options: DownloadOptions, attempt: int, part: str) -> str:
+    _ = options
+    cookies = "enabled" if _command_uses_cookies(command) else "disabled"
+    ipv4 = "forced" if "--force-ipv4" in command else "default"
+    fragments = _command_option_value(command, "-N") or "default"
+    return (
+        "[YT-DLP START] "
+        f"part={_normalize_ytdlp_part(part)} "
+        f"stage={YTDLP_STAGE_EXTRACT} "
+        f"attempt={max(1, int(attempt))} "
+        f"cookies={cookies} "
+        f"ipv4={ipv4} "
+        f"fragments={fragments}"
+    )
+
+
+def _command_uses_cookies(command: list[str]) -> bool:
+    return any(
+        value == YTDLP_COOKIES_OPTION or str(value).startswith(f"{YTDLP_COOKIES_OPTION}=")
+        for value in command
+    )
+
+def _command_option_value(command: list[str], option: str) -> str:
+    for index, value in enumerate(command):
+        if value == option and index + 1 < len(command):
+            return str(command[index + 1])
+        prefix = f"{option}="
+        if str(value).startswith(prefix):
+            return str(value)[len(prefix) :]
     return ""
+
+
+def _log_ytdlp_attempt_failure(
+    log,
+    exc: YtdlpExecutionError,
+    failure_kind: YtdlpFailureKind,
+    attempt: int,
+) -> None:
+    log(
+        "[YT-DLP FAILED] "
+        f"part={exc.part} stage={exc.stage} exit_code={exc.exit_code} attempt={max(1, int(attempt or 1))}"
+    )
+    fatal_lines = list(exc.fatal_lines) or _extract_ytdlp_fatal_lines(exc.output_lines)
+    for line in fatal_lines[:YTDLP_FATAL_LINE_LIMIT]:
+        log(f"[YT-DLP FATAL] {line}")
+    if not fatal_lines:
+        log("[YT-DLP FATAL] <no fatal yt-dlp output captured>")
+    log(f"[YT-DLP CLASS] {failure_kind.value}")
+
+
+def _ytdlp_stage_after_line(current_stage: str, line: str) -> str:
+    current_stage = _normalize_ytdlp_stage(current_stage)
+    lower = (line or "").strip().lower()
+    if not lower:
+        return current_stage
+    if _is_ytdlp_postprocess_line(lower):
+        return YTDLP_STAGE_POSTPROCESS
+    if current_stage != YTDLP_STAGE_POSTPROCESS and _is_ytdlp_download_line(lower):
+        return YTDLP_STAGE_DOWNLOAD
+    return current_stage if current_stage != YTDLP_STAGE_UNKNOWN else YTDLP_STAGE_EXTRACT
+
+
+def _is_ytdlp_download_line(lower_line: str) -> bool:
+    return bool(
+        lower_line.startswith("[download]")
+        or lower_line.startswith("[hlsnative]")
+        or lower_line.startswith("[dashsegments]")
+        or "unable to download video data" in lower_line
+        or "failed to download video data" in lower_line
+        or re.search(r"^\[info\].*downloading \d+ format\(s\)", lower_line)
+    )
+
+
+def _is_ytdlp_postprocess_line(lower_line: str) -> bool:
+    return (
+        lower_line.startswith("[merger]")
+        or lower_line.startswith("[extractaudio]")
+        or lower_line.startswith("[fixupm3u8]")
+        or lower_line.startswith("[videoconvertor]")
+        or lower_line.startswith("[metadata]")
+        or "post-processing" in lower_line
+    )
 
 
 def _run_ytdlp(command: list[str], cancel_controller: DownloadController | None = None) -> str:
@@ -2192,11 +2442,8 @@ def _run_ytdlp(command: list[str], cancel_controller: DownloadController | None 
     process = None
     output_tail: list[str] = []
     meaningful_lines: list[str] = []
-    bot_check = False
-    http_403 = False
-    missing_js_runtime = False
-    premiere_safe_format_error = False
     stream_interrupted = False
+    stage = YTDLP_STAGE_EXTRACT
     return_code = 0
     try:
         process = subprocess.Popen(
@@ -2219,15 +2466,12 @@ def _run_ytdlp(command: list[str], cancel_controller: DownloadController | None 
                     _terminate_process_tree(process)
                     raise DownloadCancelled("download cancelled/interrupted")
                 line = line.rstrip("\r\n")
-                _append_limited(output_tail, line, 200)
                 sanitized = _sanitize_ytdlp_output_line(line)
+                if sanitized:
+                    _append_limited(output_tail, sanitized, YTDLP_OUTPUT_TAIL_LIMIT)
                 if _is_meaningful_ytdlp_line(sanitized):
                     _append_limited(meaningful_lines, sanitized, 50)
-                bot_check = bot_check or _contains_bot_check_error(line)
-                http_403 = http_403 or _contains_http_403_error(line)
-                missing_js_runtime = missing_js_runtime or _contains_missing_js_runtime_error(line)
-                premiere_safe_format_error = premiere_safe_format_error or _contains_premiere_safe_format_error(line)
-                stream_interrupted = stream_interrupted or _contains_stream_interrupted_output(line)
+                stage = _ytdlp_stage_after_line(stage, sanitized)
                 _emit_ytdlp_progress_from_line(sanitized)
                 if _cancel_requested(cancel_controller):
                     _terminate_process_tree(process)
@@ -2237,7 +2481,11 @@ def _run_ytdlp(command: list[str], cancel_controller: DownloadController | None 
             if _cancel_requested(cancel_controller):
                 _terminate_process_tree(process)
                 raise DownloadCancelled("download cancelled/interrupted")
-            _append_limited(output_tail, "yt-dlp process did not exit promptly after output ended", 200)
+            _append_limited(
+                output_tail,
+                "yt-dlp process did not exit promptly after output ended",
+                YTDLP_OUTPUT_TAIL_LIMIT,
+            )
             stream_interrupted = True
             _terminate_process_tree(process)
             return_code = process.poll()
@@ -2260,20 +2508,29 @@ def _run_ytdlp(command: list[str], cancel_controller: DownloadController | None 
         return output
 
     if return_code != 0:
+        diagnostic_lines = meaningful_lines or _last_meaningful_output_lines("", output, limit=50)
+        fatal_lines = _extract_ytdlp_fatal_lines(diagnostic_lines or output_tail)
+        fatal_text = "\n".join(fatal_lines)
+        failure_kind = _classify_ytdlp_failure_text(fatal_text or output)
+        http_status = _http_status_from_text(fatal_text)
+        stream_interrupted = stream_interrupted or (
+            failure_kind in {YtdlpFailureKind.NETWORK, YtdlpFailureKind.NETWORK_TIMEOUT}
+            and _contains_stream_interrupted_output(fatal_text or output)
+        )
         raise YtdlpExecutionError(
             return_code,
-            _classify_ytdlp_error_from_flags(
-                output,
-                bot_check=bot_check,
-                missing_js_runtime=missing_js_runtime,
-                premiere_safe_format_error=premiere_safe_format_error,
-            ),
-            meaningful_lines or _last_meaningful_output_lines("", output, limit=50),
-            bot_check,
-            http_403,
-            missing_js_runtime,
+            _ytdlp_failure_message(failure_kind, fatal_text or output),
+            output_tail,
+            failure_kind == YtdlpFailureKind.BOT_CHECK,
+            failure_kind == YtdlpFailureKind.HTTP_403,
+            failure_kind == YtdlpFailureKind.TOOL_CONFIGURATION,
             output,
             stream_interrupted,
+            failure_kind=failure_kind,
+            fatal_lines=fatal_lines,
+            http_status=http_status,
+            stage=stage,
+            part=_current_ytdlp_part(),
         )
 
     return output
@@ -2283,6 +2540,48 @@ def _append_limited(items: list[str], value: str, limit: int) -> None:
     items.append(value)
     if len(items) > limit:
         del items[: len(items) - limit]
+
+
+def _sanitize_ytdlp_output_lines(lines: list[str] | tuple[str, ...]) -> list[str]:
+    sanitized: list[str] = []
+    for line in lines or []:
+        safe_line = _sanitize_ytdlp_output_line(line)
+        if safe_line:
+            sanitized.append(safe_line)
+    return sanitized
+
+
+def _bounded_sanitized_ytdlp_output(text: str, limit: int = FFMPEG_COMBINED_OUTPUT_LIMIT) -> str:
+    lines = _sanitize_ytdlp_output_lines(str(text or "").splitlines())
+    return _join_bounded_tail(lines[-YTDLP_OUTPUT_TAIL_LIMIT:], max(1, int(limit)))
+
+
+def _extract_ytdlp_fatal_lines(output_lines: list[str] | tuple[str, ...]) -> list[str]:
+    lines = [
+        line
+        for line in _sanitize_ytdlp_output_lines(output_lines)[-YTDLP_OUTPUT_TAIL_LIMIT:]
+        if _is_meaningful_ytdlp_line(line)
+    ]
+    if not lines:
+        return []
+
+    marker_indexes = [index for index, line in enumerate(lines) if _is_ytdlp_fatal_marker_line(line)]
+    if marker_indexes:
+        start = marker_indexes[-1]
+        selected = lines[start : start + YTDLP_FATAL_LINE_LIMIT]
+        return selected[-YTDLP_FATAL_LINE_LIMIT:]
+
+    return lines[-YTDLP_FATAL_LINE_LIMIT:]
+
+
+def _is_ytdlp_fatal_marker_line(line: str) -> bool:
+    text = (line or "").strip()
+    lower = text.lower()
+    return bool(
+        re.search(r"(^|\s)error:", text, flags=re.IGNORECASE)
+        or lower.startswith("traceback")
+        or "traceback (most recent call last)" in lower
+    )
 
 
 def _emit_ytdlp_progress_from_line(line: str) -> None:
@@ -2318,6 +2617,85 @@ def _emit_ytdlp_progress_from_line(line: str) -> None:
         eta=parsed.get("eta"),
         fragment=parsed.get("fragment"),
     )
+
+
+def _coerce_ytdlp_failure_kind(kind: YtdlpFailureKind | str | None) -> YtdlpFailureKind | None:
+    if kind is None:
+        return None
+    if isinstance(kind, YtdlpFailureKind):
+        return kind
+    normalized = str(kind or "").strip().lower()
+    if normalized == "rate_limit":
+        normalized = YtdlpFailureKind.RATE_LIMIT.value
+    for candidate in YtdlpFailureKind:
+        if candidate.value == normalized or candidate.name.lower() == normalized:
+            return candidate
+    return YtdlpFailureKind.UNKNOWN
+
+
+def _classify_ytdlp_failure_text(text: str) -> YtdlpFailureKind:
+    if _contains_http_401_error(text):
+        return YtdlpFailureKind.HTTP_401
+    if _contains_http_403_error(text):
+        return YtdlpFailureKind.HTTP_403
+    if _contains_rate_limit_error(text):
+        return YtdlpFailureKind.RATE_LIMIT
+    if _contains_bot_check_error(text):
+        return YtdlpFailureKind.BOT_CHECK
+    if _contains_po_token_or_visitor_data_error(text):
+        return YtdlpFailureKind.PO_TOKEN_OR_VISITOR_DATA
+    if _contains_login_required_error(text):
+        return YtdlpFailureKind.LOGIN_REQUIRED
+    if _contains_format_unavailable_error(text):
+        return YtdlpFailureKind.FORMAT_UNAVAILABLE
+    if _contains_permanent_video_error(text):
+        return YtdlpFailureKind.PERMANENT_VIDEO
+    if is_cookie_session_error(text):
+        return YtdlpFailureKind.COOKIE_SESSION
+    if _contains_missing_js_runtime_error(text):
+        return YtdlpFailureKind.TOOL_CONFIGURATION
+    if _contains_network_timeout_error(text):
+        return YtdlpFailureKind.NETWORK_TIMEOUT
+    if _contains_network_error(text) or _contains_stream_interrupted_output(text):
+        return YtdlpFailureKind.NETWORK
+    if _contains_output_path_error(text):
+        return YtdlpFailureKind.OUTPUT_PATH
+    return YtdlpFailureKind.UNKNOWN
+
+
+def _ytdlp_failure_message(kind: YtdlpFailureKind, text: str) -> str:
+    if kind == YtdlpFailureKind.BOT_CHECK:
+        return "YouTube requires sign-in/bot verification; enable Cookies and select a valid cookies.txt"
+    if kind == YtdlpFailureKind.TOOL_CONFIGURATION:
+        return "yt-dlp needs a supported JavaScript runtime for this YouTube extraction"
+    if kind == YtdlpFailureKind.FORMAT_UNAVAILABLE:
+        return "no Premiere-safe MP4 H.264/AAC format available"
+    if kind == YtdlpFailureKind.HTTP_401:
+        return "yt-dlp failed with HTTP 401"
+    if kind == YtdlpFailureKind.HTTP_403:
+        return "yt-dlp failed with HTTP 403"
+    if kind == YtdlpFailureKind.RATE_LIMIT:
+        return "yt-dlp failed with HTTP 429 rate limiting"
+    if kind == YtdlpFailureKind.LOGIN_REQUIRED:
+        return "YouTube sign-in is required"
+    if kind == YtdlpFailureKind.PO_TOKEN_OR_VISITOR_DATA:
+        return "yt-dlp requires PO token or Visitor Data"
+    if kind == YtdlpFailureKind.PERMANENT_VIDEO:
+        return _classify_ytdlp_error(text)
+    if kind == YtdlpFailureKind.NETWORK_TIMEOUT:
+        return "yt-dlp network timeout"
+    if kind == YtdlpFailureKind.NETWORK:
+        return "yt-dlp network error"
+    if kind == YtdlpFailureKind.OUTPUT_PATH:
+        return "yt-dlp output path error"
+    return "nonzero yt-dlp exit code"
+
+
+def _http_status_from_text(text: str) -> int | None:
+    match = re.search(r"(?i)\b(?:http\s+error\s+)?(401|403|429)\b", text or "")
+    if match is None:
+        return None
+    return int(match.group(1))
 
 
 def _classify_ytdlp_error_from_flags(
@@ -2486,9 +2864,23 @@ def cookie_session_error_message(options: DownloadOptions) -> str:
     return FILE_COOKIE_SESSION_ERROR_MESSAGE
 
 
-def _contains_http_403_error(stderr: str) -> bool:
-    lower = (stderr or "").lower()
-    return "http error 403" in lower or "forbidden" in lower
+def _contains_http_401_error(text: str) -> bool:
+    lower = (text or "").lower()
+    return bool(
+        "http error 401" in lower
+        or "401: unauthorized" in lower
+        or re.search(r"\b401\b[^\n\r]*(unauthorized|authorization required)", lower)
+    )
+
+
+def _contains_http_403_error(text: str) -> bool:
+    lower = (text or "").lower()
+    return bool(
+        "http error 403" in lower
+        or "403: forbidden" in lower
+        or re.search(r"\b403\b[^\n\r]*\bforbidden\b", lower)
+        or re.search(r"\bforbidden\b[^\n\r]*\b403\b", lower)
+    )
 
 
 def _contains_rate_limit_error(text: str) -> bool:
@@ -2501,6 +2893,33 @@ def _contains_rate_limit_error(text: str) -> bool:
         or "rate-limit" in lower
         or "temporarily blocked" in lower
     )
+
+
+def _contains_login_required_error(text: str) -> bool:
+    lower = (text or "").lower()
+    return (
+        "login_required" in lower
+        or "login required" in lower
+        or "sign in to continue" in lower
+        or "please sign in to continue" in lower
+        or "authentication required" in lower
+        or "authentication is required" in lower
+    )
+
+
+def _contains_po_token_or_visitor_data_error(text: str) -> bool:
+    lower = (text or "").lower()
+    return (
+        "po token" in lower
+        or "potoken" in lower
+        or "visitor data" in lower
+        or "visitor_data" in lower
+        or "missing required visitor data" in lower
+    )
+
+
+def _contains_format_unavailable_error(text: str) -> bool:
+    return _contains_premiere_safe_format_error(text)
 
 
 def _contains_permanent_video_error(text: str) -> bool:
@@ -2532,12 +2951,21 @@ def _contains_permanent_video_error(text: str) -> bool:
     )
 
 
+def _contains_network_timeout_error(text: str) -> bool:
+    lower = (text or "").lower()
+    return (
+        "timed out" in lower
+        or "timeout" in lower
+        or "read timed out" in lower
+        or "connection timed out" in lower
+        or "operation timed out" in lower
+    )
+
+
 def _contains_network_error(text: str) -> bool:
     lower = (text or "").lower()
     return (
         "network error" in lower
-        or "timed out" in lower
-        or "timeout" in lower
         or "temporary failure" in lower
         or "connection reset" in lower
         or "connection aborted" in lower
@@ -2554,10 +2982,26 @@ def _contains_premiere_safe_format_error(text: str) -> bool:
     lower = (text or "").lower()
     return (
         "premiere_safe_mp4_validation_failed" in lower
+        or "premiere-safe validation failed" in lower
         or "requested format is not available" in lower
         or "requested format not available" in lower
         or "no video formats found" in lower
         or "no suitable formats" in lower
+    )
+
+
+def _contains_output_path_error(text: str) -> bool:
+    lower = (text or "").lower()
+    return (
+        "output path" in lower
+        or "filename too long" in lower
+        or "file name too long" in lower
+        or "path too long" in lower
+        or "invalid argument" in lower and "output" in lower
+        or "permission denied" in lower
+        or "access is denied" in lower
+        or "winerror 5" in lower
+        or "no space left on device" in lower
     )
 
 
@@ -2789,6 +3233,9 @@ def _redact_sensitive_url_query_values(url: str) -> str:
         text = str(url or "")
     except Exception:
         return ""
+    lower = text.lower()
+    if "googlevideo.com" in lower or "/videoplayback" in lower:
+        return "<signed-media-url-redacted>"
     if not text or "?" not in text:
         return text
 
@@ -2802,7 +3249,7 @@ def _redact_sensitive_url_query_values(url: str) -> str:
     prefix, query = before_fragment.split("?", 1)
     query = re.sub(
         r"(?i)(?P<prefix>^|[&;])"
-        r"(?P<name>key|api_key|token|access_token)"
+        r"(?P<name>key|api_key|token|access_token|sig|signature|lsig)"
         r"(?P<equals>=)"
         r"(?P<value>[^&;#]*)",
         lambda match: f"{match.group('prefix')}{match.group('name')}{match.group('equals')}***",
@@ -2995,14 +3442,9 @@ def _is_meaningful_ytdlp_line(line: str) -> bool:
 
 
 def _log_friendly_ytdlp_error(log, exc: YtdlpExecutionError, options: DownloadOptions) -> None:
-    text = exc.combined_output or "\n".join([str(exc), *exc.output_lines])
+    text = "\n".join(exc.fatal_lines or exc.output_lines) or exc.combined_output
     failure_kind = classify_ytdlp_failure_kind(exc, options)
-    if failure_kind in {
-        YtdlpFailureKind.RATE_LIMIT,
-        YtdlpFailureKind.BOT_CHECK,
-        YtdlpFailureKind.COOKIE_SESSION,
-        YtdlpFailureKind.HTTP_403,
-    }:
+    if _uses_ytdlp_failure_kind_friendly_error(failure_kind):
         friendly = friendly_ytdlp_failure_kind_error(failure_kind.value)
     else:
         friendly = classify_ytdlp_error(
@@ -3032,10 +3474,17 @@ def _log_friendly_general_error(log, message: str, technical_lines: list[str] | 
 
 
 def _technical_lines_for_ytdlp(exc: YtdlpExecutionError) -> list[str]:
-    lines = [line for line in exc.output_lines if line.strip()]
+    lines = [line for line in (exc.fatal_lines or exc.output_lines) if line.strip()]
+    kind = exc.failure_kind.value if exc.failure_kind is not None else YtdlpFailureKind.UNKNOWN.value
     if not lines:
         return [f"yt-dlp exit code {exc.exit_code}: {exc}"]
-    return [*lines, f"yt-dlp exit code {exc.exit_code}"]
+    return [
+        *lines[-YTDLP_FATAL_LINE_LIMIT:],
+        f"yt-dlp exit code {exc.exit_code}",
+        f"yt-dlp part {exc.part}",
+        f"yt-dlp stage {exc.stage}",
+        f"yt-dlp failure kind {kind}",
+    ]
 
 
 def _technical_lines_for_ffmpeg(exc: FFmpegExecutionError) -> list[str]:
