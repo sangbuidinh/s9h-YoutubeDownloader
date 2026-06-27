@@ -35,6 +35,7 @@ from core.app_settings import (
 )
 from core.error_messages import classify_api_error, classify_general_error, format_friendly_error
 from core.file_status import apply_statuses, build_output_paths, should_show_not_downloaded
+from core.logging_utils import timestamp_log_lines
 from core.progress_status import ProgressEvent, format_progress_event_lines, put_latest_progress_event
 from core.state_store import (
     STATUS_DOWNLOADED,
@@ -2761,12 +2762,13 @@ class YouTubeDownloaderWindow:
 
     def _append_log(self, message: str) -> None:
         safe_message = sanitize_log_text(message)
-        tag = self._log_tag_for(safe_message)
         self.log_text.configure(state="normal")
-        if tag:
-            self.log_text.insert("end", safe_message + "\n", tag)
-        else:
-            self.log_text.insert("end", safe_message + "\n")
+        for source_line, display_line in timestamp_log_lines(safe_message):
+            tag = self._log_tag_for(source_line)
+            if tag:
+                self.log_text.insert("end", display_line + "\n", tag)
+            else:
+                self.log_text.insert("end", display_line + "\n")
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
 

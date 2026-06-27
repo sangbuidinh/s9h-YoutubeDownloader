@@ -379,9 +379,18 @@ class _PreparedCookieAttempt:
 
 
 @dataclass
+class _YtdlpBatchState:
+    cookie_bootstrap_media_mode: bool = False
+    media_settle_delay_seconds: int = 0
+    cookie_snapshot_sha256: str = ""
+
+
+@dataclass
 class _YtdlpAttemptState:
     verified_retry_used: bool = False
     cookieless_fallback_used: bool = False
+    authenticated_infojson_fallback_used: bool = False
+    batch_state: _YtdlpBatchState | None = None
 
 
 def _emit_progress_event(progress_callback, event: ProgressEvent) -> None:
@@ -637,6 +646,7 @@ def download_items(
     mode_parts = required_parts(options.download_mode)
     video_total = len(videos)
     cancelled = False
+    ytdlp_batch_state = _YtdlpBatchState()
 
     if options.cookies_enabled:
         log("[INFO] Cookies enabled: yes")
@@ -703,7 +713,7 @@ def download_items(
                                 options,
                                 log,
                                 cancel_controller,
-                                _YtdlpAttemptState(),
+                                _YtdlpAttemptState(batch_state=ytdlp_batch_state),
                             )
                         finally:
                             _restore_progress_context(previous_progress)
@@ -731,7 +741,7 @@ def download_items(
                                         options,
                                         log,
                                         cancel_controller,
-                                        _YtdlpAttemptState(),
+                                        _YtdlpAttemptState(batch_state=ytdlp_batch_state),
                                     )
                                 finally:
                                     _restore_progress_context(previous_progress)
@@ -1887,6 +1897,68 @@ def _run_ytdlp_with_retries(
     current_command = list(base_command)
     attempt_number = 0
     use_cookies_for_attempt = bool(options.cookies_enabled)
+    attempt_part = _current_ytdlp_part()
+
+    if _batch_cookie_source_changed(options, attempt_state.batch_state):
+        _reset_cookie_bootstrap_batch_mode(attempt_state.batch_state)
+        log(
+            "[COOKIE BATCH MODE] Cookie source changed. "
+            "Returning to the normal cookie-first strategy."
+        )
+
+    if _should_start_in_cookie_bootstrap_batch_mode(
+        options,
+        attempt_part,
+        base_command,
+        attempt_state.batch_state,
+    ):
+        attempt_state.cookieless_fallback_used = True
+        attempt_state.authenticated_infojson_fallback_used = True
+        log(
+            "[COOKIE BATCH MODE] Reusing the successful batch strategy: "
+            "authenticated metadata first, then cookieless media transfer."
+        )
+        attempt_number += 1
+        try:
+            current_command = _prepare_authenticated_infojson_download_command(
+                base_command,
+                options,
+                log,
+                cancel_controller,
+                attempt_number,
+                attempt_part,
+            )
+        except YtdlpExecutionError as bootstrap_exc:
+            _attach_ytdlp_attempt_context(bootstrap_exc, attempt_part)
+            bootstrap_kind = classify_ytdlp_failure_kind(bootstrap_exc, options)
+            bootstrap_exc.failure_kind = bootstrap_kind
+            _log_ytdlp_attempt_failure(
+                log,
+                bootstrap_exc,
+                bootstrap_kind,
+                attempt_number,
+            )
+            _reset_cookie_bootstrap_batch_mode(attempt_state.batch_state)
+            attempt_state.cookieless_fallback_used = False
+            attempt_state.authenticated_infojson_fallback_used = False
+            current_command = list(base_command)
+            use_cookies_for_attempt = bool(options.cookies_enabled)
+            log(
+                "[COOKIE BATCH MODE] Authenticated metadata extraction failed. "
+                "Falling back to the normal cookie-first strategy."
+            )
+        else:
+            use_cookies_for_attempt = False
+            settle_delay = max(
+                0,
+                int(attempt_state.batch_state.media_settle_delay_seconds),
+            )
+            if settle_delay:
+                log(
+                    "[COOKIE BATCH MODE] Waiting "
+                    f"{settle_delay} seconds before the media transfer."
+                )
+                _sleep_with_cancel(settle_delay, cancel_controller)
 
     while True:
         _raise_if_cancelled(cancel_controller)
@@ -1913,8 +1985,15 @@ def _run_ytdlp_with_retries(
                 _log_missing_js_runtime_warning(log, [stderr])
             if attempt_state.cookieless_fallback_used and not prepared_attempt.cookies_used:
                 log(
-                    "[COOKIE FALLBACK SUCCESS] yt-dlp media transfer completed without cookies "
-                    "after the cookie-authenticated media request returned HTTP 403."
+                    "[COOKIE FALLBACK SUCCESS] Authenticated metadata was reused and the media "
+                    "download completed without cookies."
+                )
+                _record_cookie_bootstrap_batch_success(
+                    options,
+                    attempt_state.batch_state,
+                    http_403_retries,
+                    http_403_delays,
+                    log,
                 )
             return
         except YtdlpExecutionError as exc:
@@ -1923,7 +2002,7 @@ def _run_ytdlp_with_retries(
             exc.failure_kind = failure_kind
             _log_ytdlp_attempt_failure(log, exc, failure_kind, attempt_number)
 
-            if _should_retry_video_without_cookies(
+            if _should_use_authenticated_infojson_fallback(
                 exc,
                 failure_kind,
                 options,
@@ -1931,12 +2010,34 @@ def _run_ytdlp_with_retries(
                 attempt_state,
             ):
                 attempt_state.cookieless_fallback_used = True
-                use_cookies_for_attempt = False
-                current_command = list(base_command)
+                attempt_state.authenticated_infojson_fallback_used = True
                 log(
-                    "[COOKIE FALLBACK] Cookie-authenticated video data request returned HTTP 403. "
-                    "Retrying immediately without cookies."
+                    "[COOKIE FALLBACK] Cookie-authenticated media request returned HTTP 403. "
+                    "Extracting authenticated metadata, then downloading the saved media URLs "
+                    "without cookies."
                 )
+                attempt_number += 1
+                try:
+                    current_command = _prepare_authenticated_infojson_download_command(
+                        base_command,
+                        options,
+                        log,
+                        cancel_controller,
+                        attempt_number,
+                        attempt_part,
+                    )
+                except YtdlpExecutionError as bootstrap_exc:
+                    _attach_ytdlp_attempt_context(bootstrap_exc, attempt_part)
+                    bootstrap_kind = classify_ytdlp_failure_kind(bootstrap_exc, options)
+                    bootstrap_exc.failure_kind = bootstrap_kind
+                    _log_ytdlp_attempt_failure(
+                        log,
+                        bootstrap_exc,
+                        bootstrap_kind,
+                        attempt_number,
+                    )
+                    raise
+                use_cookies_for_attempt = False
                 continue
 
             if (
@@ -1983,7 +2084,99 @@ def _run_ytdlp_with_retries(
             raise
 
 
-def _should_retry_video_without_cookies(
+def _should_start_in_cookie_bootstrap_batch_mode(
+    options: DownloadOptions,
+    part: str,
+    command: list[str],
+    batch_state: _YtdlpBatchState | None,
+) -> bool:
+    return bool(
+        batch_state is not None
+        and batch_state.cookie_bootstrap_media_mode
+        and options.cookies_enabled
+        and part == PART_VIDEO
+        and "--load-info-json" not in command
+        and any(
+            str(value).startswith(("https://www.youtube.com/", "https://youtu.be/"))
+            for value in command
+        )
+    )
+
+
+def _record_cookie_bootstrap_batch_success(
+    options: DownloadOptions,
+    batch_state: _YtdlpBatchState | None,
+    http_403_retries: int,
+    http_403_delays: list[int],
+    log,
+) -> None:
+    if batch_state is None or not options.cookies_enabled:
+        return
+
+    was_enabled = batch_state.cookie_bootstrap_media_mode
+    batch_state.cookie_bootstrap_media_mode = True
+    if http_403_retries > 0:
+        delay_index = min(http_403_retries, len(http_403_delays)) - 1
+        batch_state.media_settle_delay_seconds = max(
+            batch_state.media_settle_delay_seconds,
+            int(http_403_delays[delay_index]),
+        )
+    snapshot = _options_cookie_snapshot(options)
+    if snapshot and snapshot.usable:
+        batch_state.cookie_snapshot_sha256 = snapshot.sha256
+
+    if not was_enabled:
+        delay_text = (
+            f" A {batch_state.media_settle_delay_seconds}-second media settling delay "
+            "will be used before later videos."
+            if batch_state.media_settle_delay_seconds
+            else ""
+        )
+        log(
+            "[COOKIE BATCH MODE] Enabled for the remaining videos in this batch."
+            + delay_text
+        )
+
+
+def _options_cookie_snapshot(options: DownloadOptions) -> _CookieFileSnapshot | None:
+    if not options.cookies_enabled:
+        return None
+    try:
+        cookie_path = effective_cookies_path(options)
+    except DownloadError:
+        return None
+    return _cookie_file_snapshot(Path(cookie_path))
+
+
+def _batch_cookie_source_changed(
+    options: DownloadOptions,
+    batch_state: _YtdlpBatchState | None,
+) -> bool:
+    if (
+        batch_state is None
+        or not batch_state.cookie_bootstrap_media_mode
+        or not batch_state.cookie_snapshot_sha256
+    ):
+        return False
+    snapshot = _options_cookie_snapshot(options)
+    return bool(
+        snapshot
+        and snapshot.usable
+        and snapshot.sha256 != batch_state.cookie_snapshot_sha256
+    )
+
+
+def _reset_cookie_bootstrap_batch_mode(
+    batch_state: _YtdlpBatchState | None,
+) -> None:
+    if batch_state is None:
+        return
+    batch_state.cookie_bootstrap_media_mode = False
+    batch_state.media_settle_delay_seconds = 0
+    batch_state.cookie_snapshot_sha256 = ""
+
+
+def _should_use_authenticated_infojson_fallback(
     exc: YtdlpExecutionError,
     failure_kind: YtdlpFailureKind,
     options: DownloadOptions,
@@ -1994,7 +2187,7 @@ def _should_retry_video_without_cookies(
         options.cookies_enabled
         and attempt_info is not None
         and attempt_info.cookies_used
-        and not attempt_state.cookieless_fallback_used
+        and not attempt_state.authenticated_infojson_fallback_used
         and failure_kind == YtdlpFailureKind.HTTP_403
         and exc.part == PART_VIDEO
         and _is_video_data_http_403(exc)
@@ -2012,6 +2205,110 @@ def _is_video_data_http_403(exc: YtdlpExecutionError) -> bool:
             or "video data: http error 403" in lower
         )
     )
+
+
+def _prepare_authenticated_infojson_download_command(
+    command: list[str],
+    options: DownloadOptions,
+    log,
+    cancel_controller: DownloadController | None,
+    attempt_number: int,
+    part: str,
+) -> list[str]:
+    output_template = _command_option_value(command, "-o")
+    if not output_template:
+        raise DownloadError("yt-dlp output template missing for authenticated media fallback")
+
+    staging_dir = Path(output_template).parent
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    bootstrap_dir = Path(
+        tempfile.mkdtemp(
+            prefix=".s9h-auth-info-",
+            dir=str(staging_dir),
+        )
+    )
+    bootstrap_template = str(bootstrap_dir / "authenticated.%(ext)s")
+    extract_command = _build_authenticated_infojson_extract_command(
+        command,
+        bootstrap_template,
+    )
+
+    with _prepared_cookie_attempt(
+        extract_command,
+        options,
+        log,
+        use_cookies=True,
+    ) as prepared_attempt:
+        log(
+            _ytdlp_start_log_line(
+                prepared_attempt.command,
+                options,
+                attempt_number,
+                part,
+            )
+        )
+        _run_ytdlp(prepared_attempt.command, cancel_controller)
+
+    info_json_path = _select_authenticated_infojson(bootstrap_dir)
+    log(
+        "[COOKIE FALLBACK] Authenticated extraction completed. "
+        "Downloading from saved media URLs without cookies."
+    )
+    return _build_infojson_media_download_command(command, info_json_path)
+
+
+def _build_authenticated_infojson_extract_command(
+    command: list[str],
+    bootstrap_template: str,
+) -> list[str]:
+    prepared = _remove_command_flags(
+        _strip_cookie_options(list(command)),
+        {
+            "--no-write-info-json",
+            "--write-info-json",
+            "--skip-download",
+        },
+    )
+    prepared = _replace_option(prepared, "-o", bootstrap_template)
+    prepared = _ensure_flag(prepared, "--write-info-json")
+    prepared = _ensure_flag(prepared, "--skip-download")
+    return prepared
+
+
+def _build_infojson_media_download_command(
+    command: list[str],
+    info_json_path: Path,
+) -> list[str]:
+    prepared = _strip_url_arguments(_strip_cookie_options(list(command)))
+    prepared = _remove_command_flags(
+        prepared,
+        {
+            "--write-info-json",
+            "--skip-download",
+        },
+    )
+    prepared = _ensure_flag(prepared, "--no-write-info-json")
+    prepared = _replace_option(
+        prepared,
+        "--load-info-json",
+        str(info_json_path),
+    )
+    return prepared
+
+
+def _select_authenticated_infojson(bootstrap_dir: Path) -> Path:
+    matches = sorted(
+        (
+            path
+            for path in bootstrap_dir.glob("*.info.json")
+            if path.is_file() and path.stat().st_size > 0
+        ),
+        key=lambda path: path.stat().st_mtime_ns,
+        reverse=True,
+    )
+    if not matches:
+        raise DownloadError("authenticated yt-dlp metadata file was not created")
+    return matches[0]
 
 
 def classify_ytdlp_failure_kind(exc: YtdlpExecutionError, options: DownloadOptions) -> YtdlpFailureKind:
@@ -3018,6 +3315,16 @@ def _contains_stream_interrupted_output(text: str) -> bool:
     )
 
 
+def _remove_command_flags(command: list[str], flags: set[str]) -> list[str]:
+    return [value for value in command if value not in flags]
+
+
+def _strip_url_arguments(command: list[str]) -> list[str]:
+    return [
+        value
+        for value in command
+        if not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", str(value or ""))
+    ]
 def _replace_option(command: list[str], option: str, value: str) -> list[str]:
     replaced = []
     index = 0

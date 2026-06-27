@@ -139,8 +139,9 @@ def main() -> int:
     _test_recovered_http_403_warning_succeeds()
     _test_warning_403_then_format_fatal_is_not_403()
     _test_true_fatal_403_retries_with_fatal_logs()
-    _test_cookie_media_403_falls_back_without_delay()
-    _test_cookie_media_403_fallback_then_standard_retries()
+    _test_cookie_media_403_uses_authenticated_infojson_fallback()
+    _test_authenticated_infojson_fallback_then_standard_retries()
+    _test_cookie_batch_mode_skips_repeated_cookie_media_failure()
     _test_fatal_http_statuses()
     _test_stage_tracking()
     _test_sanitized_fatal_lines()
@@ -318,7 +319,7 @@ def _test_true_fatal_403_retries_with_fatal_logs() -> None:
     )
 
 
-def _test_cookie_media_403_falls_back_without_delay() -> None:
+def _test_cookie_media_403_uses_authenticated_infojson_fallback() -> None:
     logs: list[str] = []
     calls: list[list[str]] = []
     delays: list[int] = []
@@ -337,15 +338,20 @@ def _test_cookie_media_403_falls_back_without_delay() -> None:
                     failure_kind=YtdlpFailureKind.HTTP_403,
                     fatal_lines=[fatal],
                     http_status=403,
-                    stage="extract",
+                    stage="download",
                     part="video",
                 )
+            if "--write-info-json" in command:
+                _write_fake_infojson(command)
+                return ""
+            _assert("--load-info-json" in command, "media fallback did not use --load-info-json")
             return ""
 
         downloader._run_ytdlp = fake_run
         downloader._sleep_with_cancel = lambda seconds, _controller=None: delays.append(int(seconds))
-        with TemporaryDirectory(prefix="cookie_fallback_success_") as temp_dir:
-            cookie_path = Path(temp_dir) / "cookies.txt"
+        with TemporaryDirectory(prefix="cookie_infojson_success_") as temp_dir:
+            temp_root = Path(temp_dir)
+            cookie_path = temp_root / "cookies.txt"
             cookie_path.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
             options = DownloadOptions(
                 ".",
@@ -354,9 +360,18 @@ def _test_cookie_media_403_falls_back_without_delay() -> None:
                 cookies_enabled=True,
                 cookies_path=str(cookie_path),
             )
+            command = [
+                "yt-dlp",
+                "-N",
+                "1",
+                "--no-write-info-json",
+                "-o",
+                str(temp_root / "stage" / "video.%(ext)s"),
+                "https://www.youtube.com/watch?v=cookie403",
+            ]
             with _progress_phase("Video"):
                 downloader._run_ytdlp_with_retries(
-                    ["yt-dlp", "https://www.youtube.com/watch?v=cookie403"],
+                    command,
                     options,
                     logs.append,
                 )
@@ -364,45 +379,51 @@ def _test_cookie_media_403_falls_back_without_delay() -> None:
         downloader._run_ytdlp = old_run_ytdlp
         downloader._sleep_with_cancel = old_sleep
 
-    _assert(len(calls) == 2, f"cookie fallback call count was wrong: {len(calls)}")
-    _assert(downloader._command_uses_cookies(calls[0]), "first attempt did not use cookies")
-    _assert(not downloader._command_uses_cookies(calls[1]), "fallback attempt still used cookies")
-    _assert(delays == [], f"cookie fallback waited before cookieless retry: {delays}")
+    _assert(len(calls) == 3, f"authenticated infojson fallback call count was wrong: {len(calls)}")
+    initial, extract, media = calls
+    _assert(downloader._command_uses_cookies(initial), "first attempt did not use cookies")
+    _assert(downloader._command_uses_cookies(extract), "authenticated extraction did not use cookies")
+    _assert("--skip-download" in extract, "authenticated extraction did not skip media download")
+    _assert("--write-info-json" in extract, "authenticated extraction did not write info JSON")
+    _assert("--no-write-info-json" not in extract, "authenticated extraction kept --no-write-info-json")
+    _assert(not downloader._command_uses_cookies(media), "saved-media download still used cookies")
+    _assert("--load-info-json" in media, "saved-media download did not load info JSON")
+    _assert(
+        not any(str(value).startswith("https://www.youtube.com/") for value in media),
+        "saved-media download re-ran the YouTube extractor",
+    )
+    _assert(delays == [], f"authenticated infojson fallback waited before media retry: {delays}")
     joined = "\n".join(logs)
-    _assert("[COOKIE FALLBACK]" in joined, "cookie fallback diagnostic missing")
-    _assert("Retrying immediately without cookies" in joined, "cookieless retry message missing")
-    _assert("[COOKIE FALLBACK SUCCESS]" in joined, "cookie fallback success diagnostic missing")
-    _assert("attempt=1 cookies=enabled" in joined, "first attempt cookie state was not logged")
-    _assert("attempt=2 cookies=disabled" in joined, "fallback attempt cookie state was not logged")
-    _assert("Retrying in 10 seconds" not in joined, "HTTP 403 delay ran before cookieless fallback")
+    _assert("Extracting authenticated metadata" in joined, "authenticated extraction message missing")
+    _assert("Downloading from saved media URLs without cookies" in joined, "saved-media message missing")
+    _assert("[COOKIE FALLBACK SUCCESS]" in joined, "authenticated infojson success diagnostic missing")
+    _assert("Retrying in 10 seconds" not in joined, "HTTP 403 delay ran before infojson fallback")
 
 
-def _test_cookie_media_403_fallback_then_standard_retries() -> None:
+def _test_authenticated_infojson_fallback_then_standard_retries() -> None:
     logs: list[str] = []
     calls: list[list[str]] = []
     delays: list[int] = []
     old_run_ytdlp = downloader._run_ytdlp
     old_sleep = downloader._sleep_with_cancel
     try:
-        def always_media_403(command, _cancel_controller=None):
+        def persistent_media_403(command, _cancel_controller=None):
             calls.append(list(command))
+            if len(calls) == 1:
+                fatal = "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+                raise _media_403_error(fatal)
+            if "--write-info-json" in command:
+                _write_fake_infojson(command)
+                return ""
+            _assert("--load-info-json" in command, "post-bootstrap retry did not use saved info JSON")
             fatal = "ERROR: unable to download video data: HTTP Error 403: Forbidden"
-            raise YtdlpExecutionError(
-                1,
-                "yt-dlp failed with HTTP 403",
-                [fatal],
-                combined_output=fatal,
-                failure_kind=YtdlpFailureKind.HTTP_403,
-                fatal_lines=[fatal],
-                http_status=403,
-                stage="download",
-                part="video",
-            )
+            raise _media_403_error(fatal)
 
-        downloader._run_ytdlp = always_media_403
+        downloader._run_ytdlp = persistent_media_403
         downloader._sleep_with_cancel = lambda seconds, _controller=None: delays.append(int(seconds))
-        with TemporaryDirectory(prefix="cookie_fallback_failure_") as temp_dir:
-            cookie_path = Path(temp_dir) / "cookies.txt"
+        with TemporaryDirectory(prefix="cookie_infojson_failure_") as temp_dir:
+            temp_root = Path(temp_dir)
+            cookie_path = temp_root / "cookies.txt"
             cookie_path.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
             options = DownloadOptions(
                 ".",
@@ -411,33 +432,215 @@ def _test_cookie_media_403_fallback_then_standard_retries() -> None:
                 cookies_enabled=True,
                 cookies_path=str(cookie_path),
             )
+            command = [
+                "yt-dlp",
+                "-N",
+                "1",
+                "--no-write-info-json",
+                "-o",
+                str(temp_root / "stage" / "video.%(ext)s"),
+                "https://www.youtube.com/watch?v=cookie403fail",
+            ]
             with _progress_phase("Video"):
                 try:
                     downloader._run_ytdlp_with_retries(
-                        ["yt-dlp", "https://www.youtube.com/watch?v=cookie403fail"],
+                        command,
                         options,
                         logs.append,
                     )
                 except downloader.DownloadCancelled:
                     pass
                 else:
-                    raise AssertionError("persistent cookieless HTTP 403 did not stop after retries")
+                    raise AssertionError("persistent saved-media HTTP 403 did not stop after retries")
     finally:
         downloader._run_ytdlp = old_run_ytdlp
         downloader._sleep_with_cancel = old_sleep
 
-    _assert(len(calls) == 4, f"persistent fallback call count was wrong: {len(calls)}")
+    _assert(len(calls) == 5, f"persistent infojson fallback call count was wrong: {len(calls)}")
     _assert(downloader._command_uses_cookies(calls[0]), "initial persistent attempt did not use cookies")
-    _assert(
-        all(not downloader._command_uses_cookies(command) for command in calls[1:]),
-        "one or more post-fallback retries re-enabled cookies",
-    )
-    _assert(delays == [10, 30], f"post-fallback HTTP 403 delays were wrong: {delays}")
+    _assert(downloader._command_uses_cookies(calls[1]), "bootstrap extraction did not use cookies")
+    _assert("--write-info-json" in calls[1], "bootstrap extraction did not write info JSON")
+    for command in calls[2:]:
+        _assert(not downloader._command_uses_cookies(command), "saved-media retry re-enabled cookies")
+        _assert("--load-info-json" in command, "saved-media retry did not reuse info JSON")
+        _assert(
+            not any(str(value).startswith("https://www.youtube.com/") for value in command),
+            "saved-media retry re-ran the YouTube extractor",
+        )
+    _assert(delays == [10, 30], f"post-bootstrap HTTP 403 delays were wrong: {delays}")
     joined = "\n".join(logs)
-    _assert(joined.count("[COOKIE FALLBACK]") == 1, "cookieless fallback ran more than once")
-    _assert("[COOKIE FALLBACK SUCCESS]" not in joined, "failed fallback was logged as successful")
+    _assert(joined.count("Extracting authenticated metadata") == 1, "bootstrap extraction ran more than once")
+    _assert("[COOKIE FALLBACK SUCCESS]" not in joined, "failed saved-media fallback was logged as successful")
 
 
+def _test_cookie_batch_mode_skips_repeated_cookie_media_failure() -> None:
+    logs: list[str] = []
+    calls: list[list[str]] = []
+    delays: list[int] = []
+    old_run_ytdlp = downloader._run_ytdlp
+    old_sleep = downloader._sleep_with_cancel
+    batch_state = downloader._YtdlpBatchState()
+
+    try:
+        def batch_sequence(command, _cancel_controller=None):
+            calls.append(list(command))
+            call_number = len(calls)
+            if call_number == 1:
+                raise _media_403_error(
+                    "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+                )
+            if call_number in {2, 5}:
+                _write_fake_infojson(command)
+                return ""
+            if call_number == 3:
+                raise _media_403_error(
+                    "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+                )
+            if call_number in {4, 6}:
+                return ""
+            raise AssertionError(f"unexpected yt-dlp call {call_number}: {command}")
+
+        downloader._run_ytdlp = batch_sequence
+        downloader._sleep_with_cancel = lambda seconds, _controller=None: delays.append(int(seconds))
+
+        with TemporaryDirectory(prefix="cookie_batch_mode_") as temp_dir:
+            temp_root = Path(temp_dir)
+            cookie_path = temp_root / "cookies.txt"
+            cookie_path.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+            options = DownloadOptions(
+                ".",
+                "channel",
+                "Channel",
+                cookies_enabled=True,
+                cookies_path=str(cookie_path),
+            )
+
+            first_command = [
+                "yt-dlp",
+                "-N",
+                "1",
+                "--no-write-info-json",
+                "-o",
+                str(temp_root / "stage1" / "video.%(ext)s"),
+                "https://www.youtube.com/watch?v=first403",
+            ]
+            second_command = [
+                "yt-dlp",
+                "-N",
+                "1",
+                "--no-write-info-json",
+                "-o",
+                str(temp_root / "stage2" / "video.%(ext)s"),
+                "https://www.youtube.com/watch?v=second403",
+            ]
+
+            with _progress_phase("Video"):
+                downloader._run_ytdlp_with_retries(
+                    first_command,
+                    options,
+                    logs.append,
+                    cookie_retry_state=downloader._YtdlpAttemptState(
+                        batch_state=batch_state,
+                    ),
+                )
+                downloader._run_ytdlp_with_retries(
+                    second_command,
+                    options,
+                    logs.append,
+                    cookie_retry_state=downloader._YtdlpAttemptState(
+                        batch_state=batch_state,
+                    ),
+                )
+    finally:
+        downloader._run_ytdlp = old_run_ytdlp
+        downloader._sleep_with_cancel = old_sleep
+
+    _assert(len(calls) == 6, f"batch-mode yt-dlp call count was wrong: {len(calls)}")
+    _assert(
+        downloader._command_uses_cookies(calls[0])
+        and "--skip-download" not in calls[0],
+        "first video did not begin with the normal cookie media attempt",
+    )
+    _assert(
+        downloader._command_uses_cookies(calls[1])
+        and "--write-info-json" in calls[1]
+        and "--skip-download" in calls[1],
+        "first video authenticated metadata extraction was wrong",
+    )
+    _assert(
+        not downloader._command_uses_cookies(calls[2])
+        and "--load-info-json" in calls[2],
+        "first saved-media attempt did not run cookieless",
+    )
+    _assert(
+        not downloader._command_uses_cookies(calls[3])
+        and "--load-info-json" in calls[3],
+        "first saved-media retry did not remain cookieless",
+    )
+    _assert(
+        downloader._command_uses_cookies(calls[4])
+        and "--write-info-json" in calls[4]
+        and "--skip-download" in calls[4],
+        "second video did not start directly with authenticated metadata extraction",
+    )
+    _assert(
+        not downloader._command_uses_cookies(calls[5])
+        and "--load-info-json" in calls[5],
+        "second video did not use the batch cookieless media strategy",
+    )
+    cookie_media_attempts = [
+        command
+        for command in calls
+        if downloader._command_uses_cookies(command)
+        and "--skip-download" not in command
+    ]
+    _assert(
+        len(cookie_media_attempts) == 1,
+        f"cookie media failure was repeated after batch learning: {len(cookie_media_attempts)}",
+    )
+    _assert(delays == [10, 10], f"batch-mode delays were wrong: {delays}")
+    _assert(batch_state.cookie_bootstrap_media_mode, "batch mode was not enabled")
+    _assert(
+        batch_state.media_settle_delay_seconds == 10,
+        f"learned media settle delay was wrong: {batch_state.media_settle_delay_seconds}",
+    )
+
+    joined = "\n".join(logs)
+    _assert(
+        "[COOKIE BATCH MODE] Enabled for the remaining videos in this batch." in joined,
+        "batch-mode activation log missing",
+    )
+    _assert(
+        "[COOKIE BATCH MODE] Reusing the successful batch strategy:" in joined,
+        "later video did not report direct batch strategy reuse",
+    )
+    _assert(
+        "[COOKIE BATCH MODE] Waiting 10 seconds before the media transfer." in joined,
+        "learned settle delay was not applied before later media transfer",
+    )
+
+
+def _write_fake_infojson(command: list[str]) -> Path:
+    output_template = downloader._command_option_value(command, "-o")
+    _assert(output_template, "fake authenticated extraction had no output template")
+    output_path = Path(output_template.replace("%(ext)s", "info.json"))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text('{"id": "video123", "title": "Video"}', encoding="utf-8")
+    return output_path
+
+
+def _media_403_error(fatal: str) -> YtdlpExecutionError:
+    return YtdlpExecutionError(
+        1,
+        "yt-dlp failed with HTTP 403",
+        [fatal],
+        combined_output=fatal,
+        failure_kind=YtdlpFailureKind.HTTP_403,
+        fatal_lines=[fatal],
+        http_status=403,
+        stage="download",
+        part="video",
+    )
 def _test_fatal_http_statuses() -> None:
     cases = (
         ("ERROR: HTTP Error 401: Unauthorized", YtdlpFailureKind.HTTP_401, 401),
