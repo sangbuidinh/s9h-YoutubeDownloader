@@ -3817,12 +3817,66 @@ def _ffmpeg_technical_lines_for_log(exc: FFmpegExecutionError) -> list[str]:
 @contextmanager
 def _media_staging_directory(channel_dir: Path, video_id: str, log=None):
     channel_dir.mkdir(parents=True, exist_ok=True)
+    _hide_existing_staging_directories(channel_dir, log)
     safe_id = _safe_temp_stem(video_id)[:32]
     staging_path = Path(tempfile.mkdtemp(prefix=f".s9h-stage-{safe_id}-", dir=str(channel_dir)))
+    _mark_staging_directory_hidden(staging_path, log)
     try:
         yield staging_path
     finally:
         _cleanup_media_staging_directory(staging_path, channel_dir, log)
+
+
+def _hide_existing_staging_directories(channel_dir: Path, log=None) -> None:
+    """Hide staging directories left visible by older application versions."""
+    try:
+        candidates = list(channel_dir.glob(".s9h-stage-*"))
+    except OSError:
+        return
+
+    for candidate in candidates:
+        try:
+            if candidate.is_symlink() or not candidate.is_dir():
+                continue
+        except OSError:
+            continue
+        _mark_staging_directory_hidden(candidate, log)
+
+
+def _mark_staging_directory_hidden(staging_path: Path, log=None) -> None:
+    """Hide the transient staging directory in Windows Explorer.
+
+    A leading dot is not a hidden-file marker on Windows, so the native
+    FILE_ATTRIBUTE_HIDDEN flag must be applied explicitly. The directory
+    remains accessible to yt-dlp, FFmpeg and cleanup code.
+    """
+    if os.name != "nt":
+        return
+
+    try:
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        get_attributes = kernel32.GetFileAttributesW
+        get_attributes.argtypes = [ctypes.c_wchar_p]
+        get_attributes.restype = ctypes.c_uint32
+        set_attributes = kernel32.SetFileAttributesW
+        set_attributes.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
+        set_attributes.restype = ctypes.c_int
+
+        file_attribute_hidden = 0x00000002
+        invalid_file_attributes = 0xFFFFFFFF
+        path_text = str(staging_path)
+        attributes = get_attributes(path_text)
+        if attributes == invalid_file_attributes:
+            raise OSError(ctypes.get_last_error(), "GetFileAttributesW failed")
+        if attributes & file_attribute_hidden:
+            return
+        if not set_attributes(path_text, attributes | file_attribute_hidden):
+            raise OSError(ctypes.get_last_error(), "SetFileAttributesW failed")
+    except (AttributeError, OSError, ValueError):
+        if log:
+            log("[WARNING] Could not hide temporary staging directory.")
 
 
 def _cleanup_media_staging_directory(staging_path: Path, channel_dir: Path, log=None) -> None:
