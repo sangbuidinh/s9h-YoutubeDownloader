@@ -10,7 +10,7 @@ import time
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
@@ -66,6 +66,9 @@ YTDLP_STAGE_DOWNLOAD = "download"
 YTDLP_STAGE_POSTPROCESS = "postprocess"
 YTDLP_STAGE_UNKNOWN = "unknown"
 YTDLP_PART_UNKNOWN = "unknown"
+COOKIE_MEDIA_RETRY_TARGET_SECONDS = (2, 5, 10, 30)
+COOKIE_MEDIA_SHORT_PROBE_SECONDS = 2
+COOKIE_MEDIA_PROBE_INTERVAL_VIDEOS = 10
 _STANDALONE_SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)\b(?P<name>key|api_key|token|access_token)="
 )
@@ -175,6 +178,7 @@ class DownloadController:
         self._systemic_decision: BatchDecision | None = None
         self.systemic_block_callback = systemic_block_callback
         self.current_process: subprocess.Popen | None = None
+        self._active_processes: set[subprocess.Popen] = set()
 
     def request_cancel(self) -> None:
         self._cancel_requested.set()
@@ -182,8 +186,10 @@ class DownloadController:
             self._systemic_decision = BatchDecision.STOP_BATCH
             self._decision_condition.notify_all()
         with self._process_lock:
-            process = self.current_process
-        if process is not None:
+            processes = list(self._active_processes)
+            if self.current_process is not None and self.current_process not in processes:
+                processes.append(self.current_process)
+        for process in processes:
             threading.Thread(target=self._terminate_process, args=(process,), daemon=True).start()
 
     def is_cancel_requested(self) -> bool:
@@ -191,24 +197,27 @@ class DownloadController:
 
     def set_current_process(self, process: subprocess.Popen) -> None:
         with self._process_lock:
+            self._active_processes.add(process)
             self.current_process = process
         if self.is_cancel_requested():
             self._terminate_process(process)
 
     def clear_current_process(self, process: subprocess.Popen) -> None:
         with self._process_lock:
+            self._active_processes.discard(process)
             if self.current_process is process:
-                self.current_process = None
+                self.current_process = next(iter(self._active_processes), None)
 
     def has_active_process(self) -> bool:
         with self._process_lock:
-            process = self.current_process
-        if process is None:
-            return False
-        try:
-            return process.poll() is None
-        except Exception:
-            return False
+            processes = list(self._active_processes)
+        for process in processes:
+            try:
+                if process.poll() is None:
+                    return True
+            except Exception:
+                continue
+        return False
 
     def is_idle(self) -> bool:
         with self._decision_condition:
@@ -379,10 +388,27 @@ class _PreparedCookieAttempt:
 
 
 @dataclass
+class _CookieMediaPrefetch:
+    video_id: str
+    title: str
+    staging_dir: Path
+    done: threading.Event = field(default_factory=threading.Event)
+    thread: threading.Thread | None = None
+    info_json_path: Path | None = None
+    ready_monotonic: float = 0.0
+    error: BaseException | None = None
+    cookie_snapshot_sha256: str = ""
+    consumed: bool = False
+
+
+@dataclass
 class _YtdlpBatchState:
     cookie_bootstrap_media_mode: bool = False
     media_settle_delay_seconds: int = 0
     cookie_snapshot_sha256: str = ""
+    media_videos_since_probe: int = 0
+    prefetch_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    prefetch: _CookieMediaPrefetch | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -391,6 +417,9 @@ class _YtdlpAttemptState:
     cookieless_fallback_used: bool = False
     authenticated_infojson_fallback_used: bool = False
     batch_state: _YtdlpBatchState | None = None
+    prefetched_media: _CookieMediaPrefetch | None = None
+    lookahead_callback: object | None = None
+    lookahead_started: bool = False
 
 
 def _emit_progress_event(progress_callback, event: ProgressEvent) -> None:
@@ -629,6 +658,254 @@ def _normalized_cookie_option_path(value: object) -> str:
     return path
 
 
+
+def _find_cookie_media_lookahead_candidate(
+    videos: list,
+    start_index: int,
+    options: DownloadOptions,
+):
+    """Return the next video that still needs an MP4 download."""
+    for candidate in videos[max(0, int(start_index)):]:
+        video_id = str(getattr(candidate, "video_id", "") or "").strip()
+        if not video_id:
+            continue
+        raw_stem = getattr(candidate, "sanitized_filename_base", "") or getattr(candidate, "title", "")
+        stem = normalize_output_stem(raw_stem)
+        candidate.sanitized_filename_base = stem
+        try:
+            entry = get_video_entry(options.channel_id, video_id)
+            if is_mode_complete(entry, options.download_mode):
+                continue
+            missing_parts = missing_parts_for_mode(entry, options.download_mode)
+        except Exception:
+            continue
+        if PART_VIDEO not in missing_parts:
+            continue
+        paths = build_output_paths(options.base_folder, options.channel_name, stem)
+        return candidate, stem, paths.channel_dir
+    return None
+
+
+def _make_cookie_media_lookahead_callback(
+    videos: list,
+    next_start_index: int,
+    options: DownloadOptions,
+    batch_state: _YtdlpBatchState,
+    log,
+    cancel_controller: DownloadController | None,
+):
+    candidate = _find_cookie_media_lookahead_candidate(videos, next_start_index, options)
+    if candidate is None:
+        return None
+
+    video, stem, channel_dir = candidate
+
+    def start_lookahead() -> None:
+        _start_cookie_media_lookahead(
+            batch_state,
+            str(video.video_id),
+            stem,
+            channel_dir,
+            options,
+            log,
+            cancel_controller,
+        )
+
+    return start_lookahead
+
+
+def _start_cookie_media_lookahead(
+    batch_state: _YtdlpBatchState | None,
+    video_id: str,
+    title: str,
+    channel_dir: Path,
+    options: DownloadOptions,
+    log,
+    cancel_controller: DownloadController | None,
+) -> None:
+    if batch_state is None or not options.cookies_enabled or not video_id:
+        return
+    if _cancel_requested(cancel_controller):
+        return
+
+    stale: _CookieMediaPrefetch | None = None
+    with batch_state.prefetch_lock:
+        existing = batch_state.prefetch
+        if existing is not None:
+            if existing.video_id == video_id:
+                return
+            if not existing.done.is_set():
+                return
+            stale = existing
+            batch_state.prefetch = None
+
+        channel_dir.mkdir(parents=True, exist_ok=True)
+        safe_id = _safe_temp_stem(video_id)[:32]
+        staging_dir = Path(
+            tempfile.mkdtemp(
+                prefix=f".s9h-stage-lookahead-{safe_id}-",
+                dir=str(channel_dir),
+            )
+        )
+        _mark_staging_directory_hidden(staging_dir, log)
+        snapshot = _options_cookie_snapshot(options)
+        prefetch = _CookieMediaPrefetch(
+            video_id=video_id,
+            title=title,
+            staging_dir=staging_dir,
+            cookie_snapshot_sha256=(snapshot.sha256 if snapshot and snapshot.usable else ""),
+        )
+        batch_state.prefetch = prefetch
+
+    if stale is not None:
+        _cleanup_cookie_media_prefetch(stale, log)
+
+    def worker() -> None:
+        try:
+            if _cancel_requested(cancel_controller):
+                raise DownloadCancelled("download cancelled/interrupted")
+            log(f"[COOKIE LOOKAHEAD] Preparing authenticated metadata for next video: {title}")
+            command = _build_video_ytdlp_command(video_id, staging_dir, options)
+            info_json_path = _extract_authenticated_infojson_path(
+                command,
+                options,
+                log,
+                cancel_controller,
+                attempt_number=0,
+                part=PART_VIDEO,
+                log_start=False,
+            )
+            prefetch.info_json_path = info_json_path
+            prefetch.ready_monotonic = time.monotonic()
+            log(f"[COOKIE LOOKAHEAD] Authenticated metadata is ready for next video: {title}")
+        except BaseException as exc:
+            prefetch.error = exc
+            if not isinstance(exc, DownloadCancelled):
+                log(
+                    "[COOKIE LOOKAHEAD] Could not prepare the next video in advance; "
+                    "the normal download path will be used."
+                )
+        finally:
+            prefetch.done.set()
+
+    thread = threading.Thread(
+        target=worker,
+        name=f"cookie-lookahead-{_safe_temp_stem(video_id)[:20]}",
+        daemon=True,
+    )
+    prefetch.thread = thread
+    thread.start()
+
+
+def _take_cookie_media_lookahead(
+    batch_state: _YtdlpBatchState | None,
+    video_id: str,
+    options: DownloadOptions,
+    log,
+    cancel_controller: DownloadController | None,
+) -> _CookieMediaPrefetch | None:
+    if batch_state is None or not batch_state.cookie_bootstrap_media_mode:
+        return None
+
+    with batch_state.prefetch_lock:
+        prefetch = batch_state.prefetch
+        if prefetch is None or prefetch.video_id != video_id:
+            return None
+        batch_state.prefetch = None
+        prefetch.consumed = True
+
+    if not prefetch.done.is_set():
+        log("[COOKIE LOOKAHEAD] Waiting for prefetched metadata to finish.")
+    while not prefetch.done.wait(timeout=0.1):
+        _raise_if_cancelled(cancel_controller)
+
+    if prefetch.error is not None:
+        _cleanup_cookie_media_prefetch(prefetch, log)
+        return None
+    if prefetch.info_json_path is None or not prefetch.info_json_path.exists():
+        _cleanup_cookie_media_prefetch(prefetch, log)
+        return None
+
+    current_snapshot = _options_cookie_snapshot(options)
+    current_sha256 = current_snapshot.sha256 if current_snapshot and current_snapshot.usable else ""
+    if prefetch.cookie_snapshot_sha256 and current_sha256 != prefetch.cookie_snapshot_sha256:
+        log("[COOKIE LOOKAHEAD] Cookie source changed; discarding prefetched metadata.")
+        _cleanup_cookie_media_prefetch(prefetch, log)
+        return None
+
+    age = max(0.0, time.monotonic() - prefetch.ready_monotonic)
+    log(f"[COOKIE LOOKAHEAD] Reusing metadata prepared {age:.1f} seconds earlier.")
+    return prefetch
+
+
+def _cleanup_cookie_media_prefetch(prefetch: _CookieMediaPrefetch | None, log=None) -> None:
+    if prefetch is None:
+        return
+    thread = prefetch.thread
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=2.0)
+    if thread is not None and thread.is_alive():
+        return
+    _cleanup_media_staging_directory(prefetch.staging_dir, prefetch.staging_dir.parent, log)
+
+
+def _shutdown_cookie_media_lookahead(batch_state: _YtdlpBatchState | None, log=None) -> None:
+    if batch_state is None:
+        return
+    with batch_state.prefetch_lock:
+        prefetch = batch_state.prefetch
+        batch_state.prefetch = None
+    _cleanup_cookie_media_prefetch(prefetch, log)
+
+
+def _start_attempt_lookahead(attempt_state: _YtdlpAttemptState, log) -> None:
+    if attempt_state.lookahead_started:
+        return
+    callback = attempt_state.lookahead_callback
+    if callback is None:
+        return
+    attempt_state.lookahead_started = True
+    try:
+        callback()
+    except Exception as exc:
+        if SHOW_TECHNICAL_WARNINGS:
+            log(f"[COOKIE LOOKAHEAD] Start failed: {type(exc).__name__}: {exc}")
+
+
+def _video_attempt_state_for_batch(
+    videos: list,
+    current_index: int,
+    video_id: str,
+    options: DownloadOptions,
+    batch_state: _YtdlpBatchState,
+    log,
+    cancel_controller: DownloadController | None,
+) -> tuple[_YtdlpAttemptState, _CookieMediaPrefetch | None]:
+    prefetched = _take_cookie_media_lookahead(
+        batch_state,
+        video_id,
+        options,
+        log,
+        cancel_controller,
+    )
+    lookahead_callback = _make_cookie_media_lookahead_callback(
+        videos,
+        current_index,
+        options,
+        batch_state,
+        log,
+        cancel_controller,
+    )
+    return (
+        _YtdlpAttemptState(
+            batch_state=batch_state,
+            prefetched_media=prefetched,
+            lookahead_callback=lookahead_callback,
+        ),
+        prefetched,
+    )
+
+
 def download_items(
     videos: list,
     options: DownloadOptions,
@@ -704,6 +981,15 @@ def download_items(
                         previous_progress = _set_progress_context(
                             progress_callback, video, index, video_total, "Video"
                         )
+                        video_attempt_state, prefetched_media = _video_attempt_state_for_batch(
+                            videos,
+                            index,
+                            str(video.video_id),
+                            options,
+                            ytdlp_batch_state,
+                            log,
+                            cancel_controller,
+                        )
                         try:
                             _download_video(
                                 video.video_id,
@@ -713,9 +999,10 @@ def download_items(
                                 options,
                                 log,
                                 cancel_controller,
-                                _YtdlpAttemptState(batch_state=ytdlp_batch_state),
+                                video_attempt_state,
                             )
                         finally:
+                            _cleanup_cookie_media_prefetch(prefetched_media, log)
                             _restore_progress_context(previous_progress)
                     elif part == PART_AUDIO:
                         log(f"[INFO] Downloading audio {stem}.mp3")
@@ -732,6 +1019,15 @@ def download_items(
                                 previous_progress = _set_progress_context(
                                     progress_callback, video, index, video_total, "Video"
                                 )
+                                video_attempt_state, prefetched_media = _video_attempt_state_for_batch(
+                                    videos,
+                                    index,
+                                    str(video.video_id),
+                                    options,
+                                    ytdlp_batch_state,
+                                    log,
+                                    cancel_controller,
+                                )
                                 try:
                                     _download_video(
                                         video.video_id,
@@ -741,9 +1037,10 @@ def download_items(
                                         options,
                                         log,
                                         cancel_controller,
-                                        _YtdlpAttemptState(batch_state=ytdlp_batch_state),
+                                        video_attempt_state,
                                     )
                                 finally:
+                                    _cleanup_cookie_media_prefetch(prefetched_media, log)
                                     _restore_progress_context(previous_progress)
                                 update_video_part_state(
                                     options.channel_id,
@@ -1000,6 +1297,8 @@ def download_items(
             _emit_general_error_progress(progress_callback, video, index, video_total, technical)
             _log_friendly_general_error(log, technical, [technical])
 
+    _shutdown_cookie_media_lookahead(ytdlp_batch_state, log)
+
     if downloaded_count > 0:
         log(f"[SUCCESS] Downloaded: {downloaded_count}")
     elif failed_count > 0 or skipped_count > 0:
@@ -1080,22 +1379,9 @@ def _download_video(
     cancel_controller: DownloadController | None = None,
     cookie_retry_state: _YtdlpAttemptState | None = None,
 ) -> None:
-    url = f"https://www.youtube.com/watch?v={video_id}"
     if final_path.exists() and _premiere_safe_mp4_ready_for_download(final_path, cancel_controller):
         return
-    output_template = str(temp_dir / f"{_safe_temp_stem(video_id)}.%(ext)s")
-    command = _base_ytdlp_command(options) + [
-        "-f",
-        PREMIERE_SAFE_VIDEO_FORMAT,
-        "--merge-output-format",
-        "mp4",
-        "--no-write-info-json",
-        "--no-write-description",
-        "--no-write-thumbnail",
-        "-o",
-        output_template,
-        url,
-    ]
+    command = _build_video_ytdlp_command(video_id, temp_dir, options)
     _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
     staged_mp4_path = _select_staged_file(temp_dir, "*.mp4", ".mp4")
     _emit_current_progress("Validating MP4")
@@ -1109,6 +1395,27 @@ def _download_video(
     )
     if not _final_file_ready(final_path):
         raise DownloadError("video download failed")
+
+
+def _build_video_ytdlp_command(
+    video_id: str,
+    temp_dir: Path,
+    options: DownloadOptions,
+) -> list[str]:
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    output_template = str(temp_dir / f"{_safe_temp_stem(video_id)}.%(ext)s")
+    return _base_ytdlp_command(options) + [
+        "-f",
+        PREMIERE_SAFE_VIDEO_FORMAT,
+        "--merge-output-format",
+        "mp4",
+        "--no-write-info-json",
+        "--no-write-description",
+        "--no-write-thumbnail",
+        "-o",
+        output_template,
+        url,
+    ]
 
 
 def _download_audio(
@@ -1891,6 +2198,9 @@ def _run_ytdlp_with_retries(
 ) -> None:
     http_403_delays = [10, 30]
     http_403_retries = 0
+    cookie_media_waited_seconds = 0
+    cookie_media_metadata_ready_monotonic = 0.0
+    cookie_media_probe_active = False
     attempt_state = cookie_retry_state or _YtdlpAttemptState()
     stream_interrupted_retried = False
     base_command = _strip_cookie_options(list(command))
@@ -1914,51 +2224,94 @@ def _run_ytdlp_with_retries(
     ):
         attempt_state.cookieless_fallback_used = True
         attempt_state.authenticated_infojson_fallback_used = True
-        log(
-            "[COOKIE BATCH MODE] Reusing the successful batch strategy: "
-            "authenticated metadata first, then cookieless media transfer."
-        )
-        attempt_number += 1
-        try:
-            current_command = _prepare_authenticated_infojson_download_command(
+        bootstrap_prepared = False
+        prefetched_media = attempt_state.prefetched_media
+        if (
+            prefetched_media is not None
+            and prefetched_media.info_json_path is not None
+            and prefetched_media.info_json_path.exists()
+            and prefetched_media.ready_monotonic > 0
+        ):
+            current_command = _build_infojson_media_download_command(
                 base_command,
-                options,
-                log,
-                cancel_controller,
-                attempt_number,
-                attempt_part,
+                prefetched_media.info_json_path,
             )
-        except YtdlpExecutionError as bootstrap_exc:
-            _attach_ytdlp_attempt_context(bootstrap_exc, attempt_part)
-            bootstrap_kind = classify_ytdlp_failure_kind(bootstrap_exc, options)
-            bootstrap_exc.failure_kind = bootstrap_kind
-            _log_ytdlp_attempt_failure(
-                log,
-                bootstrap_exc,
-                bootstrap_kind,
-                attempt_number,
-            )
-            _reset_cookie_bootstrap_batch_mode(attempt_state.batch_state)
-            attempt_state.cookieless_fallback_used = False
-            attempt_state.authenticated_infojson_fallback_used = False
-            current_command = list(base_command)
-            use_cookies_for_attempt = bool(options.cookies_enabled)
+            cookie_media_metadata_ready_monotonic = prefetched_media.ready_monotonic
+            bootstrap_prepared = True
             log(
-                "[COOKIE BATCH MODE] Authenticated metadata extraction failed. "
-                "Falling back to the normal cookie-first strategy."
+                "[COOKIE BATCH MODE] Using one-video lookahead metadata; "
+                "the media transfer will begin as soon as its learned age is reached."
             )
         else:
-            use_cookies_for_attempt = False
-            settle_delay = max(
-                0,
-                int(attempt_state.batch_state.media_settle_delay_seconds),
+            log(
+                "[COOKIE BATCH MODE] Reusing the successful batch strategy: "
+                "authenticated metadata first, then cookieless media transfer."
             )
-            if settle_delay:
+            attempt_number += 1
+            try:
+                current_command = _prepare_authenticated_infojson_download_command(
+                    base_command,
+                    options,
+                    log,
+                    cancel_controller,
+                    attempt_number,
+                    attempt_part,
+                )
+                cookie_media_metadata_ready_monotonic = time.monotonic()
+                bootstrap_prepared = True
+            except YtdlpExecutionError as bootstrap_exc:
+                _attach_ytdlp_attempt_context(bootstrap_exc, attempt_part)
+                bootstrap_kind = classify_ytdlp_failure_kind(bootstrap_exc, options)
+                bootstrap_exc.failure_kind = bootstrap_kind
+                _log_ytdlp_attempt_failure(
+                    log,
+                    bootstrap_exc,
+                    bootstrap_kind,
+                    attempt_number,
+                )
+                _reset_cookie_bootstrap_batch_mode(attempt_state.batch_state)
+                attempt_state.cookieless_fallback_used = False
+                attempt_state.authenticated_infojson_fallback_used = False
+                current_command = list(base_command)
+                use_cookies_for_attempt = bool(options.cookies_enabled)
+                log(
+                    "[COOKIE BATCH MODE] Authenticated metadata extraction failed. "
+                    "Falling back to the normal cookie-first strategy."
+                )
+
+        if bootstrap_prepared:
+            use_cookies_for_attempt = False
+            _start_attempt_lookahead(attempt_state, log)
+            settle_delay, cookie_media_probe_active = _batch_cookie_media_initial_delay(
+                attempt_state.batch_state,
+            )
+            current_age = _cookie_media_age_seconds(
+                cookie_media_metadata_ready_monotonic,
+                cookie_media_waited_seconds,
+            )
+            if cookie_media_probe_active and current_age > settle_delay:
+                learned_delay = (
+                    max(0, int(attempt_state.batch_state.media_settle_delay_seconds))
+                    if attempt_state.batch_state is not None
+                    else settle_delay
+                )
+                settle_delay = learned_delay
+                cookie_media_probe_active = False
+            remaining_delay = max(0, settle_delay - current_age)
+            if remaining_delay:
+                delay_kind = "short adaptive probe" if cookie_media_probe_active else "learned metadata age"
                 log(
                     "[COOKIE BATCH MODE] Waiting "
-                    f"{settle_delay} seconds before the media transfer."
+                    f"{remaining_delay} seconds before the media transfer ({delay_kind}; "
+                    f"metadata age target: {settle_delay} seconds)."
                 )
-                _sleep_with_cancel(settle_delay, cancel_controller)
+                _sleep_with_cancel(remaining_delay, cancel_controller)
+            elif settle_delay:
+                log(
+                    "[COOKIE LOOKAHEAD] Metadata already reached the learned age; "
+                    "starting media transfer immediately."
+                )
+            cookie_media_waited_seconds = settle_delay
 
     while True:
         _raise_if_cancelled(cancel_controller)
@@ -1991,8 +2344,8 @@ def _run_ytdlp_with_retries(
                 _record_cookie_bootstrap_batch_success(
                     options,
                     attempt_state.batch_state,
-                    http_403_retries,
-                    http_403_delays,
+                    cookie_media_waited_seconds,
+                    cookie_media_probe_active,
                     log,
                 )
             return
@@ -2037,11 +2390,50 @@ def _run_ytdlp_with_retries(
                         attempt_number,
                     )
                     raise
+                cookie_media_metadata_ready_monotonic = time.monotonic()
                 use_cookies_for_attempt = False
+                _start_attempt_lookahead(attempt_state, log)
                 continue
 
+            cookieless_saved_media_403 = _is_cookieless_saved_media_http_403(
+                exc,
+                failure_kind,
+                attempt_info,
+                attempt_state,
+                current_command,
+            )
+            if cookieless_saved_media_403:
+                current_age = _cookie_media_age_seconds(
+                    cookie_media_metadata_ready_monotonic,
+                    cookie_media_waited_seconds,
+                )
+                retry_target = _next_cookie_media_retry_target(current_age)
+                if retry_target is not None:
+                    delay = max(0, retry_target - current_age)
+                    if cookie_media_probe_active and retry_target > current_age:
+                        learned_delay = (
+                            max(0, int(attempt_state.batch_state.media_settle_delay_seconds))
+                            if attempt_state.batch_state is not None
+                            else retry_target
+                        )
+                        _record_cookie_media_probe_failure(attempt_state.batch_state)
+                        cookie_media_probe_active = False
+                        log(
+                            "[COOKIE BATCH MODE] Short delay probe still received HTTP 403. "
+                            f"Returning toward the learned {learned_delay}-second delay."
+                        )
+                    cookie_media_waited_seconds = retry_target
+                    log(
+                        "[WARNING] HTTP 403 during cookieless media transfer. "
+                        f"Retrying in {delay} seconds "
+                        f"(metadata age target: {retry_target} seconds)."
+                    )
+                    _sleep_with_cancel(delay, cancel_controller)
+                    continue
+
             if (
-                failure_kind == YtdlpFailureKind.HTTP_403
+                not cookieless_saved_media_403
+                and failure_kind == YtdlpFailureKind.HTTP_403
                 and not attempt_state.verified_retry_used
                 and http_403_retries < len(http_403_delays)
             ):
@@ -2106,8 +2498,8 @@ def _should_start_in_cookie_bootstrap_batch_mode(
 def _record_cookie_bootstrap_batch_success(
     options: DownloadOptions,
     batch_state: _YtdlpBatchState | None,
-    http_403_retries: int,
-    http_403_delays: list[int],
+    media_waited_seconds: int,
+    probe_active: bool,
     log,
 ) -> None:
     if batch_state is None or not options.cookies_enabled:
@@ -2115,27 +2507,105 @@ def _record_cookie_bootstrap_batch_success(
 
     was_enabled = batch_state.cookie_bootstrap_media_mode
     batch_state.cookie_bootstrap_media_mode = True
-    if http_403_retries > 0:
-        delay_index = min(http_403_retries, len(http_403_delays)) - 1
-        batch_state.media_settle_delay_seconds = max(
-            batch_state.media_settle_delay_seconds,
-            int(http_403_delays[delay_index]),
+    observed_delay = max(0, int(media_waited_seconds))
+
+    if probe_active:
+        batch_state.media_settle_delay_seconds = observed_delay
+        batch_state.media_videos_since_probe = 0
+        log(
+            "[COOKIE BATCH MODE] Short delay probe succeeded. "
+            f"Future videos will use a {observed_delay}-second settling delay."
         )
+    elif not was_enabled:
+        batch_state.media_settle_delay_seconds = observed_delay
+        batch_state.media_videos_since_probe = (
+            COOKIE_MEDIA_PROBE_INTERVAL_VIDEOS
+            if observed_delay > COOKIE_MEDIA_SHORT_PROBE_SECONDS
+            else 0
+        )
+    else:
+        batch_state.media_settle_delay_seconds = observed_delay
+        if observed_delay > COOKIE_MEDIA_SHORT_PROBE_SECONDS:
+            batch_state.media_videos_since_probe += 1
+        else:
+            batch_state.media_videos_since_probe = 0
+
     snapshot = _options_cookie_snapshot(options)
     if snapshot and snapshot.usable:
         batch_state.cookie_snapshot_sha256 = snapshot.sha256
 
     if not was_enabled:
         delay_text = (
-            f" A {batch_state.media_settle_delay_seconds}-second media settling delay "
-            "will be used before later videos."
-            if batch_state.media_settle_delay_seconds
-            else ""
+            f" The observed successful media delay was {observed_delay} seconds. "
+            "A shorter delay will be probed on the next video before reusing it."
+            if observed_delay > COOKIE_MEDIA_SHORT_PROBE_SECONDS
+            else f" A {observed_delay}-second media settling delay will be used."
         )
         log(
             "[COOKIE BATCH MODE] Enabled for the remaining videos in this batch."
             + delay_text
         )
+
+
+def _batch_cookie_media_initial_delay(
+    batch_state: _YtdlpBatchState | None,
+) -> tuple[int, bool]:
+    if batch_state is None:
+        return 0, False
+
+    learned_delay = max(0, int(batch_state.media_settle_delay_seconds))
+    if learned_delay <= COOKIE_MEDIA_SHORT_PROBE_SECONDS:
+        return learned_delay, False
+
+    if batch_state.media_videos_since_probe >= COOKIE_MEDIA_PROBE_INTERVAL_VIDEOS:
+        return COOKIE_MEDIA_SHORT_PROBE_SECONDS, True
+
+    return learned_delay, False
+
+
+def _record_cookie_media_probe_failure(
+    batch_state: _YtdlpBatchState | None,
+) -> None:
+    if batch_state is None:
+        return
+    batch_state.media_videos_since_probe = 0
+
+
+def _cookie_media_age_seconds(
+    metadata_ready_monotonic: float,
+    waited_seconds: int,
+) -> int:
+    logical_wait = max(0, int(waited_seconds))
+    if metadata_ready_monotonic <= 0:
+        return logical_wait
+    elapsed = max(0.0, time.monotonic() - metadata_ready_monotonic)
+    return max(logical_wait, int(elapsed))
+
+
+def _next_cookie_media_retry_target(waited_seconds: int) -> int | None:
+    waited = max(0, int(waited_seconds))
+    for target in COOKIE_MEDIA_RETRY_TARGET_SECONDS:
+        if target > waited:
+            return int(target)
+    return None
+
+
+def _is_cookieless_saved_media_http_403(
+    exc: YtdlpExecutionError,
+    failure_kind: YtdlpFailureKind,
+    attempt_info: _PreparedCookieAttempt | None,
+    attempt_state: _YtdlpAttemptState,
+    command: list[str],
+) -> bool:
+    return bool(
+        failure_kind == YtdlpFailureKind.HTTP_403
+        and exc.part == PART_VIDEO
+        and attempt_state.authenticated_infojson_fallback_used
+        and attempt_info is not None
+        and not attempt_info.cookies_used
+        and "--load-info-json" in command
+        and _is_video_data_http_403(exc)
+    )
 
 
 def _options_cookie_snapshot(options: DownloadOptions) -> _CookieFileSnapshot | None:
@@ -2174,6 +2644,7 @@ def _reset_cookie_bootstrap_batch_mode(
     batch_state.cookie_bootstrap_media_mode = False
     batch_state.media_settle_delay_seconds = 0
     batch_state.cookie_snapshot_sha256 = ""
+    batch_state.media_videos_since_probe = 0
 
 
 def _should_use_authenticated_infojson_fallback(
@@ -2215,6 +2686,32 @@ def _prepare_authenticated_infojson_download_command(
     attempt_number: int,
     part: str,
 ) -> list[str]:
+    info_json_path = _extract_authenticated_infojson_path(
+        command,
+        options,
+        log,
+        cancel_controller,
+        attempt_number,
+        part,
+        log_start=True,
+    )
+    log(
+        "[COOKIE FALLBACK] Authenticated extraction completed. "
+        "Downloading from saved media URLs without cookies."
+    )
+    return _build_infojson_media_download_command(command, info_json_path)
+
+
+def _extract_authenticated_infojson_path(
+    command: list[str],
+    options: DownloadOptions,
+    log,
+    cancel_controller: DownloadController | None,
+    attempt_number: int,
+    part: str,
+    *,
+    log_start: bool,
+) -> Path:
     output_template = _command_option_value(command, "-o")
     if not output_template:
         raise DownloadError("yt-dlp output template missing for authenticated media fallback")
@@ -2239,22 +2736,18 @@ def _prepare_authenticated_infojson_download_command(
         log,
         use_cookies=True,
     ) as prepared_attempt:
-        log(
-            _ytdlp_start_log_line(
-                prepared_attempt.command,
-                options,
-                attempt_number,
-                part,
+        if log_start:
+            log(
+                _ytdlp_start_log_line(
+                    prepared_attempt.command,
+                    options,
+                    attempt_number,
+                    part,
+                )
             )
-        )
         _run_ytdlp(prepared_attempt.command, cancel_controller)
 
-    info_json_path = _select_authenticated_infojson(bootstrap_dir)
-    log(
-        "[COOKIE FALLBACK] Authenticated extraction completed. "
-        "Downloading from saved media URLs without cookies."
-    )
-    return _build_infojson_media_download_command(command, info_json_path)
+    return _select_authenticated_infojson(bootstrap_dir)
 
 
 def _build_authenticated_infojson_extract_command(

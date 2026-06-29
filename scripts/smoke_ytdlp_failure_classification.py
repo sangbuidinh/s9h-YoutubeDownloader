@@ -142,6 +142,8 @@ def main() -> int:
     _test_cookie_media_403_uses_authenticated_infojson_fallback()
     _test_authenticated_infojson_fallback_then_standard_retries()
     _test_cookie_batch_mode_skips_repeated_cookie_media_failure()
+    _test_cookie_batch_mode_probes_shorter_delay()
+    _test_cookie_batch_mode_short_probe_can_lower_delay()
     _test_fatal_http_statuses()
     _test_stage_tracking()
     _test_sanitized_fatal_lines()
@@ -456,7 +458,7 @@ def _test_authenticated_infojson_fallback_then_standard_retries() -> None:
         downloader._run_ytdlp = old_run_ytdlp
         downloader._sleep_with_cancel = old_sleep
 
-    _assert(len(calls) == 5, f"persistent infojson fallback call count was wrong: {len(calls)}")
+    _assert(len(calls) == 7, f"persistent infojson fallback call count was wrong: {len(calls)}")
     _assert(downloader._command_uses_cookies(calls[0]), "initial persistent attempt did not use cookies")
     _assert(downloader._command_uses_cookies(calls[1]), "bootstrap extraction did not use cookies")
     _assert("--write-info-json" in calls[1], "bootstrap extraction did not write info JSON")
@@ -467,7 +469,7 @@ def _test_authenticated_infojson_fallback_then_standard_retries() -> None:
             not any(str(value).startswith("https://www.youtube.com/") for value in command),
             "saved-media retry re-ran the YouTube extractor",
         )
-    _assert(delays == [10, 30], f"post-bootstrap HTTP 403 delays were wrong: {delays}")
+    _assert(delays == [2, 3, 5, 20], f"post-bootstrap HTTP 403 delays were wrong: {delays}")
     joined = "\n".join(logs)
     _assert(joined.count("Extracting authenticated metadata") == 1, "bootstrap extraction ran more than once")
     _assert("[COOKIE FALLBACK SUCCESS]" not in joined, "failed saved-media fallback was logged as successful")
@@ -598,10 +600,10 @@ def _test_cookie_batch_mode_skips_repeated_cookie_media_failure() -> None:
         len(cookie_media_attempts) == 1,
         f"cookie media failure was repeated after batch learning: {len(cookie_media_attempts)}",
     )
-    _assert(delays == [10, 10], f"batch-mode delays were wrong: {delays}")
+    _assert(delays == [2, 2], f"batch-mode delays were wrong: {delays}")
     _assert(batch_state.cookie_bootstrap_media_mode, "batch mode was not enabled")
     _assert(
-        batch_state.media_settle_delay_seconds == 10,
+        batch_state.media_settle_delay_seconds == 2,
         f"learned media settle delay was wrong: {batch_state.media_settle_delay_seconds}",
     )
 
@@ -615,8 +617,189 @@ def _test_cookie_batch_mode_skips_repeated_cookie_media_failure() -> None:
         "later video did not report direct batch strategy reuse",
     )
     _assert(
-        "[COOKIE BATCH MODE] Waiting 10 seconds before the media transfer." in joined,
-        "learned settle delay was not applied before later media transfer",
+        "[COOKIE BATCH MODE] Waiting 2 seconds before the media transfer (learned metadata age; metadata age target: 2 seconds)." in joined,
+        "short learned settle delay was not applied before later media transfer",
+    )
+
+
+
+def _test_cookie_batch_mode_probes_shorter_delay() -> None:
+    logs: list[str] = []
+    calls: list[list[str]] = []
+    delays: list[int] = []
+    old_run_ytdlp = downloader._run_ytdlp
+    old_sleep = downloader._sleep_with_cancel
+    batch_state = downloader._YtdlpBatchState(
+        cookie_bootstrap_media_mode=True,
+        media_settle_delay_seconds=10,
+        media_videos_since_probe=downloader.COOKIE_MEDIA_PROBE_INTERVAL_VIDEOS,
+    )
+
+    try:
+        def probe_sequence(command, _cancel_controller=None):
+            calls.append(list(command))
+            call_number = len(calls)
+            if call_number in {1, 4}:
+                _write_fake_infojson(command)
+                return ""
+            if call_number == 2:
+                raise _media_403_error(
+                    "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+                )
+            if call_number in {3, 5}:
+                return ""
+            raise AssertionError(f"unexpected yt-dlp call {call_number}: {command}")
+
+        downloader._run_ytdlp = probe_sequence
+        downloader._sleep_with_cancel = lambda seconds, _controller=None: delays.append(int(seconds))
+
+        with TemporaryDirectory(prefix="cookie_batch_probe_") as temp_dir:
+            temp_root = Path(temp_dir)
+            cookie_path = temp_root / "cookies.txt"
+            cookie_path.write_text("# Netscape HTTP Cookie File\\n", encoding="utf-8")
+            options = DownloadOptions(
+                ".",
+                "channel",
+                "Channel",
+                cookies_enabled=True,
+                cookies_path=str(cookie_path),
+            )
+
+            first_command = [
+                "yt-dlp",
+                "-N",
+                "1",
+                "--no-write-info-json",
+                "-o",
+                str(temp_root / "probe1" / "video.%(ext)s"),
+                "https://www.youtube.com/watch?v=probe1",
+            ]
+            second_command = [
+                "yt-dlp",
+                "-N",
+                "1",
+                "--no-write-info-json",
+                "-o",
+                str(temp_root / "probe2" / "video.%(ext)s"),
+                "https://www.youtube.com/watch?v=probe2",
+            ]
+
+            with _progress_phase("Video"):
+                downloader._run_ytdlp_with_retries(
+                    first_command,
+                    options,
+                    logs.append,
+                    cookie_retry_state=downloader._YtdlpAttemptState(
+                        batch_state=batch_state,
+                    ),
+                )
+                downloader._run_ytdlp_with_retries(
+                    second_command,
+                    options,
+                    logs.append,
+                    cookie_retry_state=downloader._YtdlpAttemptState(
+                        batch_state=batch_state,
+                    ),
+                )
+    finally:
+        downloader._run_ytdlp = old_run_ytdlp
+        downloader._sleep_with_cancel = old_sleep
+
+    _assert(len(calls) == 5, f"adaptive probe yt-dlp call count was wrong: {len(calls)}")
+    _assert(delays == [2, 3, 5], f"adaptive probe delays were wrong: {delays}")
+    _assert(
+        batch_state.media_settle_delay_seconds == 5,
+        f"adaptive retry did not learn the smaller stable delay: {batch_state.media_settle_delay_seconds}",
+    )
+    _assert(
+        batch_state.media_videos_since_probe == 2,
+        f"probe interval counter was wrong: {batch_state.media_videos_since_probe}",
+    )
+
+    joined = "\\n".join(logs)
+    _assert(
+        "Waiting 2 seconds before the media transfer (short adaptive probe; metadata age target: 2 seconds)." in joined,
+        "short adaptive probe was not attempted",
+    )
+    _assert(
+        "Short delay probe still received HTTP 403." in joined,
+        "failed short probe was not reported",
+    )
+    _assert(
+        "Waiting 5 seconds before the media transfer (learned metadata age; metadata age target: 5 seconds)." in joined,
+        "stable learned delay was not reused after the failed probe",
+    )
+
+
+
+def _test_cookie_batch_mode_short_probe_can_lower_delay() -> None:
+    logs: list[str] = []
+    calls: list[list[str]] = []
+    delays: list[int] = []
+    old_run_ytdlp = downloader._run_ytdlp
+    old_sleep = downloader._sleep_with_cancel
+    batch_state = downloader._YtdlpBatchState(
+        cookie_bootstrap_media_mode=True,
+        media_settle_delay_seconds=10,
+        media_videos_since_probe=downloader.COOKIE_MEDIA_PROBE_INTERVAL_VIDEOS,
+    )
+
+    try:
+        def successful_probe_sequence(command, _cancel_controller=None):
+            calls.append(list(command))
+            if len(calls) == 1:
+                _write_fake_infojson(command)
+                return ""
+            if len(calls) == 2:
+                return ""
+            raise AssertionError(f"unexpected yt-dlp call {len(calls)}: {command}")
+
+        downloader._run_ytdlp = successful_probe_sequence
+        downloader._sleep_with_cancel = lambda seconds, _controller=None: delays.append(int(seconds))
+
+        with TemporaryDirectory(prefix="cookie_batch_probe_success_") as temp_dir:
+            temp_root = Path(temp_dir)
+            cookie_path = temp_root / "cookies.txt"
+            cookie_path.write_text("# Netscape HTTP Cookie File\\n", encoding="utf-8")
+            options = DownloadOptions(
+                ".",
+                "channel",
+                "Channel",
+                cookies_enabled=True,
+                cookies_path=str(cookie_path),
+            )
+            command = [
+                "yt-dlp",
+                "-N",
+                "1",
+                "--no-write-info-json",
+                "-o",
+                str(temp_root / "probe" / "video.%(ext)s"),
+                "https://www.youtube.com/watch?v=probe-success",
+            ]
+
+            with _progress_phase("Video"):
+                downloader._run_ytdlp_with_retries(
+                    command,
+                    options,
+                    logs.append,
+                    cookie_retry_state=downloader._YtdlpAttemptState(
+                        batch_state=batch_state,
+                    ),
+                )
+    finally:
+        downloader._run_ytdlp = old_run_ytdlp
+        downloader._sleep_with_cancel = old_sleep
+
+    _assert(len(calls) == 2, f"successful short probe call count was wrong: {len(calls)}")
+    _assert(delays == [2], f"successful short probe delay was wrong: {delays}")
+    _assert(
+        batch_state.media_settle_delay_seconds == 2,
+        f"successful short probe did not lower delay: {batch_state.media_settle_delay_seconds}",
+    )
+    _assert(
+        "Short delay probe succeeded." in "\\n".join(logs),
+        "successful short probe was not reported",
     )
 
 

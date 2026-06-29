@@ -1,249 +1,104 @@
-# YouTube Downloaderbs
+# Phase 3H.8 — One-Video Lookahead Media Pipeline
 
-Ứng dụng desktop portable cho Windows giúp lấy danh sách video từ kênh YouTube bằng YouTube Data API và tải video, thumbnail hoặc MP3 thông qua yt-dlp và ffmpeg.
+## Purpose
 
-<p align="center">
-  <a href="https://github.com/sangbuidinh/s9h-YoutubeDownloader/releases/latest">
-    <img alt="Latest Release" src="https://img.shields.io/github/v/release/sangbuidinh/s9h-YoutubeDownloader?label=latest%20release">
-  </a>
-  <a href="https://github.com/sangbuidinh/s9h-YoutubeDownloader/releases">
-    <img alt="Total Downloads" src="https://img.shields.io/github/downloads/sangbuidinh/s9h-YoutubeDownloader/total?label=downloads">
-  </a>
-  <a href="https://github.com/yt-dlp/yt-dlp">
-    <img alt="yt-dlp" src="https://img.shields.io/badge/runtime-yt--dlp-lightgrey">
-  </a>
-  <a href="https://ffmpeg.org/">
-    <img alt="ffmpeg" src="https://img.shields.io/badge/media-ffmpeg-green">
-  </a>
-  <a href="https://www.sqlite.org/index.html">
-    <img alt="SQLite" src="https://img.shields.io/badge/state-SQLite-informational">
-  </a>
-  <a href="https://github.com/sangbuidinh/s9h-YoutubeDownloader/releases/latest">
-    <img alt="Windows Portable" src="https://img.shields.io/badge/Windows-portable-blue">
-  </a>
-</p>
+Phase 3H.7 reduced the fixed 10-second pause, but each video still had to wait for its own authenticated metadata to reach the learned media age.
 
-> [!IMPORTANT]
-> Ứng dụng cần YouTube Data API key để lấy danh sách video từ kênh. Một số video có thể cần cookies hợp lệ nếu YouTube yêu cầu đăng nhập hoặc xác minh bot.
+Phase 3H.8 pipelines one video ahead:
 
-## ✨ Tính năng chính
+1. The current video uses authenticated metadata and downloads media without cookies.
+2. While the current media transfer is running, a second yt-dlp process prepares authenticated metadata for the next video only.
+3. When the next video starts, the app reuses that prefetched metadata.
+4. If the metadata is already old enough, media download starts immediately.
+5. If it is not old enough, the app waits only the remaining time rather than the full learned delay.
 
-- Lấy danh sách video từ kênh YouTube bằng YouTube Data API.
-- Chọn từng video cần tải thay vì tải toàn bộ kênh.
-- Tải video MP4 thân thiện với Premiere: H.264/AAC, tối đa 1080p.
-- Tải thumbnail JPG.
-- Tải hoặc trích xuất audio MP3.
-- Lưu lịch sử tải và trạng thái thủ công bằng SQLite.
-- Hỗ trợ `cookies*.txt` và tùy chọn `Local Cookie Bridge` cho trường hợp YouTube yêu cầu đăng nhập hoặc xác minh bot.
-- Hiển thị tiến trình tải nhẹ, 2 dòng, không làm rối log.
-- Dạng portable: runtime tools nằm trong `data/bin`.
+Example with a learned 10-second age:
 
-## ⬇️ Tải bản mới nhất
+- next metadata was prepared 12 seconds ago -> wait 0 seconds;
+- next metadata was prepared 7 seconds ago -> wait 3 seconds;
+- no prefetch available -> use the normal authenticated extraction fallback.
 
-⬇️ Tải bản đóng gói mới nhất [tại đây](https://github.com/sangbuidinh/s9h-YoutubeDownloader/releases/latest).
+## Adaptive retry targets
 
-> [!NOTE]
-> Giải nén toàn bộ file zip trước khi chạy. Không chỉ kéo riêng file `.exe` ra ngoài vì app cần thư mục `data/bin`.
+Cookieless saved-media retry targets are now cumulative metadata ages:
 
-## 🚀 Hướng dẫn nhanh
+- 2 seconds
+- 5 seconds
+- 10 seconds
+- 30 seconds
 
-1. Tải bản release mới nhất.
-2. Giải nén toàn bộ thư mục.
-3. Chạy `Youtube Downloaderbs.exe`.
-4. Nhập YouTube Data API key.
-5. Dán Channel URL / Channel ID / Handle.
-6. Bấm `Lấy danh sách Video`.
-7. Chọn video cần tải.
-8. Chọn thư mục lưu và kiểu tải.
-9. Bấm tải.
+The app waits only the difference between the current metadata age and the next target.
 
-## 📁 Cấu trúc portable
+## Concurrency safety
 
-```text
-Youtube Downloader/
-|-- Youtube Downloaderbs.exe
-`-- data/
-    |-- api key.txt.example
-    |-- cookies.txt.example
-    |-- app_settings.example.json
-    `-- bin/
-        |-- yt-dlp.exe
-        |-- ffmpeg.exe
-        `-- deno.exe
-```
+The download controller now tracks more than one active subprocess so Stop/Cancel can terminate both:
 
-Runtime tools được đặt ngoài file `.exe` để có thể cập nhật riêng. Hãy giữ nguyên cấu trúc thư mục khi sử dụng bản portable.
+- the current media transfer;
+- the one-video metadata lookahead process.
 
-## ✅ Yêu cầu
+Only one future video is prefetched. Media files are still downloaded sequentially.
 
-| Thành phần | Bắt buộc | Ghi chú |
-|---|---:|---|
-| Windows | Có | Ứng dụng desktop cho Windows |
-| YouTube Data API key | Có | Dùng để lấy danh sách video từ kênh |
-| `yt-dlp.exe` | Có | Đặt trong `data/bin` |
-| `ffmpeg.exe` | Có | Đặt trong `data/bin`, dùng để merge và trích xuất MP3 |
-| `deno.exe` | Không | Hỗ trợ một số YouTube JavaScript challenge |
-| `cookies*.txt` / Local Cookie Bridge | Không | Dùng khi YouTube yêu cầu đăng nhập, phiên trình duyệt hoặc xác minh bot |
+## Preserved behavior
 
-## 🔑 YouTube Data API key
+- Cookie Bridge and isolated per-attempt cookie copies;
+- cookieless saved-media transfer after authenticated extraction;
+- real-time timestamps on every visible log line;
+- hidden `.s9h-stage-*` directories;
+- MP4 container;
+- H.264/AVC video;
+- AAC audio;
+- maximum 1080p;
+- final FFmpeg/ffprobe Premiere-safe validation;
+- `-N 1` fragment concurrency;
+- SQLite status behavior;
+- thumbnail workflow.
 
-YouTube Data API key là bắt buộc để lấy danh sách video từ kênh. Bạn có thể nhập API key trực tiếp trong app trước khi tải danh sách video.
+## Apply
 
-Sau một lần `Lấy danh sách Video` thành công, API key không rỗng trong ô nhập được tự động ghi nhớ và bảo vệ bằng Windows DPAPI cho user hiện tại trong:
+Apply after Phase 3H.7.
 
-```text
-data/app_settings.json
-```
-
-File cài đặt chỉ lưu payload đã bảo vệ `last_api_key_protected`; app không lưu plaintext `last_api_key`. Trường tùy chọn cũ `remember_api_key` đã bị loại bỏ và được dọn trong lần đọc/ghi cài đặt tiếp theo. Key đã bảo vệ thường chỉ giải mã được bằng đúng tài khoản Windows đã lưu nó, nên khi chuyển thư mục portable sang PC hoặc user Windows khác, bạn có thể phải nhập lại key. Nếu Windows DPAPI không khả dụng hoặc lưu thất bại, key vẫn dùng được trong phiên hiện tại nhưng app sẽ hiển thị cảnh báo.
-
-App cũng có thể đọc thêm API key từ `data/api key.txt`, mỗi dòng một key. File này vẫn là nguồn key plaintext do người dùng tự quản lý; app không tự động copy key UI vào file đó và không thay đổi file đó. File `data/api key.txt.example` trong bản đóng gói chỉ là mẫu.
-
-> [!WARNING]
-> Không commit, upload hoặc chia sẻ API key thật, `data/api key.txt` hoặc `data/app_settings.json`. DPAPI không bảo vệ key trước malware hoặc tiến trình khác đã chạy với cùng quyền của user Windows hiện tại.
-
-## 🍪 Cookies
-
-Cookies là tùy chọn. Hãy dùng cookies khi YouTube yêu cầu đăng nhập, xác minh bot, truy cập video giới hạn tuổi, video riêng tư hoặc nội dung phụ thuộc phiên đăng nhập.
-
-App hỗ trợ chọn file `cookies*.txt` hoặc `cookies.txt`. File cookies nên được xuất theo Netscape cookies format.
-
-> [!WARNING]
-> Không upload cookies thật lên GitHub và không đưa cookies thật vào release package.
-
-### Local Cookie Bridge v1.1.0-pre
-
-YouTube Downloaderbs v1.1.0-pre supports an optional `Local Cookie Bridge`.
-
-Cookie Bridge repository:
-https://github.com/sangbuidinh/s9h-youtube-cookie-bridge
-
-Use this only when YouTube/yt-dlp requires browser cookies or reports session/bot-check related errors. Normal downloads do not require Cookie Bridge.
-
-The bridge exports browser cookies locally to:
-
-```text
-data/runtime/youtube_cookies.txt
-```
-
-In the app:
-
-1. Enable `Sử dụng Cookies`.
-2. Choose `Local Cookie Bridge`.
-3. Set the bridge cookie path to `data/runtime/youtube_cookies.txt` if needed.
-
-Never share `data/runtime/youtube_cookies.txt`.
-
-## 🎞️ Kiểu tải
-
-| Kiểu tải | Kết quả |
-|---|---|
-| Video + Thumb | `.mp4` + `.jpg` |
-| Audio MP3 + Thumb | `.mp3` + `.jpg` |
-| Video + Audio MP3 + Thumb | `.mp4` + `.mp3` + `.jpg` |
-
-## 📦 Cấu trúc thư mục đầu ra
-
-Khi chọn thư mục lưu, app tạo cấu trúc theo tên kênh và loại file:
-
-```text
-<Save folder>/
-`-- <Channel name>/
-    |-- video/
-    |   `-- Example Title.mp4
-    |-- thumb/
-    |   `-- Example Title.jpg
-    `-- audio/
-        `-- Example Title.mp3
-```
-
-Thư mục `audio` chỉ được dùng khi chọn kiểu tải có MP3.
-
-## 🗃️ Lịch sử tải / SQLite state
-
-Trạng thái tải và trạng thái chỉnh thủ công được lưu trong SQLite:
-
-```text
-data/download_state.sqlite3
-```
-
-SQLite là nguồn dữ liệu chính cho trạng thái trong app. Trạng thái tải được lưu theo định danh kênh/video trong SQLite và không chỉ dựa vào việc quét thư mục đầu ra. Cách này giúp trạng thái ổn định hơn khi người dùng đổi tên hoặc di chuyển file đã tải.
-
-Các file sidecar của SQLite có thể xuất hiện bên cạnh database:
-
-```text
-data/download_state.sqlite3-wal
-data/download_state.sqlite3-shm
-```
-
-> [!IMPORTANT]
-> Không xóa các file `.sqlite3`, `.wal` hoặc `.shm` nếu bạn muốn giữ lịch sử tải và trạng thái thủ công.
-
-## 🧰 Khắc phục sự cố
-
-| Vấn đề | Nguyên nhân thường gặp | Cách xử lý |
-|---|---|---|
-| API key không hợp lệ | Key sai, bị tắt hoặc chưa bật YouTube Data API | Tạo hoặc nhập YouTube Data API key hợp lệ |
-| Hết quota API | Quota hằng ngày đã dùng hết | Chờ quota reset hoặc dùng API key hợp lệ khác |
-| Thiếu `yt-dlp.exe` | Runtime file không nằm trong `data/bin` | Giữ `yt-dlp.exe` trong `data/bin` |
-| Thiếu `ffmpeg.exe` | Runtime file không nằm trong `data/bin` | Giữ `ffmpeg.exe` trong `data/bin` |
-| YouTube yêu cầu đăng nhập / xác minh bot | YouTube yêu cầu phiên đăng nhập hoặc chặn bot | Bật cookies và chọn file `cookies*.txt` hợp lệ, hoặc dùng tùy chọn `Local Cookie Bridge` |
-| Tải chậm hoặc bị ngắt | Mạng, CDN hoặc YouTube throttling | Thử lại sau, cập nhật yt-dlp hoặc dùng cookies hợp lệ |
-| Lỗi trích xuất MP3 | Thiếu ffmpeg hoặc file MP4 nguồn không hợp lệ | Kiểm tra `ffmpeg.exe` và thử tải lại |
-
-<details>
-<summary><strong>▶️ Chạy từ source</strong></summary>
+1. Let the current batch finish.
+2. Close the application and remaining yt-dlp/FFmpeg/Deno processes.
+3. Extract this ZIP over the repository root and replace files.
+4. Rebuild the EXE.
 
 ```powershell
-python app.py
+Remove-Item build, dist -Recurse -Force -ErrorAction SilentlyContinue
+python scripts\package_windows.py
 ```
 
-Khi chạy từ source, dữ liệu app nằm trong thư mục `data` của repository. Runtime tools được đọc từ `data/bin`.
+## Files
 
-</details>
+- `core/downloader.py`
+- `scripts/smoke_ytdlp_failure_classification.py`
+- `scripts/smoke_cookie_media_lookahead.py`
 
-<details>
-<summary><strong>🛠️ Đóng gói bằng PyInstaller</strong></summary>
-
-Chạy từ thư mục gốc của repository:
+## Validation
 
 ```powershell
-python -m PyInstaller --noconfirm --clean --onefile --windowed `
-  --icon "assets\app_icon.ico" `
-  --add-data "assets\app_icon.ico;assets" `
-  --add-data "assets\app_icon.png;assets" `
-  --name "Youtube Downloaderbs" app.py
+python -m compileall -q core ui scripts
+python scripts\smoke_cookie_media_lookahead.py
+python scripts\smoke_ytdlp_failure_classification.py
+python scripts\smoke_cookie_attempt_isolation.py
+python scripts\smoke_progress_cancel.py
+python scripts\smoke_hidden_staging_directory.py
+python scripts\smoke_log_timestamps.py
+python scripts\smoke_atomic_output_promotion.py
 ```
 
-Output dự kiến:
+## Expected logs
 
 ```text
-dist/Youtube Downloaderbs.exe
+[COOKIE LOOKAHEAD] Preparing authenticated metadata for next video: ...
+[COOKIE LOOKAHEAD] Authenticated metadata is ready for next video: ...
+[COOKIE LOOKAHEAD] Reusing metadata prepared 12.4 seconds earlier.
+[COOKIE BATCH MODE] Using one-video lookahead metadata; the media transfer will begin as soon as its learned age is reached.
+[COOKIE LOOKAHEAD] Metadata already reached the learned age; starting media transfer immediately.
 ```
 
-Release package phải giữ user data và runtime tools ở ngoài file `.exe`.
+When the metadata is not old enough:
 
-</details>
-
-## 🔒 Ghi chú bảo mật
-
-Không commit hoặc upload:
-
-- `data/download_state.sqlite3`
-- `data/download_state.sqlite3-wal`
-- `data/download_state.sqlite3-shm`
-- `data/app_settings.json`
-- cookies files
-- API key files
-- generated `.exe`
-- release archives
-
-Chỉ các file mẫu như `data/app_settings.example.json`, `data/api key.txt.example` và `data/cookies.txt.example` là phù hợp để đưa vào release package.
-
-## ⚠️ Giới hạn hiện tại
-
-- Cần YouTube Data API key để lấy danh sách video từ kênh.
-- Một số lượt tải có thể cần cookies hợp lệ.
-- Runtime tools cần được cập nhật thủ công trong `data/bin`.
-- Hành vi của YouTube có thể thay đổi và có thể cần cập nhật yt-dlp.
-- Trạng thái tải được duy trì trong SQLite, không dựa vào việc quét toàn bộ filesystem.
+```text
+[COOKIE LOOKAHEAD] Reusing metadata prepared 7.2 seconds earlier.
+[COOKIE BATCH MODE] Waiting 3 seconds before the media transfer (learned metadata age; metadata age target: 10 seconds).
+```
