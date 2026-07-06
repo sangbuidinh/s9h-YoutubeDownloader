@@ -22,7 +22,10 @@ def _configure_cookie_media_strategy() -> None:
     # One-video lookahead prepares that metadata while the current video downloads,
     # so the age requirement is normally satisfied without an idle pause.
     downloader.COOKIE_MEDIA_RETRY_TARGET_SECONDS = (10, 30)
-    downloader.COOKIE_MEDIA_SHORT_PROBE_SECONDS = 10
+
+    # Keep both learned targets sticky. Using 10 here would make a successful
+    # 30-second fallback immediately probe 10 seconds again on the next video.
+    downloader.COOKIE_MEDIA_SHORT_PROBE_SECONDS = 30
     downloader.COOKIE_MEDIA_PROBE_INTERVAL_VIDEOS = 2**31 - 1
 
 
