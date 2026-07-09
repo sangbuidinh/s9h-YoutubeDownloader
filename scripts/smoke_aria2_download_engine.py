@@ -1,3 +1,4 @@
+import os
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -43,6 +44,8 @@ BAT_CONTINUATION_WARNING = (
 def main() -> int:
     _test_exact_fast_constants()
     _test_exact_fast_video_command()
+    _test_fast_base_default_is_strict()
+    _test_fast_base_explicit_ignore_errors()
     _test_direct_fast_cookie_path()
     _test_stable_commands_exclude_ignore_errors()
     _test_fast_bypasses_stable_helpers()
@@ -53,6 +56,11 @@ def main() -> int:
     _test_fast_ytdlp_failure_without_mp4_reraises()
     _test_fast_ytdlp_failure_with_zero_byte_mp4_reraises()
     _test_fixed_mp4_is_not_selected_as_source()
+    _test_zero_byte_exact_mp4_is_not_selected()
+    _test_exact_merged_mp4_beats_newer_fragment()
+    _test_non_fragment_fallback_beats_newer_fragment()
+    _test_fragment_is_last_fallback()
+    _test_ytdlp_error_prefers_exact_merged_mp4_over_fragment()
     _test_ffmpeg_failure_is_not_promoted_and_marks_failed()
     _test_corrupt_fast_mp4_is_not_promoted()
     _test_fast_cancellation_before_continuation()
@@ -114,6 +122,37 @@ def _test_exact_fast_video_command() -> None:
     _assert(downloader.PREMIERE_SAFE_VIDEO_FORMAT not in command, "Fast command used Premiere-safe selector")
     _assert("--http-chunk-size" not in command, "Fast command used Stable chunk setting")
     _assert("--load-info-json" not in command, "Fast command used saved info-json")
+
+
+def _test_fast_base_default_is_strict() -> None:
+    with TemporaryDirectory(prefix="fast_base_default_") as temp_dir:
+        root = Path(temp_dir)
+        paths = _runtime_paths(root, aria2=True)
+        validation = _aria2_validation(paths)
+        with _patched_runtime(paths):
+            command = downloader._base_fast_ytdlp_command(
+                _options(root, DOWNLOAD_ENGINE_ARIA2_FAST),
+                validation,
+            )
+
+    _assert("--ignore-errors" not in command, "Fast base default included --ignore-errors")
+    _assert(_option_value(command, "--extractor-args") == ARIA2_FAST_EXTRACTOR_ARGS, "Fast base missed player client")
+    _assert(_option_value(command, "--downloader-args") == ARIA2_FAST_DOWNLOADER_ARGS, "Fast base missed aria2 profile")
+
+
+def _test_fast_base_explicit_ignore_errors() -> None:
+    with TemporaryDirectory(prefix="fast_base_ignore_errors_") as temp_dir:
+        root = Path(temp_dir)
+        paths = _runtime_paths(root, aria2=True)
+        validation = _aria2_validation(paths)
+        with _patched_runtime(paths):
+            command = downloader._base_fast_ytdlp_command(
+                _options(root, DOWNLOAD_ENGINE_ARIA2_FAST),
+                validation,
+                ignore_errors=True,
+            )
+
+    _assert(command.count("--ignore-errors") == 1, "Fast base explicit ignore_errors did not add exactly one flag")
 
 
 def _test_direct_fast_cookie_path() -> None:
@@ -185,6 +224,8 @@ def _test_stable_commands_exclude_ignore_errors() -> None:
     _assert("--ignore-errors" not in metadata_media, "Info-json media command contained --ignore-errors")
     _assert(captured_thumbnail, "Thumbnail command was not captured")
     _assert("--ignore-errors" not in captured_thumbnail[0], "Thumbnail command contained --ignore-errors")
+    _assert(not _contains_aria2(captured_thumbnail[0]), "Thumbnail command contained aria2")
+    _assert("--extractor-args" not in captured_thumbnail[0], "Thumbnail command contained Fast extractor args")
 
 
 def _test_fast_bypasses_stable_helpers() -> None:
@@ -561,10 +602,129 @@ def _test_fast_ytdlp_failure_with_zero_byte_mp4_reraises() -> None:
 def _test_fixed_mp4_is_not_selected_as_source() -> None:
     with TemporaryDirectory(prefix="fast_fixed_selector_") as temp_dir:
         root = Path(temp_dir)
+        video_id = "video"
         fixed = root / "video_FIXED.mp4"
         fixed.write_bytes(b"fixed")
-        selected = downloader._select_fast_source_mp4(root)
+        selected = downloader._select_fast_source_mp4(root, video_id)
     _assert(selected is None, "_FIXED.mp4 was selected as Fast source")
+
+
+def _test_zero_byte_exact_mp4_is_not_selected() -> None:
+    with TemporaryDirectory(prefix="fast_zero_exact_selector_") as temp_dir:
+        root = Path(temp_dir)
+        video_id = "selector-video"
+        exact = root / f"{video_id}.mp4"
+        exact.write_bytes(b"")
+        selected = downloader._select_fast_source_mp4(root, video_id)
+    _assert(selected is None, "Zero-byte exact MP4 was selected as Fast source")
+
+
+def _test_exact_merged_mp4_beats_newer_fragment() -> None:
+    with TemporaryDirectory(prefix="fast_exact_selector_") as temp_dir:
+        root = Path(temp_dir)
+        video_id = "selector-video"
+        exact = root / f"{video_id}.mp4"
+        fragment = root / f"{video_id}.f137.mp4"
+        exact.write_bytes(b"exact")
+        fragment.write_bytes(b"fragment-larger")
+        _set_mtime_ns(exact, 1_000_000_000)
+        _set_mtime_ns(fragment, 2_000_000_000)
+        selected = downloader._select_fast_source_mp4(root, video_id)
+    _assert(selected == exact, "Exact merged MP4 did not beat newer fragment")
+
+
+def _test_non_fragment_fallback_beats_newer_fragment() -> None:
+    with TemporaryDirectory(prefix="fast_non_fragment_selector_") as temp_dir:
+        root = Path(temp_dir)
+        video_id = "selector-video"
+        alternate = root / "alternate.mp4"
+        fragment = root / f"{video_id}.f137.mp4"
+        alternate.write_bytes(b"alternate")
+        fragment.write_bytes(b"fragment-larger")
+        _set_mtime_ns(alternate, 1_000_000_000)
+        _set_mtime_ns(fragment, 2_000_000_000)
+        selected = downloader._select_fast_source_mp4(root, video_id)
+    _assert(selected == alternate, "Non-fragment fallback did not beat newer fragment")
+
+
+def _test_fragment_is_last_fallback() -> None:
+    with TemporaryDirectory(prefix="fast_fragment_selector_") as temp_dir:
+        root = Path(temp_dir)
+        video_id = "selector-video"
+        fragment = root / f"{video_id}.f137.mp4"
+        fragment.write_bytes(b"fragment")
+        selected = downloader._select_fast_source_mp4(root, video_id)
+    _assert(selected == fragment, "Fragment was not selected as last fallback")
+
+
+def _test_ytdlp_error_prefers_exact_merged_mp4_over_fragment() -> None:
+    with TemporaryDirectory(prefix="fast_error_exact_over_fragment_") as temp_dir:
+        root = Path(temp_dir)
+        paths = _runtime_paths(root, aria2=True)
+        video_id = "fast-exact-over-fragment"
+        final_path = root / "final.mp4"
+        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+        validation = _aria2_validation(paths)
+        logs: list[str] = []
+        ffmpeg_inputs: list[Path] = []
+        promoted: list[Path] = []
+        final_created = False
+        old_run_fast = downloader._run_fast_ytdlp_command
+        old_ffmpeg = downloader._run_ffmpeg_command
+        old_validate = downloader._validate_premiere_safe_mp4_for_download
+        old_promote = downloader._atomic_promote_with_retry
+        old_build_stable = downloader._build_stable_video_ytdlp_command
+        try:
+            def fail_after_exact_and_fragment(command, *_args, **_kwargs):
+                exact = _output_path(command, "mp4")
+                fragment = exact.with_name(f"{exact.stem}.f137.mp4")
+                exact.write_bytes(b"exact")
+                fragment.write_bytes(b"fragment-larger")
+                _set_mtime_ns(exact, 1_000_000_000)
+                _set_mtime_ns(fragment, 2_000_000_000)
+                raise _failure(command, YtdlpFailureKind.NETWORK, "aria2c exited with code 22")
+
+            def fake_ffmpeg(command, *, operation, cancel_controller=None):
+                ffmpeg_inputs.append(Path(command[3]))
+                Path(command[-1]).write_bytes(b"fixed")
+                return ""
+
+            def fake_promote(source, target, *_args, **_kwargs):
+                promoted.append(Path(source))
+                Path(target).write_bytes(Path(source).read_bytes())
+
+            def forbidden_stable(*_args, **_kwargs):
+                raise AssertionError("Fast generated a Stable fallback command")
+
+            downloader._run_fast_ytdlp_command = fail_after_exact_and_fragment
+            downloader._run_ffmpeg_command = fake_ffmpeg
+            downloader._validate_premiere_safe_mp4_for_download = lambda *_args, **_kwargs: None
+            downloader._atomic_promote_with_retry = fake_promote
+            downloader._build_stable_video_ytdlp_command = forbidden_stable
+            with _patched_runtime(paths):
+                downloader._download_video_fast_bat_compatible(
+                    video_id,
+                    root,
+                    final_path,
+                    options,
+                    logs.append,
+                    None,
+                    validation,
+                )
+                final_created = final_path.exists()
+        finally:
+            downloader._run_fast_ytdlp_command = old_run_fast
+            downloader._run_ffmpeg_command = old_ffmpeg
+            downloader._validate_premiere_safe_mp4_for_download = old_validate
+            downloader._atomic_promote_with_retry = old_promote
+            downloader._build_stable_video_ytdlp_command = old_build_stable
+
+    expected = root / f"{video_id}.mp4"
+    fragment = root / f"{video_id}.f137.mp4"
+    _assert(ffmpeg_inputs == [expected], f"FFmpeg did not receive exact merged MP4: {ffmpeg_inputs}")
+    _assert(fragment not in ffmpeg_inputs, "FFmpeg received fragment instead of exact merged MP4")
+    _assert(promoted and promoted[0].name.endswith("_FIXED.mp4"), "Converted MP4 was not promoted")
+    _assert(final_created, "Final MP4 was not created")
 
 
 def _test_ffmpeg_failure_is_not_promoted_and_marks_failed() -> None:
@@ -825,7 +985,7 @@ def _test_fast_audio_command() -> None:
     _assert(_option_value(command, "--downloader-args") == ARIA2_FAST_DOWNLOADER_ARGS, "Fast audio missed aria2 profile")
     _assert(_option_value(command, "-f") == ARIA2_FAST_AUDIO_FORMAT, "Fast audio format mismatch")
     _assert("-x" in command, "Fast audio did not request extraction")
-    _assert(command.count("--ignore-errors") == 1, "Fast audio did not inherit exactly one --ignore-errors")
+    _assert("--ignore-errors" not in command, "Fast audio command contained --ignore-errors")
     _assert("-N" not in command, "Fast audio contained Stable -N")
 
 
@@ -1243,6 +1403,10 @@ def _option_value(command: list[str], option: str) -> str:
     if index + 1 >= len(command):
         return ""
     return command[index + 1]
+
+
+def _set_mtime_ns(path: Path, modified_ns: int) -> None:
+    os.utime(path, ns=(modified_ns, modified_ns))
 
 
 def _contains_aria2(command: list[str]) -> bool:

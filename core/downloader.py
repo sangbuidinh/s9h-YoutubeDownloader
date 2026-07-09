@@ -1518,7 +1518,7 @@ def _download_video_fast_bat_compatible(
 
     _raise_if_cancelled(cancel_controller)
 
-    downloaded_mp4 = _select_fast_source_mp4(temp_dir)
+    downloaded_mp4 = _select_fast_source_mp4(temp_dir, video_id)
     if downloaded_mp4 is None:
         if ytdlp_error is not None:
             raise ytdlp_error
@@ -1552,34 +1552,59 @@ def _download_video_fast_bat_compatible(
             log("[WARNING] Could not remove the original Fast staging MP4.")
 
 
-def _select_fast_source_mp4(temp_dir: Path) -> Path | None:
+def _select_fast_source_mp4(temp_dir: Path, video_id: str) -> Path | None:
+    expected_stem = _safe_temp_stem(video_id)
+    expected_path = temp_dir / f"{expected_stem}.mp4"
+
+    def usable(path: Path) -> bool:
+        try:
+            return (
+                path.is_file()
+                and path.suffix.lower() == ".mp4"
+                and not path.name.lower().endswith("_fixed.mp4")
+                and path.stat().st_size > 0
+            )
+        except OSError:
+            return False
+
+    if usable(expected_path):
+        return expected_path
+
     candidates: list[Path] = []
     try:
-        for path in temp_dir.glob("*.mp4"):
-            if not path.is_file():
-                continue
-            if path.name.lower().endswith("_fixed.mp4"):
-                continue
-            try:
-                if path.stat().st_size <= 0:
-                    continue
-            except OSError:
-                continue
-            candidates.append(path)
+        paths = list(temp_dir.glob("*.mp4"))
     except OSError:
         return None
+
+    for path in paths:
+        if usable(path):
+            candidates.append(path)
 
     if not candidates:
         return None
 
-    def sort_key(path: Path) -> tuple[int, int]:
+    fragment_pattern = re.compile(r"\.f\d+\.mp4$", re.IGNORECASE)
+
+    def candidate_priority(path: Path) -> tuple[int, int, int, str]:
+        name = path.name
+        is_format_fragment = bool(fragment_pattern.search(name))
         try:
             stat = path.stat()
         except OSError:
-            return (0, 0)
-        return (stat.st_mtime_ns, stat.st_size)
+            modified_ns = 0
+            size = 0
+        else:
+            modified_ns = stat.st_mtime_ns
+            size = stat.st_size
 
-    candidates.sort(key=sort_key, reverse=True)
+        return (
+            1 if is_format_fragment else 0,
+            -modified_ns,
+            -size,
+            name.lower(),
+        )
+
+    candidates.sort(key=candidate_priority)
     return candidates[0]
 
 
@@ -1614,7 +1639,11 @@ def _build_fast_video_ytdlp_command(
 ) -> list[str]:
     url = f"https://www.youtube.com/watch?v={video_id}"
     output_template = str(temp_dir / f"{_safe_temp_stem(video_id)}.%(ext)s")
-    return _base_fast_ytdlp_command(options, aria2_validation) + [
+    return _base_fast_ytdlp_command(
+        options,
+        aria2_validation,
+        ignore_errors=True,
+    ) + [
         "-f",
         ARIA2_FAST_VIDEO_FORMAT,
         "--merge-output-format",
@@ -1712,7 +1741,11 @@ def _build_fast_audio_ytdlp_command(
 ) -> list[str]:
     url = f"https://www.youtube.com/watch?v={video_id}"
     output_template = str(temp_dir / f"{_safe_temp_stem(video_id)}.%(ext)s")
-    return _base_fast_ytdlp_command(options, aria2_validation) + [
+    return _base_fast_ytdlp_command(
+        options,
+        aria2_validation,
+        ignore_errors=False,
+    ) + [
         "-f",
         ARIA2_FAST_AUDIO_FORMAT,
         "-x",
@@ -1997,6 +2030,8 @@ def _base_ytdlp_command(options: DownloadOptions) -> list[str]:
 def _base_fast_ytdlp_command(
     options: DownloadOptions,
     aria2_validation: _Aria2RuntimeValidation,
+    *,
+    ignore_errors: bool = False,
 ) -> list[str]:
     if not aria2_validation.available:
         raise DownloadError(_aria2_unavailable_message())
@@ -2014,8 +2049,10 @@ def _base_fast_ytdlp_command(
         "--downloader-args",
         ARIA2_FAST_DOWNLOADER_ARGS,
         "--no-warnings",
-        "--ignore-errors",
     ]
+
+    if ignore_errors:
+        command.append("--ignore-errors")
 
     if options.cookies_enabled:
         command.extend([
