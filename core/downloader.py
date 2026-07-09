@@ -406,8 +406,6 @@ class _Aria2RuntimeValidation:
 class _MediaDownloaderSelection:
     engine: str
     command_args: tuple[str, ...]
-    aria2_requested: bool
-    aria2_available: bool
 
 
 @dataclass
@@ -658,31 +656,18 @@ def _normalize_download_engine(value: object) -> str:
 def _media_downloader_selection(
     options: DownloadOptions,
     *,
-    force_stable: bool = False,
     aria2_validation: _Aria2RuntimeValidation | None = None,
 ) -> _MediaDownloaderSelection:
-    requested_engine = _normalize_download_engine(options.download_engine)
-    if force_stable or requested_engine != DOWNLOAD_ENGINE_ARIA2_FAST:
+    engine = _normalize_download_engine(options.download_engine)
+    if engine == DOWNLOAD_ENGINE_STABLE:
         return _MediaDownloaderSelection(
             engine=DOWNLOAD_ENGINE_STABLE,
             command_args=("-N", "1"),
-            aria2_requested=requested_engine == DOWNLOAD_ENGINE_ARIA2_FAST,
-            aria2_available=False,
         )
 
     aria2_path = aria2_validation.path if aria2_validation is not None else runtime_file("aria2c.exe")
-    aria2_available = (
-        bool(aria2_validation.available)
-        if aria2_validation is not None
-        else aria2_path.exists() and aria2_path.is_file()
-    )
-    if not aria2_available:
-        return _MediaDownloaderSelection(
-            engine=DOWNLOAD_ENGINE_STABLE,
-            command_args=("-N", "1"),
-            aria2_requested=True,
-            aria2_available=False,
-        )
+    if aria2_validation is None or not aria2_validation.available:
+        raise DownloadError(_aria2_unavailable_message())
 
     return _MediaDownloaderSelection(
         engine=DOWNLOAD_ENGINE_ARIA2_FAST,
@@ -692,8 +677,6 @@ def _media_downloader_selection(
             "--downloader-args",
             ARIA2_FAST_DOWNLOADER_ARGS,
         ),
-        aria2_requested=True,
-        aria2_available=True,
     )
 
 
@@ -840,7 +823,7 @@ def _start_cookie_media_lookahead(
                 video_id,
                 staging_dir,
                 options,
-                force_stable_downloader=True,
+                include_media_downloader=False,
             )
             info_json_path = _extract_authenticated_infojson_path(
                 command,
@@ -990,6 +973,7 @@ def download_items(
     cancel_controller: DownloadController | None = None,
     progress_callback=None,
 ) -> None:
+    options.download_engine = _normalize_download_engine(options.download_engine)
     validate_download_environment(options)
     ensure_output_dirs(options.base_folder, options.channel_name, options.download_mode)
     _call_runtime_tool_summary(options, log, cancel_controller)
@@ -1462,20 +1446,13 @@ def _download_video(
 ) -> None:
     if final_path.exists() and _premiere_safe_mp4_ready_for_download(final_path, cancel_controller):
         return
-    _run_media_ytdlp_with_engine_fallback(
-        lambda *, force_stable: _build_video_ytdlp_command(
-            video_id,
-            temp_dir,
-            options,
-            force_stable_downloader=force_stable,
-            aria2_validation=aria2_validation,
-        ),
+    command = _build_video_ytdlp_command(
+        video_id,
         temp_dir,
         options,
-        log,
-        cancel_controller,
-        cookie_retry_state,
+        aria2_validation=aria2_validation,
     )
+    _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
     staged_mp4_path = _select_staged_file(temp_dir, "*.mp4", ".mp4")
     _emit_current_progress("Validating MP4")
     _validate_premiere_safe_mp4_for_download(staged_mp4_path, log, True, cancel_controller)
@@ -1495,17 +1472,20 @@ def _build_video_ytdlp_command(
     temp_dir: Path,
     options: DownloadOptions,
     *,
-    force_stable_downloader: bool = False,
+    include_media_downloader: bool = True,
     aria2_validation: _Aria2RuntimeValidation | None = None,
 ) -> list[str]:
     url = f"https://www.youtube.com/watch?v={video_id}"
     output_template = str(temp_dir / f"{_safe_temp_stem(video_id)}.%(ext)s")
-    downloader_selection = _media_downloader_selection(
-        options,
-        force_stable=force_stable_downloader,
-        aria2_validation=aria2_validation,
+    media_args = (
+        _media_downloader_selection(
+            options,
+            aria2_validation=aria2_validation,
+        ).command_args
+        if include_media_downloader
+        else ()
     )
-    return _base_ytdlp_command(options) + list(downloader_selection.command_args) + [
+    return _base_ytdlp_command(options) + list(media_args) + [
         "-f",
         PREMIERE_SAFE_VIDEO_FORMAT,
         "--merge-output-format",
@@ -1530,20 +1510,13 @@ def _download_audio(
     cookie_retry_state: _YtdlpAttemptState | None = None,
     aria2_validation: _Aria2RuntimeValidation | None = None,
 ) -> None:
-    _run_media_ytdlp_with_engine_fallback(
-        lambda *, force_stable: _build_audio_ytdlp_command(
-            video_id,
-            temp_dir,
-            options,
-            force_stable_downloader=force_stable,
-            aria2_validation=aria2_validation,
-        ),
+    command = _build_audio_ytdlp_command(
+        video_id,
         temp_dir,
         options,
-        log,
-        cancel_controller,
-        cookie_retry_state,
+        aria2_validation=aria2_validation,
     )
+    _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
     _move_single_file(temp_dir, "*.mp3", final_path, log, cancel_controller=cancel_controller)
 
 
@@ -1552,14 +1525,12 @@ def _build_audio_ytdlp_command(
     temp_dir: Path,
     options: DownloadOptions,
     *,
-    force_stable_downloader: bool = False,
     aria2_validation: _Aria2RuntimeValidation | None = None,
 ) -> list[str]:
     url = f"https://www.youtube.com/watch?v={video_id}"
     output_template = str(temp_dir / f"{_safe_temp_stem(video_id)}.%(ext)s")
     downloader_selection = _media_downloader_selection(
         options,
-        force_stable=force_stable_downloader,
         aria2_validation=aria2_validation,
     )
     return _base_ytdlp_command(options) + list(downloader_selection.command_args) + [
@@ -1575,188 +1546,6 @@ def _build_audio_ytdlp_command(
         output_template,
         url,
     ]
-
-
-def _run_media_ytdlp_with_engine_fallback(
-    build_command,
-    temp_dir: Path,
-    options: DownloadOptions,
-    log,
-    cancel_controller: DownloadController | None = None,
-    cookie_retry_state: _YtdlpAttemptState | None = None,
-) -> None:
-    command = build_command(force_stable=False)
-    try:
-        _run_ytdlp_with_retries(
-            command,
-            options,
-            log,
-            cancel_controller,
-            cookie_retry_state,
-            defer_external_downloader_failure=_command_uses_aria2_downloader(command),
-        )
-        return
-    except YtdlpExecutionError as exc:
-        failure_kind = classify_ytdlp_failure_kind(exc, options)
-        exc.failure_kind = failure_kind
-        if not _eligible_for_aria2_stable_fallback(exc, failure_kind):
-            raise
-
-        log("[WARNING] aria2c media transfer failed; retrying the current part once with the stable yt-dlp internal downloader.")
-        _cleanup_failed_media_attempt_partials(list(exc.command or command), temp_dir, log)
-        _raise_if_cancelled(cancel_controller)
-        stable_command = build_command(force_stable=True)
-        _validate_stable_media_fallback_command(stable_command)
-        _run_ytdlp_with_retries(
-            stable_command,
-            options,
-            log,
-            cancel_controller,
-            cookie_retry_state,
-            defer_external_downloader_failure=False,
-        )
-        log("[INFO] Stable downloader fallback succeeded for the current part.")
-
-
-def _eligible_for_aria2_stable_fallback(
-    exc: YtdlpExecutionError,
-    failure_kind: YtdlpFailureKind,
-) -> bool:
-    failed_command = list(exc.command)
-    if not _command_uses_aria2_downloader(failed_command):
-        return False
-    if exc.stage != YTDLP_STAGE_DOWNLOAD:
-        return False
-    text = "\n".join([str(exc), exc.combined_output, *exc.output_lines, *exc.fatal_lines])
-    if (
-        _contains_bot_check_error(text)
-        or is_cookie_session_error(text)
-        or _contains_login_required_error(text)
-        or _contains_po_token_or_visitor_data_error(text)
-        or _contains_rate_limit_error(text)
-    ):
-        return False
-    if failure_kind in {
-        YtdlpFailureKind.HTTP_401,
-        YtdlpFailureKind.RATE_LIMIT,
-        YtdlpFailureKind.BOT_CHECK,
-        YtdlpFailureKind.COOKIE_SESSION,
-        YtdlpFailureKind.LOGIN_REQUIRED,
-        YtdlpFailureKind.PO_TOKEN_OR_VISITOR_DATA,
-        YtdlpFailureKind.FORMAT_UNAVAILABLE,
-        YtdlpFailureKind.PERMANENT_VIDEO,
-        YtdlpFailureKind.OUTPUT_PATH,
-        YtdlpFailureKind.TOOL_CONFIGURATION,
-    }:
-        return False
-    if failure_kind in {
-        YtdlpFailureKind.NETWORK_TIMEOUT,
-        YtdlpFailureKind.NETWORK,
-        YtdlpFailureKind.HTTP_403,
-    }:
-        return True
-    return _contains_aria2_transport_failure(text)
-
-
-def _command_uses_aria2_downloader(command: list[str]) -> bool:
-    downloader_value = _command_option_value(command, "--downloader").lower()
-    external_downloader_value = _command_option_value(command, "--external-downloader").lower()
-    downloader_args = _command_option_value(command, "--downloader-args").lower()
-    external_downloader_args = _command_option_value(command, "--external-downloader-args").lower()
-    return bool(
-        "aria2" in downloader_value
-        or "aria2" in external_downloader_value
-        or downloader_args.startswith("aria2")
-        or external_downloader_args.startswith("aria2")
-    )
-
-
-def _validate_stable_media_fallback_command(command: list[str]) -> None:
-    if _command_option_value(command, "-N") != "1":
-        raise DownloadError("stable fallback command missing internal downloader fragment setting")
-    forbidden_options = {
-        "--downloader",
-        "--external-downloader",
-        "--downloader-args",
-        "--external-downloader-args",
-    }
-    if any(option in command for option in forbidden_options):
-        raise DownloadError("stable fallback command retained external downloader options")
-    if _contains_aria2_command_value(command):
-        raise DownloadError("stable fallback command retained aria2 configuration")
-
-
-def _contains_aria2_command_value(command: list[str]) -> bool:
-    return any("aria2" in str(value).lower() for value in command)
-
-
-def _contains_aria2_transport_failure(text: str) -> bool:
-    lower = (text or "").lower()
-    return _contains_any(
-        lower,
-        (
-            "aria2c",
-            "aria2",
-            "external downloader",
-            "cuid#",
-            "errorcode=",
-            "download aborted",
-            "download failed",
-            "fragment",
-            "connection reset",
-            "connection aborted",
-            "timed out",
-            "timeout",
-        ),
-    )
-
-
-def _cleanup_failed_media_attempt_partials(command: list[str], staging_dir: Path, log=None) -> None:
-    output_template = _command_option_value(command, "-o")
-    if not output_template:
-        return
-    template_path = Path(output_template)
-    parent = template_path.parent if str(template_path.parent) else staging_dir
-    try:
-        resolved_parent = parent.resolve(strict=False)
-        resolved_staging = staging_dir.resolve(strict=False)
-    except OSError:
-        return
-    if not _is_path_relative_to(resolved_parent, resolved_staging):
-        return
-
-    template_name = template_path.name
-    prefix = template_name.split("%", 1)[0]
-    if not prefix:
-        return
-
-    removable_suffixes = {
-        ".aria2",
-        ".part",
-        ".ytdl",
-        ".mp4",
-        ".m4a",
-        ".webm",
-        ".mp3",
-        ".unknown_video",
-        ".unknown_audio",
-    }
-    try:
-        candidates = list(parent.glob(f"{prefix}*"))
-    except OSError:
-        return
-    for path in candidates:
-        try:
-            if not path.is_file():
-                continue
-            name = path.name.lower()
-            suffix = path.suffix.lower()
-            if suffix not in removable_suffixes and ".part" not in name and ".ytdl" not in name:
-                continue
-            path.unlink()
-        except OSError:
-            if log:
-                log("[WARNING] Could not remove a failed aria2 partial file before stable fallback.")
 
 
 def _extract_mp3_from_video(
@@ -2172,6 +1961,13 @@ def _aria2_runtime_path() -> Path:
     return runtime_file("aria2c.exe")
 
 
+def _aria2_unavailable_message() -> str:
+    return (
+        "aria2c.exe is unavailable. Fast download cannot start. "
+        "Expected runtime path: data\\bin\\aria2c.exe"
+    )
+
+
 def _prepare_media_downloader_runtime(
     options: DownloadOptions,
     log,
@@ -2184,8 +1980,9 @@ def _prepare_media_downloader_runtime(
         return _Aria2RuntimeValidation(False, False, aria2_path)
 
     if not aria2_path.exists() or not aria2_path.is_file():
-        log("[WARNING] aria2c.exe is missing or unavailable; using stable yt-dlp internal downloader.")
-        return _Aria2RuntimeValidation(True, False, aria2_path)
+        message = _aria2_unavailable_message()
+        log(f"[ERROR] {message}")
+        raise DownloadError(message)
 
     _raise_if_cancelled(cancel_controller)
     version = _get_command_version(
@@ -2194,8 +1991,9 @@ def _prepare_media_downloader_runtime(
         timeout_seconds=ARIA2_VERSION_TIMEOUT_SECONDS,
     )
     if not version:
-        log("[WARNING] aria2c.exe is missing or unavailable; using stable yt-dlp internal downloader.")
-        return _Aria2RuntimeValidation(True, False, aria2_path)
+        message = _aria2_unavailable_message()
+        log(f"[ERROR] {message}")
+        raise DownloadError(message)
 
     log("[INFO] Download engine: aria2c fast experimental")
     log("[INFO] aria2c profile: connections=8 splits=8 jobs=4 piece=1M")
@@ -2539,8 +2337,6 @@ def _run_ytdlp_with_retries(
     log,
     cancel_controller: DownloadController | None = None,
     cookie_retry_state: _YtdlpAttemptState | None = None,
-    *,
-    defer_external_downloader_failure: bool = False,
 ) -> None:
     http_403_delays = [10, 30]
     http_403_retries = 0
@@ -2778,9 +2574,6 @@ def _run_ytdlp_with_retries(
                     )
                     _sleep_with_cancel(delay, cancel_controller)
                     continue
-
-            if defer_external_downloader_failure and _eligible_for_aria2_stable_fallback(exc, failure_kind):
-                raise
 
             if (
                 not cookieless_saved_media_403

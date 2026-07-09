@@ -25,7 +25,7 @@ Sources inspected:
 | `cookie_status_var` | `tk.StringVar()` | Inline status for the active cookie source/path: `Missing` or `Found | N bytes | modified YYYY-MM-DD HH:MM:SS`. |
 | `speed_limit_var` | `tk.StringVar()` | Download limit input. Validated by `validate_speed_limit()`; empty or zero means no limit. |
 | `download_mode_var` | `tk.StringVar(value=MODE_VIDEO_THUMB)` | Current download mode. Values come from `DOWNLOAD_MODES`: `Video + Thumb`, `Audio MP3 + Thumb`, `Video + Audio MP3 + Thumb`. |
-| `download_engine_var` | `tk.StringVar(value="Stable - yt-dlp internal")` | Session-only download engine selector. Values map to downloader engines `stable` and `aria2_fast`; unknown labels fall back to stable. |
+| `download_engine_var` | `tk.StringVar(value="Stable - yt-dlp internal")` | Session-only download engine selector. Values map to downloader engines `stable` and `aria2_fast`; unknown labels fall back to stable. The selected value is captured for the batch and is locked while downloads run. |
 | `hide_below_enabled_var` | `tk.BooleanVar(value=True)` | Session-only lower duration filter checkbox. Defaults to enabled on every startup. |
 | `hide_below_minutes_var` | `tk.StringVar(value="3")` | Session-only lower duration threshold entry. Zero through four ASCII digits only; empty while editing resets to `3` on focus loss or Fetch/Load More validation. |
 | `hide_above_enabled_var` | `tk.BooleanVar(value=True)` | Session-only upper duration filter checkbox. Defaults to enabled on every startup. |
@@ -91,9 +91,12 @@ Sources inspected:
 - The download frame includes a session-only `Download engine` readonly combobox with `Stable - yt-dlp internal` as the default and `Fast - aria2c experimental` as the optional fast mode.
 - `Stable - yt-dlp internal` maps to `DownloadOptions.download_engine == "stable"` and preserves the existing yt-dlp internal media downloader behavior.
 - `Fast - aria2c experimental` maps to `DownloadOptions.download_engine == "aria2_fast"` and resolves the optional runtime through `data/bin/aria2c.exe` via `runtime_file("aria2c.exe")`.
-- aria2 applies only to video media transfer and direct audio media transfer performed by yt-dlp. Metadata extraction, one-video lookahead, thumbnails, YouTube API calls, Cookie Bridge, SQLite, FFmpeg extraction, probing, and Premiere-safe validation do not use aria2.
-- Missing or unavailable aria2 falls back to stable mode without failing startup, stable downloads, or package preflight.
-- If an eligible aria2 media transfer fails, the current part is retried once with a freshly rebuilt stable yt-dlp command. Cookie media timing, isolated cookies, one-video lookahead, hidden staging, atomic promotion, and no-secret logging requirements remain unchanged.
+- The selected engine is fixed for the entire batch. Stable batches stay on yt-dlp internal transfer with `-N 1`; Fast batches stay on aria2 for actual yt-dlp media transfer.
+- Missing, invalid, or unstartable aria2 prevents a Fast batch from starting. Stable mode, application startup, and package preflight do not require aria2.
+- Fast failures do not automatically switch to Stable. The selector is not changed by errors; users can manually choose Stable for a later batch and retry.
+- aria2 applies only to video media transfer, direct audio media transfer, and saved-info-json media transfer performed by yt-dlp. Metadata extraction, one-video lookahead metadata preparation, thumbnails, YouTube API calls, Cookie Bridge, SQLite, FFmpeg extraction, probing, and Premiere-safe validation do not use aria2.
+- Authenticated info-json extraction strips media-only downloader arguments. The later saved-media transfer uses the selected batch engine, so Fast saved-media transfer still uses aria2 and Stable saved-media transfer still uses yt-dlp internal transfer.
+- Cookie-media timing, including the 10/30 strategy configured by `app.py`, isolated cookies, one-video lookahead, hidden staging, atomic promotion, systemic Retry/Skip/Stop, and no-secret logging requirements remain unchanged.
 
 Manual status context menu commands:
 
