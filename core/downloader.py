@@ -1510,9 +1510,26 @@ def _download_video_fast_bat_compatible(
         aria2_validation=aria2_validation,
     )
 
-    _run_fast_ytdlp_command(command, options, log, cancel_controller, part=PART_VIDEO)
+    ytdlp_error: YtdlpExecutionError | None = None
+    try:
+        _run_fast_ytdlp_command(command, options, log, cancel_controller, part=PART_VIDEO)
+    except YtdlpExecutionError as exc:
+        ytdlp_error = exc
 
-    downloaded_mp4 = _select_staged_file(temp_dir, "*.mp4", ".mp4")
+    _raise_if_cancelled(cancel_controller)
+
+    downloaded_mp4 = _select_fast_source_mp4(temp_dir)
+    if downloaded_mp4 is None:
+        if ytdlp_error is not None:
+            raise ytdlp_error
+        raise DownloadError("Fast yt-dlp completed without creating a usable MP4")
+
+    if ytdlp_error is not None:
+        log(
+            "[WARNING] Fast yt-dlp reported an error, but a staged MP4 exists. "
+            "Continuing with BAT-compatible FFmpeg validation and conversion."
+        )
+
     _emit_current_progress("Processing", message="Converting Fast download to Premiere-safe MP4")
     fixed_mp4 = _transcode_fast_video_like_bat(downloaded_mp4, temp_dir, log, cancel_controller)
 
@@ -1533,6 +1550,37 @@ def _download_video_fast_bat_compatible(
             downloaded_mp4.unlink()
         except OSError:
             log("[WARNING] Could not remove the original Fast staging MP4.")
+
+
+def _select_fast_source_mp4(temp_dir: Path) -> Path | None:
+    candidates: list[Path] = []
+    try:
+        for path in temp_dir.glob("*.mp4"):
+            if not path.is_file():
+                continue
+            if path.name.lower().endswith("_fixed.mp4"):
+                continue
+            try:
+                if path.stat().st_size <= 0:
+                    continue
+            except OSError:
+                continue
+            candidates.append(path)
+    except OSError:
+        return None
+
+    if not candidates:
+        return None
+
+    def sort_key(path: Path) -> tuple[int, int]:
+        try:
+            stat = path.stat()
+        except OSError:
+            return (0, 0)
+        return (stat.st_mtime_ns, stat.st_size)
+
+    candidates.sort(key=sort_key, reverse=True)
+    return candidates[0]
 
 
 def _build_stable_video_ytdlp_command(
@@ -1966,6 +2014,7 @@ def _base_fast_ytdlp_command(
         "--downloader-args",
         ARIA2_FAST_DOWNLOADER_ARGS,
         "--no-warnings",
+        "--ignore-errors",
     ]
 
     if options.cookies_enabled:

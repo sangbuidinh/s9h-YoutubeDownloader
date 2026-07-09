@@ -10,7 +10,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core import downloader
-from core.download_modes import MODE_VIDEO_THUMB, PART_VIDEO
+from core.download_modes import MODE_VIDEO_THUMB, PART_AUDIO, PART_VIDEO
 from core.downloader import (
     ARIA2_FAST_AUDIO_FORMAT,
     ARIA2_FAST_DOWNLOADER_ARGS,
@@ -22,6 +22,7 @@ from core.downloader import (
     ARIA2_FAST_VIDEO_FORMAT,
     DOWNLOAD_ENGINE_ARIA2_FAST,
     DOWNLOAD_ENGINE_STABLE,
+    DownloadCancelled,
     DownloadError,
     DownloadOptions,
     FFmpegExecutionError,
@@ -33,19 +34,31 @@ from core.downloader import (
 
 CHANNEL_ID = "channel"
 CHANNEL_NAME = "Channel"
+BAT_CONTINUATION_WARNING = (
+    "[WARNING] Fast yt-dlp reported an error, but a staged MP4 exists. "
+    "Continuing with BAT-compatible FFmpeg validation and conversion."
+)
 
 
 def main() -> int:
     _test_exact_fast_constants()
     _test_exact_fast_video_command()
     _test_direct_fast_cookie_path()
+    _test_stable_commands_exclude_ignore_errors()
     _test_fast_bypasses_stable_helpers()
     _test_stable_still_uses_retry_pipeline()
     _test_exact_fast_ffmpeg_command()
     _test_converted_output_is_promoted()
+    _test_fast_ytdlp_failure_with_usable_mp4_continues()
+    _test_fast_ytdlp_failure_without_mp4_reraises()
+    _test_fast_ytdlp_failure_with_zero_byte_mp4_reraises()
+    _test_fixed_mp4_is_not_selected_as_source()
     _test_ffmpeg_failure_is_not_promoted_and_marks_failed()
+    _test_corrupt_fast_mp4_is_not_promoted()
+    _test_fast_cancellation_before_continuation()
     _test_stable_command_unchanged()
     _test_fast_audio_command()
+    _test_fast_audio_remains_strict()
     _test_fast_has_no_automatic_fallback()
     _test_fast_does_not_start_lookahead()
     _test_stable_still_starts_eligible_lookahead()
@@ -92,6 +105,8 @@ def _test_exact_fast_video_command() -> None:
     _assert(_option_value(command, "--downloader") == str(paths["aria2c.exe"]), "Fast downloader path mismatch")
     _assert(command.count("--downloader-args") == 1, "Fast command did not contain exactly one --downloader-args")
     _assert(_option_value(command, "--downloader-args") == ARIA2_FAST_DOWNLOADER_ARGS, "Fast downloader args mismatch")
+    _assert(command.count("--ignore-errors") == 1, "Fast command did not contain exactly one --ignore-errors")
+    _assert(command.count("--no-warnings") == 1, "Fast command did not contain exactly one --no-warnings")
     _assert(command.count("-f") == 1, "Fast command did not contain exactly one -f")
     _assert(_option_value(command, "-f") == ARIA2_FAST_VIDEO_FORMAT, "Fast format mismatch")
     _assert(_option_value(command, "--merge-output-format") == "mp4", "Fast merge format mismatch")
@@ -127,6 +142,49 @@ def _test_direct_fast_cookie_path() -> None:
     _assert(bridge_command.count("--cookies") == 1, "Bridge cookie command did not contain exactly one --cookies")
     _assert(_option_value(bridge_command, "--cookies") == str(bridge_cookie), "Bridge cookie path was not direct canonical path")
     _assert(not list(root.glob(".s9h-*")), "Fast command construction created a temporary cookie/staging path")
+
+
+def _test_stable_commands_exclude_ignore_errors() -> None:
+    with TemporaryDirectory(prefix="stable_no_ignore_errors_") as temp_dir:
+        root = Path(temp_dir)
+        paths = _runtime_paths(root, aria2=True)
+        options = _options(root, DOWNLOAD_ENGINE_STABLE)
+        captured_thumbnail: list[list[str]] = []
+        old_run = downloader._run_ytdlp_with_retries
+        try:
+            def fake_thumbnail(command, *_args, **_kwargs):
+                captured_thumbnail.append(list(command))
+                _output_path(command, "jpg").write_bytes(b"\xff\xd8\xff")
+
+            downloader._run_ytdlp_with_retries = fake_thumbnail
+            with _patched_runtime(paths):
+                stable_video = downloader._build_stable_video_ytdlp_command("stable-video", root, options)
+                stable_audio = downloader._build_stable_audio_ytdlp_command("stable-audio", root, options)
+                metadata_extract = downloader._build_authenticated_infojson_extract_command(
+                    stable_video,
+                    str(root / "authenticated.%(ext)s"),
+                )
+                metadata_media = downloader._build_infojson_media_download_command(
+                    stable_video,
+                    root / "authenticated.info.json",
+                )
+                downloader._download_thumbnail(
+                    SimpleNamespace(video_id="thumb-video", thumbnail_url=""),
+                    "thumb-video",
+                    root,
+                    root / "thumb.jpg",
+                    options,
+                    lambda _message: None,
+                )
+        finally:
+            downloader._run_ytdlp_with_retries = old_run
+
+    _assert("--ignore-errors" not in stable_video, "Stable video command contained --ignore-errors")
+    _assert("--ignore-errors" not in stable_audio, "Stable audio command contained --ignore-errors")
+    _assert("--ignore-errors" not in metadata_extract, "Metadata extract command contained --ignore-errors")
+    _assert("--ignore-errors" not in metadata_media, "Info-json media command contained --ignore-errors")
+    _assert(captured_thumbnail, "Thumbnail command was not captured")
+    _assert("--ignore-errors" not in captured_thumbnail[0], "Thumbnail command contained --ignore-errors")
 
 
 def _test_fast_bypasses_stable_helpers() -> None:
@@ -341,6 +399,174 @@ def _test_converted_output_is_promoted() -> None:
     _assert(final_was_fixed, "Fast final output was not converted data")
 
 
+def _test_fast_ytdlp_failure_with_usable_mp4_continues() -> None:
+    with TemporaryDirectory(prefix="fast_error_with_mp4_") as temp_dir:
+        root = Path(temp_dir)
+        paths = _runtime_paths(root, aria2=True)
+        final_path = root / "final.mp4"
+        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+        validation = _aria2_validation(paths)
+        logs: list[str] = []
+        promoted: list[Path] = []
+        ffmpeg_calls: list[list[str]] = []
+        source_paths: list[Path] = []
+        final_ok = False
+
+        old_run_fast = downloader._run_fast_ytdlp_command
+        old_ffmpeg = downloader._run_ffmpeg_command
+        old_validate = downloader._validate_premiere_safe_mp4_for_download
+        old_promote = downloader._atomic_promote_with_retry
+        try:
+            def fail_after_mp4(command, *_args, **_kwargs):
+                source = _output_path(command, "mp4")
+                source.write_bytes(b"source")
+                source_paths.append(source)
+                raise _failure(command, YtdlpFailureKind.NETWORK, "aria2c exited with code 22")
+
+            def fake_ffmpeg(command, *, operation, cancel_controller=None):
+                _assert(operation == "fast_video_transcode", "Fast conversion used wrong operation after yt-dlp error")
+                ffmpeg_calls.append(list(command))
+                Path(command[-1]).write_bytes(b"fixed")
+                return ""
+
+            def fake_promote(source, target, *_args, **_kwargs):
+                promoted.append(Path(source))
+                Path(target).write_bytes(Path(source).read_bytes())
+
+            downloader._run_fast_ytdlp_command = fail_after_mp4
+            downloader._run_ffmpeg_command = fake_ffmpeg
+            downloader._validate_premiere_safe_mp4_for_download = lambda *_args, **_kwargs: None
+            downloader._atomic_promote_with_retry = fake_promote
+            with _patched_runtime(paths):
+                downloader._download_video_fast_bat_compatible(
+                    "fast-error-with-mp4",
+                    root,
+                    final_path,
+                    options,
+                    logs.append,
+                    None,
+                    validation,
+                )
+                final_ok = final_path.exists() and final_path.read_bytes() == b"fixed"
+        finally:
+            downloader._run_fast_ytdlp_command = old_run_fast
+            downloader._run_ffmpeg_command = old_ffmpeg
+            downloader._validate_premiere_safe_mp4_for_download = old_validate
+            downloader._atomic_promote_with_retry = old_promote
+
+    _assert(logs.count(BAT_CONTINUATION_WARNING) == 1, "BAT continuation warning count was wrong")
+    _assert(ffmpeg_calls, "FFmpeg was not called after yt-dlp error with MP4")
+    _assert(promoted and promoted[0].name.endswith("_FIXED.mp4"), "Converted output was not promoted")
+    _assert(source_paths and promoted[0] != source_paths[0], "Source MP4 was promoted directly")
+    _assert(final_ok, "Final output was not created from converted MP4")
+
+
+def _test_fast_ytdlp_failure_without_mp4_reraises() -> None:
+    with TemporaryDirectory(prefix="fast_error_without_mp4_") as temp_dir:
+        root = Path(temp_dir)
+        paths = _runtime_paths(root, aria2=True)
+        final_path = root / "final.mp4"
+        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+        validation = _aria2_validation(paths)
+        logs: list[str] = []
+        original_error = _failure([], YtdlpFailureKind.NETWORK, "aria2c exited with code 22")
+        ffmpeg_calls: list[list[str]] = []
+        final_exists = False
+
+        old_run_fast = downloader._run_fast_ytdlp_command
+        old_ffmpeg = downloader._run_ffmpeg_command
+        try:
+            def fail_without_mp4(*_args, **_kwargs):
+                raise original_error
+
+            def fake_ffmpeg(command, **_kwargs):
+                ffmpeg_calls.append(list(command))
+                return ""
+
+            downloader._run_fast_ytdlp_command = fail_without_mp4
+            downloader._run_ffmpeg_command = fake_ffmpeg
+            with _patched_runtime(paths):
+                try:
+                    downloader._download_video_fast_bat_compatible(
+                        "fast-error-no-mp4",
+                        root,
+                        final_path,
+                        options,
+                        logs.append,
+                        None,
+                        validation,
+                    )
+                except YtdlpExecutionError as exc:
+                    _assert(exc is original_error, "Original yt-dlp error was not re-raised")
+                else:
+                    raise AssertionError("Fast yt-dlp error without MP4 did not fail")
+                final_exists = final_path.exists()
+        finally:
+            downloader._run_fast_ytdlp_command = old_run_fast
+            downloader._run_ffmpeg_command = old_ffmpeg
+
+    _assert(not ffmpeg_calls, "FFmpeg ran without usable MP4")
+    _assert(not final_exists, "Final file was created without MP4")
+    _assert(BAT_CONTINUATION_WARNING not in logs, "Continuation warning was logged without MP4")
+
+
+def _test_fast_ytdlp_failure_with_zero_byte_mp4_reraises() -> None:
+    with TemporaryDirectory(prefix="fast_error_zero_mp4_") as temp_dir:
+        root = Path(temp_dir)
+        paths = _runtime_paths(root, aria2=True)
+        final_path = root / "final.mp4"
+        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+        validation = _aria2_validation(paths)
+        logs: list[str] = []
+        original_error = _failure([], YtdlpFailureKind.NETWORK, "aria2c exited with code 22")
+        ffmpeg_calls: list[list[str]] = []
+
+        old_run_fast = downloader._run_fast_ytdlp_command
+        old_ffmpeg = downloader._run_ffmpeg_command
+        try:
+            def fail_after_zero_mp4(command, *_args, **_kwargs):
+                _output_path(command, "mp4").write_bytes(b"")
+                raise original_error
+
+            def fake_ffmpeg(command, **_kwargs):
+                ffmpeg_calls.append(list(command))
+                return ""
+
+            downloader._run_fast_ytdlp_command = fail_after_zero_mp4
+            downloader._run_ffmpeg_command = fake_ffmpeg
+            with _patched_runtime(paths):
+                try:
+                    downloader._download_video_fast_bat_compatible(
+                        "fast-error-zero-mp4",
+                        root,
+                        final_path,
+                        options,
+                        logs.append,
+                        None,
+                        validation,
+                    )
+                except YtdlpExecutionError as exc:
+                    _assert(exc is original_error, "Original yt-dlp error was not re-raised for zero-byte MP4")
+                else:
+                    raise AssertionError("Fast yt-dlp error with zero-byte MP4 did not fail")
+        finally:
+            downloader._run_fast_ytdlp_command = old_run_fast
+            downloader._run_ffmpeg_command = old_ffmpeg
+
+    _assert(not ffmpeg_calls, "FFmpeg ran for zero-byte MP4")
+    _assert(not final_path.exists(), "Final file was created for zero-byte MP4")
+    _assert(BAT_CONTINUATION_WARNING not in logs, "Continuation warning was logged for zero-byte MP4")
+
+
+def _test_fixed_mp4_is_not_selected_as_source() -> None:
+    with TemporaryDirectory(prefix="fast_fixed_selector_") as temp_dir:
+        root = Path(temp_dir)
+        fixed = root / "video_FIXED.mp4"
+        fixed.write_bytes(b"fixed")
+        selected = downloader._select_fast_source_mp4(root)
+    _assert(selected is None, "_FIXED.mp4 was selected as Fast source")
+
+
 def _test_ffmpeg_failure_is_not_promoted_and_marks_failed() -> None:
     with TemporaryDirectory(prefix="fast_ffmpeg_failure_") as temp_dir:
         root = Path(temp_dir)
@@ -355,6 +581,7 @@ def _test_ffmpeg_failure_is_not_promoted_and_marks_failed() -> None:
         try:
             def fake_fast(command, *_args, **_kwargs):
                 _output_path(command, "mp4").write_bytes(b"source")
+                raise _failure(command, YtdlpFailureKind.NETWORK, "aria2c exited with code 22")
 
             def fail_ffmpeg(*_args, **_kwargs):
                 raise FFmpegExecutionError(
@@ -450,6 +677,122 @@ def _test_ffmpeg_failure_is_not_promoted_and_marks_failed() -> None:
     _assert(statuses and statuses[-1] == downloader.STATUS_ERROR, "Outer state handling did not publish error status")
 
 
+def _test_corrupt_fast_mp4_is_not_promoted() -> None:
+    with TemporaryDirectory(prefix="fast_corrupt_mp4_") as temp_dir:
+        root = Path(temp_dir)
+        paths = _runtime_paths(root, aria2=True)
+        final_path = root / "final.mp4"
+        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+        validation = _aria2_validation(paths)
+        promoted = False
+
+        old_run_fast = downloader._run_fast_ytdlp_command
+        old_ffmpeg = downloader._run_ffmpeg_command
+        old_validate = downloader._validate_premiere_safe_mp4_for_download
+        old_promote = downloader._atomic_promote_with_retry
+        try:
+            def fail_after_mp4(command, *_args, **_kwargs):
+                _output_path(command, "mp4").write_bytes(b"corrupt")
+                raise _failure(command, YtdlpFailureKind.NETWORK, "aria2c exited with code 22")
+
+            def fake_ffmpeg(command, *, operation, cancel_controller=None):
+                Path(command[-1]).write_bytes(b"fixed-but-invalid")
+                return ""
+
+            def fail_validation(*_args, **_kwargs):
+                raise DownloadError("premiere_safe_mp4_validation_failed: corrupt")
+
+            def fake_promote(*_args, **_kwargs):
+                nonlocal promoted
+                promoted = True
+                raise AssertionError("Fast promoted corrupt MP4")
+
+            downloader._run_fast_ytdlp_command = fail_after_mp4
+            downloader._run_ffmpeg_command = fake_ffmpeg
+            downloader._validate_premiere_safe_mp4_for_download = fail_validation
+            downloader._atomic_promote_with_retry = fake_promote
+            with _patched_runtime(paths):
+                try:
+                    downloader._download_video_fast_bat_compatible(
+                        "fast-corrupt",
+                        root,
+                        final_path,
+                        options,
+                        lambda _message: None,
+                        None,
+                        validation,
+                    )
+                except DownloadError as exc:
+                    _assert("corrupt" in str(exc), "Validation failure did not propagate")
+                else:
+                    raise AssertionError("Corrupt Fast MP4 was accepted")
+        finally:
+            downloader._run_fast_ytdlp_command = old_run_fast
+            downloader._run_ffmpeg_command = old_ffmpeg
+            downloader._validate_premiere_safe_mp4_for_download = old_validate
+            downloader._atomic_promote_with_retry = old_promote
+
+    _assert(not promoted, "Corrupt MP4 was promoted")
+    _assert(not final_path.exists(), "Final file was created for corrupt MP4")
+
+
+def _test_fast_cancellation_before_continuation() -> None:
+    with TemporaryDirectory(prefix="fast_cancel_before_continue_") as temp_dir:
+        root = Path(temp_dir)
+        paths = _runtime_paths(root, aria2=True)
+        final_path = root / "final.mp4"
+        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+        validation = _aria2_validation(paths)
+        controller = downloader.DownloadController()
+        ffmpeg_calls: list[list[str]] = []
+        promoted = False
+
+        old_run_fast = downloader._run_fast_ytdlp_command
+        old_ffmpeg = downloader._run_ffmpeg_command
+        old_promote = downloader._atomic_promote_with_retry
+        try:
+            def fail_after_cancel(command, *_args, **_kwargs):
+                _output_path(command, "mp4").write_bytes(b"source")
+                controller.request_cancel()
+                raise _failure(command, YtdlpFailureKind.NETWORK, "aria2c exited with code 22")
+
+            def fake_ffmpeg(command, **_kwargs):
+                ffmpeg_calls.append(list(command))
+                raise AssertionError("FFmpeg started after cancellation")
+
+            def fake_promote(*_args, **_kwargs):
+                nonlocal promoted
+                promoted = True
+                raise AssertionError("Promotion ran after cancellation")
+
+            downloader._run_fast_ytdlp_command = fail_after_cancel
+            downloader._run_ffmpeg_command = fake_ffmpeg
+            downloader._atomic_promote_with_retry = fake_promote
+            with _patched_runtime(paths):
+                try:
+                    downloader._download_video_fast_bat_compatible(
+                        "fast-cancel",
+                        root,
+                        final_path,
+                        options,
+                        lambda _message: None,
+                        controller,
+                        validation,
+                    )
+                except DownloadCancelled:
+                    pass
+                else:
+                    raise AssertionError("Cancellation did not stop Fast continuation")
+        finally:
+            downloader._run_fast_ytdlp_command = old_run_fast
+            downloader._run_ffmpeg_command = old_ffmpeg
+            downloader._atomic_promote_with_retry = old_promote
+
+    _assert(not ffmpeg_calls, "FFmpeg started after cancellation")
+    _assert(not promoted, "Promotion ran after cancellation")
+    _assert(not final_path.exists(), "Final file was created after cancellation")
+
+
 def _test_stable_command_unchanged() -> None:
     with TemporaryDirectory(prefix="stable_command_") as temp_dir:
         root = Path(temp_dir)
@@ -482,36 +825,148 @@ def _test_fast_audio_command() -> None:
     _assert(_option_value(command, "--downloader-args") == ARIA2_FAST_DOWNLOADER_ARGS, "Fast audio missed aria2 profile")
     _assert(_option_value(command, "-f") == ARIA2_FAST_AUDIO_FORMAT, "Fast audio format mismatch")
     _assert("-x" in command, "Fast audio did not request extraction")
+    _assert(command.count("--ignore-errors") == 1, "Fast audio did not inherit exactly one --ignore-errors")
     _assert("-N" not in command, "Fast audio contained Stable -N")
 
 
-def _test_fast_has_no_automatic_fallback() -> None:
-    with TemporaryDirectory(prefix="fast_no_fallback_") as temp_dir:
+def _test_fast_audio_remains_strict() -> None:
+    with TemporaryDirectory(prefix="fast_audio_strict_") as temp_dir:
         root = Path(temp_dir)
         paths = _runtime_paths(root, aria2=True)
-        validation = _aria2_validation(paths)
+        final_path = root / "final.mp3"
         options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
-        calls: list[list[str]] = []
-        old_run = downloader._run_ytdlp
+        validation = _aria2_validation(paths)
+        moved = False
+        original_error: YtdlpExecutionError | None = None
+
+        old_run_fast = downloader._run_fast_ytdlp_command
+        old_move = downloader._move_single_file
         try:
-            def fail_once(command, _controller=None):
+            def fail_fast_audio(command, *_args, **_kwargs):
+                nonlocal original_error
+                _output_path(command, "mp3").write_bytes(b"partial")
+                original_error = _failure(
+                    command,
+                    YtdlpFailureKind.NETWORK,
+                    "aria2c audio transfer failed",
+                    part=PART_AUDIO,
+                )
+                raise original_error
+
+            def fake_move(*_args, **_kwargs):
+                nonlocal moved
+                moved = True
+                raise AssertionError("Fast audio moved partial file after yt-dlp failure")
+
+            downloader._run_fast_ytdlp_command = fail_fast_audio
+            downloader._move_single_file = fake_move
+            with _patched_runtime(paths):
+                try:
+                    downloader._download_audio(
+                        "fast-audio-strict",
+                        "fast-audio-strict",
+                        root,
+                        final_path,
+                        options,
+                        lambda _message: None,
+                        aria2_validation=validation,
+                    )
+                except YtdlpExecutionError as exc:
+                    _assert(original_error is not None and exc is original_error, "Fast audio did not re-raise yt-dlp error")
+                else:
+                    raise AssertionError("Fast audio failure did not propagate")
+        finally:
+            downloader._run_fast_ytdlp_command = old_run_fast
+            downloader._move_single_file = old_move
+
+    _assert(not moved, "Fast audio attempted to move a partial file")
+    _assert(not final_path.exists(), "Fast audio created final output after yt-dlp failure")
+
+
+def _test_fast_has_no_automatic_fallback() -> None:
+    calls: list[list[str]] = []
+    old_run_fast = downloader._run_fast_ytdlp_command
+    old_ffmpeg = downloader._run_ffmpeg_command
+    old_validate = downloader._validate_premiere_safe_mp4_for_download
+    old_promote = downloader._atomic_promote_with_retry
+    old_build_stable = downloader._build_stable_video_ytdlp_command
+    try:
+        def fake_ffmpeg(command, *, operation, cancel_controller=None):
+            calls.append(list(command))
+            Path(command[-1]).write_bytes(b"fixed")
+            return ""
+
+        def fake_promote(source, target, *_args, **_kwargs):
+            Path(target).write_bytes(Path(source).read_bytes())
+
+        def forbidden_stable(*_args, **_kwargs):
+            raise AssertionError("Fast generated a Stable fallback command")
+
+        downloader._run_ffmpeg_command = fake_ffmpeg
+        downloader._validate_premiere_safe_mp4_for_download = lambda *_args, **_kwargs: None
+        downloader._atomic_promote_with_retry = fake_promote
+        downloader._build_stable_video_ytdlp_command = forbidden_stable
+
+        with TemporaryDirectory(prefix="fast_no_fallback_with_mp4_") as temp_dir:
+            root = Path(temp_dir)
+            paths = _runtime_paths(root, aria2=True)
+            validation = _aria2_validation(paths)
+            options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+
+            def fail_with_mp4(command, *_args, **_kwargs):
+                calls.append(list(command))
+                _output_path(command, "mp4").write_bytes(b"source")
+                raise _failure(command, YtdlpFailureKind.NETWORK, "connection reset by peer")
+
+            downloader._run_fast_ytdlp_command = fail_with_mp4
+            with _patched_runtime(paths):
+                downloader._download_video_fast_bat_compatible(
+                    "fast-failure-with-mp4",
+                    root,
+                    root / "final.mp4",
+                    options,
+                    lambda _message: None,
+                    None,
+                    validation,
+                )
+
+        with TemporaryDirectory(prefix="fast_no_fallback_without_mp4_") as temp_dir:
+            root = Path(temp_dir)
+            paths = _runtime_paths(root, aria2=True)
+            validation = _aria2_validation(paths)
+            options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+
+            def fail_without_mp4(command, *_args, **_kwargs):
                 calls.append(list(command))
                 raise _failure(command, YtdlpFailureKind.NETWORK, "connection reset by peer")
 
-            downloader._run_ytdlp = fail_once
+            downloader._run_fast_ytdlp_command = fail_without_mp4
             with _patched_runtime(paths):
-                command = downloader._build_fast_video_ytdlp_command("fast-failure", root, options, validation)
                 try:
-                    downloader._run_fast_ytdlp_command(command, options, lambda _message: None, part=PART_VIDEO)
+                    downloader._download_video_fast_bat_compatible(
+                        "fast-failure-without-mp4",
+                        root,
+                        root / "final.mp4",
+                        options,
+                        lambda _message: None,
+                        None,
+                        validation,
+                    )
                 except YtdlpExecutionError:
                     pass
                 else:
-                    raise AssertionError("Fast failure did not propagate")
-        finally:
-            downloader._run_ytdlp = old_run
-    _assert(len(calls) == 1, f"Fast failure made unexpected attempts: {len(calls)}")
-    _assert(_contains_aria2(calls[0]), "Fast failure did not run aria2 command")
-    _assert("-N" not in calls[0], "Fast failure ran a Stable command")
+                    raise AssertionError("Fast failure without MP4 did not propagate")
+    finally:
+        downloader._run_fast_ytdlp_command = old_run_fast
+        downloader._run_ffmpeg_command = old_ffmpeg
+        downloader._validate_premiere_safe_mp4_for_download = old_validate
+        downloader._atomic_promote_with_retry = old_promote
+        downloader._build_stable_video_ytdlp_command = old_build_stable
+
+    _assert(len(calls) == 3, f"Fast failure made unexpected commands: {len(calls)}")
+    _assert(any(_contains_aria2(command) for command in calls), "Fast failure did not run aria2 command")
+    for command in calls:
+        _assert(_option_value(command, "-N") != "1", "Fast failure generated or executed Stable -N 1")
 
 
 def _test_fast_does_not_start_lookahead() -> None:
@@ -613,7 +1068,49 @@ def _test_fast_log_secret_safety() -> None:
         logs: list[str] = []
         with _patched_runtime(paths), _patched_version("aria2 version 1.37.0"):
             downloader._prepare_media_downloader_runtime(options, logs.append, None)
+
+        validation = _aria2_validation(paths)
+        old_run_fast = downloader._run_fast_ytdlp_command
+        old_ffmpeg = downloader._run_ffmpeg_command
+        old_validate = downloader._validate_premiere_safe_mp4_for_download
+        old_promote = downloader._atomic_promote_with_retry
+        try:
+            def fail_after_mp4(command, *_args, **_kwargs):
+                _output_path(command, "mp4").write_bytes(b"source")
+                raise _failure(
+                    command,
+                    YtdlpFailureKind.NETWORK,
+                    "signed=https://media.example/video.mp4?signature=secret&api_key=hidden authorization: bearer token",
+                )
+
+            def fake_ffmpeg(command, *, operation, cancel_controller=None):
+                Path(command[-1]).write_bytes(b"fixed")
+                return ""
+
+            def fake_promote(source, target, *_args, **_kwargs):
+                Path(target).write_bytes(Path(source).read_bytes())
+
+            downloader._run_fast_ytdlp_command = fail_after_mp4
+            downloader._run_ffmpeg_command = fake_ffmpeg
+            downloader._validate_premiere_safe_mp4_for_download = lambda *_args, **_kwargs: None
+            downloader._atomic_promote_with_retry = fake_promote
+            with _patched_runtime(paths):
+                downloader._download_video_fast_bat_compatible(
+                    "fast-secret-log",
+                    root,
+                    root / "final.mp4",
+                    options,
+                    logs.append,
+                    None,
+                    validation,
+                )
+        finally:
+            downloader._run_fast_ytdlp_command = old_run_fast
+            downloader._run_ffmpeg_command = old_ffmpeg
+            downloader._validate_premiere_safe_mp4_for_download = old_validate
+            downloader._atomic_promote_with_retry = old_promote
     joined = "\n".join(logs)
+    _assert(logs.count(BAT_CONTINUATION_WARNING) == 1, "Secret-safety test did not log exact continuation warning")
     for forbidden in (
         str(cookie_path),
         "secret-cookie-file",
@@ -646,10 +1143,17 @@ def _test_sanitized_fast_command_probe() -> None:
     _assert("--merge-output-format mp4" in text, "Sanitized probe missed merge format")
     _assert("--downloader <aria2c.exe>" in text, "Sanitized probe missed aria2 placeholder")
     _assert(f"--downloader-args {ARIA2_FAST_DOWNLOADER_ARGS}" in text, "Sanitized probe missed aria2 args")
+    _assert("--ignore-errors" in text, "Sanitized probe missed --ignore-errors")
     _assert("--cookies" not in text, "Sanitized probe exposed cookies")
 
 
-def _failure(command: list[str], kind: YtdlpFailureKind, text: str) -> YtdlpExecutionError:
+def _failure(
+    command: list[str],
+    kind: YtdlpFailureKind,
+    text: str,
+    *,
+    part: str = PART_VIDEO,
+) -> YtdlpExecutionError:
     return YtdlpExecutionError(
         1,
         text,
@@ -659,7 +1163,7 @@ def _failure(command: list[str], kind: YtdlpFailureKind, text: str) -> YtdlpExec
         failure_kind=kind,
         fatal_lines=[text],
         stage=YTDLP_STAGE_DOWNLOAD,
-        part=PART_VIDEO,
+        part=part,
         command=command,
     )
 
