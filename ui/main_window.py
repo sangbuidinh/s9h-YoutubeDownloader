@@ -14,6 +14,8 @@ from core.downloader import (
     BatchDecision,
     COOKIE_SOURCE_BRIDGE,
     COOKIE_SOURCE_FILE,
+    DOWNLOAD_ENGINE_ARIA2_FAST,
+    DOWNLOAD_ENGINE_STABLE,
     DownloadController,
     DownloadError,
     DownloadOptions,
@@ -94,6 +96,11 @@ COOKIE_SOURCE_LABELS = {
     COOKIE_SOURCE_BRIDGE: "Local Cookie Bridge",
 }
 COOKIE_SOURCE_VALUES_BY_LABEL = {label: value for value, label in COOKIE_SOURCE_LABELS.items()}
+DOWNLOAD_ENGINE_LABELS = {
+    DOWNLOAD_ENGINE_STABLE: "Stable - yt-dlp internal",
+    DOWNLOAD_ENGINE_ARIA2_FAST: "Fast - aria2c experimental",
+}
+DOWNLOAD_ENGINE_VALUES_BY_LABEL = {label: value for value, label in DOWNLOAD_ENGINE_LABELS.items()}
 
 
 @dataclass(frozen=True)
@@ -185,6 +192,7 @@ class YouTubeDownloaderWindow:
         self.cookie_status_var = tk.StringVar()
         self.speed_limit_var = tk.StringVar()
         self.download_mode_var = tk.StringVar(value=MODE_VIDEO_THUMB)
+        self.download_engine_var = tk.StringVar(value=DOWNLOAD_ENGINE_LABELS[DOWNLOAD_ENGINE_STABLE])
         self.hide_below_enabled_var = tk.BooleanVar(value=True)
         self.hide_below_minutes_var = tk.StringVar(value=str(DEFAULT_HIDE_BELOW_MINUTES))
         self.hide_above_enabled_var = tk.BooleanVar(value=True)
@@ -790,8 +798,19 @@ class YouTubeDownloaderWindow:
         self.speed_limit_entry.grid(row=0, column=0, sticky="w")
         ttk.Label(speed_frame, text="MB/s").grid(row=0, column=1, sticky="w", padx=(6, 0))
 
+        ttk.Label(download_frame, text="Download engine").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=2)
+        self.download_engine_box = ttk.Combobox(
+            download_frame,
+            textvariable=self.download_engine_var,
+            values=tuple(DOWNLOAD_ENGINE_LABELS.values()),
+            state="readonly",
+            width=30,
+        )
+        self.download_engine_box.grid(row=2, column=1, columnspan=2, sticky="ew", pady=2)
+        self._block_combobox_mousewheel(self.download_engine_box)
+
         download_actions = ttk.Frame(download_frame)
-        download_actions.grid(row=2, column=0, columnspan=3, sticky="e", pady=(8, 0))
+        download_actions.grid(row=3, column=0, columnspan=3, sticky="e", pady=(8, 0))
         self.download_button = ttk.Button(download_actions, command=self.start_download, style="Primary.TButton")
         self.download_button.grid(row=0, column=0, sticky="e")
         self.stop_button = ttk.Button(
@@ -1115,6 +1134,9 @@ class YouTubeDownloaderWindow:
     def _current_cookie_source(self) -> str:
         return COOKIE_SOURCE_VALUES_BY_LABEL.get(self.cookie_source_var.get(), COOKIE_SOURCE_FILE)
 
+    def _current_download_engine(self) -> str:
+        return DOWNLOAD_ENGINE_VALUES_BY_LABEL.get(self.download_engine_var.get(), DOWNLOAD_ENGINE_STABLE)
+
     def _on_cookie_source_changed(self) -> None:
         save_cookie_source(self._current_cookie_source())
         self._update_cookies_state()
@@ -1363,6 +1385,7 @@ class YouTubeDownloaderWindow:
             download_mode=self.download_mode_var.get(),
             cookie_source=self._current_cookie_source(),
             bridge_cookie_path=self.bridge_cookie_path_var.get().strip(),
+            download_engine=self._current_download_engine(),
         )
         if not save_cookie_preferences(
             options.cookie_source,
@@ -2440,6 +2463,7 @@ class YouTubeDownloaderWindow:
         self._configure_widget_state("select_by_date_button", download_state)
         self._configure_widget_state("cookies_check", download_state)
         self._configure_widget_state("speed_limit_entry", download_state)
+        self._configure_widget_state("download_engine_box", download_combo_state)
         self._configure_widget_state("filter_box", download_combo_state)
         self._update_cookies_state()
         self._update_more_button_state()

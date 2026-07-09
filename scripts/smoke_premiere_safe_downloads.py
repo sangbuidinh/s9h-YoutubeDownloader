@@ -90,7 +90,6 @@ def _test_base_command_flags() -> None:
         "--file-access-retries": "10",
         "--socket-timeout": "60",
         "--http-chunk-size": "1M",
-        "-N": "1",
         "--limit-rate": "2M",
     }
     for option, value in expected_options.items():
@@ -334,6 +333,7 @@ def _test_video_audio_mode_extracts_from_local_mp4() -> None:
                     _log,
                     _cancel_controller=None,
                     _cookie_retry_state=None,
+                    _aria2_validation=None,
                 ):
                     calls.append("video")
                     final_path.parent.mkdir(parents=True, exist_ok=True)

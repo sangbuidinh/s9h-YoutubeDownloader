@@ -342,6 +342,7 @@ def _patched_downloader_transfers(calls: dict[str, int]):
         _log,
         _cancel_controller=None,
         _cookie_retry_state=None,
+        _aria2_validation=None,
     ):
         calls["video"] += 1
         final_path.parent.mkdir(parents=True, exist_ok=True)
