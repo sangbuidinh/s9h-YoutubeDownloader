@@ -1587,7 +1587,14 @@ def _run_media_ytdlp_with_engine_fallback(
 ) -> None:
     command = build_command(force_stable=False)
     try:
-        _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
+        _run_ytdlp_with_retries(
+            command,
+            options,
+            log,
+            cancel_controller,
+            cookie_retry_state,
+            defer_external_downloader_failure=_command_uses_aria2_downloader(command),
+        )
         return
     except YtdlpExecutionError as exc:
         failure_kind = classify_ytdlp_failure_kind(exc, options)
@@ -1599,7 +1606,15 @@ def _run_media_ytdlp_with_engine_fallback(
         _cleanup_failed_media_attempt_partials(list(exc.command or command), temp_dir, log)
         _raise_if_cancelled(cancel_controller)
         stable_command = build_command(force_stable=True)
-        _run_ytdlp_with_retries(stable_command, options, log, cancel_controller, cookie_retry_state)
+        _validate_stable_media_fallback_command(stable_command)
+        _run_ytdlp_with_retries(
+            stable_command,
+            options,
+            log,
+            cancel_controller,
+            cookie_retry_state,
+            defer_external_downloader_failure=False,
+        )
         log("[INFO] Stable downloader fallback succeeded for the current part.")
 
 
@@ -1645,8 +1660,34 @@ def _eligible_for_aria2_stable_fallback(
 
 def _command_uses_aria2_downloader(command: list[str]) -> bool:
     downloader_value = _command_option_value(command, "--downloader").lower()
+    external_downloader_value = _command_option_value(command, "--external-downloader").lower()
     downloader_args = _command_option_value(command, "--downloader-args").lower()
-    return bool("aria2" in downloader_value or downloader_args.startswith("aria2"))
+    external_downloader_args = _command_option_value(command, "--external-downloader-args").lower()
+    return bool(
+        "aria2" in downloader_value
+        or "aria2" in external_downloader_value
+        or downloader_args.startswith("aria2")
+        or external_downloader_args.startswith("aria2")
+    )
+
+
+def _validate_stable_media_fallback_command(command: list[str]) -> None:
+    if _command_option_value(command, "-N") != "1":
+        raise DownloadError("stable fallback command missing internal downloader fragment setting")
+    forbidden_options = {
+        "--downloader",
+        "--external-downloader",
+        "--downloader-args",
+        "--external-downloader-args",
+    }
+    if any(option in command for option in forbidden_options):
+        raise DownloadError("stable fallback command retained external downloader options")
+    if _contains_aria2_command_value(command):
+        raise DownloadError("stable fallback command retained aria2 configuration")
+
+
+def _contains_aria2_command_value(command: list[str]) -> bool:
+    return any("aria2" in str(value).lower() for value in command)
 
 
 def _contains_aria2_transport_failure(text: str) -> bool:
@@ -2498,6 +2539,8 @@ def _run_ytdlp_with_retries(
     log,
     cancel_controller: DownloadController | None = None,
     cookie_retry_state: _YtdlpAttemptState | None = None,
+    *,
+    defer_external_downloader_failure: bool = False,
 ) -> None:
     http_403_delays = [10, 30]
     http_403_retries = 0
@@ -2735,6 +2778,9 @@ def _run_ytdlp_with_retries(
                     )
                     _sleep_with_cancel(delay, cancel_controller)
                     continue
+
+            if defer_external_downloader_failure and _eligible_for_aria2_stable_fallback(exc, failure_kind):
+                raise
 
             if (
                 not cookieless_saved_media_403

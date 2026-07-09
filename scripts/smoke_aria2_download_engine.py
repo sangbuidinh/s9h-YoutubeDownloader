@@ -11,11 +11,13 @@ if str(REPO_ROOT) not in sys.path:
 
 from core import downloader
 from core.downloader import (
+    BatchDecision,
     DOWNLOAD_ENGINE_ARIA2_FAST,
     DOWNLOAD_ENGINE_STABLE,
     DownloadCancelled,
     DownloadController,
     DownloadOptions,
+    SkipCurrentVideo,
     YTDLP_STAGE_DOWNLOAD,
     YtdlpExecutionError,
     YtdlpFailureKind,
@@ -33,6 +35,13 @@ def main() -> int:
     _test_thumbnail_metadata_and_lookahead_isolation()
     _test_direct_audio_and_ffmpeg_extraction_scope()
     _test_aria2_failure_rebuilds_stable_retry_once()
+    _test_runner_plain_aria2_http403_defers_to_stable()
+    _test_runner_aria2_network_interruption_defers_without_aria2_retry()
+    _test_runner_aria2_network_timeout_defers_to_stable()
+    _test_runner_ineligible_systemic_failures_do_not_defer()
+    _test_runner_stable_failure_reaches_systemic_handling()
+    _test_runner_cancellation_prevents_stable_fallback()
+    _test_runner_cookie_media_preparation_before_defer()
     _test_ineligible_failures_do_not_fallback()
     _test_cancellation_before_stable_fallback()
     _test_new_aria2_logs_do_not_expose_secrets()
@@ -213,7 +222,7 @@ def _test_aria2_failure_rebuilds_stable_retry_once() -> None:
         remaining_partials: list[Path] = []
         old_run = downloader._run_ytdlp_with_retries
         try:
-            def fake_run(command, *_args):
+            def fake_run(command, *_args, **_kwargs):
                 calls.append(list(command))
                 if len(calls) == 1:
                     output_template = Path(downloader._command_option_value(command, "-o"))
@@ -246,6 +255,223 @@ def _test_aria2_failure_rebuilds_stable_retry_once() -> None:
     _assert(any("Stable downloader fallback succeeded" in message for message in logs), "stable fallback success was not logged")
 
 
+def _test_runner_plain_aria2_http403_defers_to_stable() -> None:
+    calls, contexts = _run_real_runner_transport_fallback(
+        YtdlpFailureKind.HTTP_403,
+        "ERROR: unable to download video data: HTTP Error 403: Forbidden",
+        http_status=403,
+    )
+    _assert(len(calls) == 2, f"plain HTTP 403 did not switch directly to stable: {len(calls)}")
+    _assert(_contains_aria2(calls[0]), "plain HTTP 403 first command was not aria2")
+    _assert_stable_fallback_command(calls[1])
+    _assert(contexts == [], "systemic callback ran before stable fallback")
+
+
+def _test_runner_aria2_network_interruption_defers_without_aria2_retry() -> None:
+    calls, _contexts = _run_real_runner_transport_fallback(
+        YtdlpFailureKind.NETWORK,
+        "ERROR: fragment download failed: connection reset by peer",
+    )
+    _assert(len(calls) == 2, f"network interruption made unexpected attempts: {len(calls)}")
+    _assert(_contains_aria2(calls[0]), "network interruption first command was not aria2")
+    _assert_stable_fallback_command(calls[1])
+    aria2_retry_commands = [
+        command
+        for command in calls
+        if _contains_aria2(command) and ("--no-continue" in command or _option_value(command, "--http-chunk-size") == "512K")
+    ]
+    _assert(not aria2_retry_commands, "network interruption retried aria2 with safer chunk settings")
+
+
+def _test_runner_aria2_network_timeout_defers_to_stable() -> None:
+    calls, _contexts = _run_real_runner_transport_fallback(
+        YtdlpFailureKind.NETWORK_TIMEOUT,
+        "ERROR: download failed: operation timed out",
+    )
+    aria2_count = sum(1 for command in calls if _contains_aria2(command))
+    stable_count = sum(1 for command in calls if not _contains_aria2(command))
+    _assert(aria2_count == 1, f"network timeout aria2 engine count was {aria2_count}")
+    _assert(stable_count == 1, f"network timeout stable engine count was {stable_count}")
+    _assert_stable_fallback_command(calls[-1])
+
+
+def _test_runner_ineligible_systemic_failures_do_not_defer() -> None:
+    cases = (
+        (YtdlpFailureKind.BOT_CHECK, "Sign in to confirm you're not a bot"),
+        (YtdlpFailureKind.COOKIE_SESSION, "cookies are expired or invalid"),
+        (YtdlpFailureKind.LOGIN_REQUIRED, "This video is only available to logged in users"),
+        (YtdlpFailureKind.PO_TOKEN_OR_VISITOR_DATA, "This request requires a PO Token"),
+        (YtdlpFailureKind.RATE_LIMIT, "HTTP Error 429: Too Many Requests"),
+    )
+    for kind, text in cases:
+        calls = _run_real_runner_ineligible_failure(kind, text)
+        _assert(len(calls) == 1, f"{kind.value} made unexpected subprocess attempts: {len(calls)}")
+        _assert(_contains_aria2(calls[0]), f"{kind.value} did not fail on the aria2 command")
+
+
+def _test_runner_stable_failure_reaches_systemic_handling() -> None:
+    with TemporaryDirectory(prefix="stable_systemic_") as temp_dir:
+        root = Path(temp_dir)
+        runtime_paths = _runtime_paths(root, aria2=True)
+        validation = downloader._Aria2RuntimeValidation(True, True, runtime_paths["aria2c.exe"])
+        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+        calls: list[list[str]] = []
+        contexts = []
+        controller = DownloadController()
+
+        def callback(context):
+            contexts.append(context)
+            controller.submit_systemic_decision(context.block_id, BatchDecision.SKIP_CURRENT.value)
+
+        controller.systemic_block_callback = callback
+        old_run = downloader._run_ytdlp
+        try:
+            def fake_run(command, _controller=None):
+                calls.append(list(command))
+                if _contains_aria2(command):
+                    raise _failure([], YtdlpFailureKind.NETWORK, "connection reset by peer")
+                raise _failure([], YtdlpFailureKind.COOKIE_SESSION, "cookies are expired or invalid")
+
+            downloader._run_ytdlp = fake_run
+            with _patched_runtime(runtime_paths):
+                try:
+                    downloader._run_media_ytdlp_with_engine_fallback(
+                        lambda *, force_stable: downloader._build_video_ytdlp_command(
+                            "stable-systemic",
+                            root,
+                            options,
+                            force_stable_downloader=force_stable,
+                            aria2_validation=validation,
+                        ),
+                        root,
+                        options,
+                        lambda _message: None,
+                        controller,
+                    )
+                except SkipCurrentVideo:
+                    pass
+                else:
+                    raise AssertionError("stable systemic failure did not reach user-decision flow")
+        finally:
+            downloader._run_ytdlp = old_run
+
+    _assert(len(calls) == 2, f"stable systemic flow made unexpected attempts: {len(calls)}")
+    _assert(_contains_aria2(calls[0]), "first stable-systemic attempt was not aria2")
+    _assert_stable_fallback_command(calls[1])
+    _assert(len(contexts) == 1, f"systemic callback count was {len(contexts)}")
+    _assert(contexts[0].failure_kind == YtdlpFailureKind.COOKIE_SESSION, "stable systemic kind was not preserved")
+
+
+def _test_runner_cancellation_prevents_stable_fallback() -> None:
+    with TemporaryDirectory(prefix="runner_cancel_") as temp_dir:
+        root = Path(temp_dir)
+        runtime_paths = _runtime_paths(root, aria2=True)
+        validation = downloader._Aria2RuntimeValidation(True, True, runtime_paths["aria2c.exe"])
+        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+        controller = DownloadController()
+        calls: list[list[str]] = []
+        old_run = downloader._run_ytdlp
+        old_cleanup = downloader._cleanup_failed_media_attempt_partials
+        try:
+            def fake_run(command, _controller=None):
+                calls.append(list(command))
+                raise _failure([], YtdlpFailureKind.NETWORK_TIMEOUT, "operation timed out")
+
+            def cancel_after_cleanup(*_args, **_kwargs):
+                controller.request_cancel()
+
+            downloader._run_ytdlp = fake_run
+            downloader._cleanup_failed_media_attempt_partials = cancel_after_cleanup
+            with _patched_runtime(runtime_paths):
+                try:
+                    downloader._run_media_ytdlp_with_engine_fallback(
+                        lambda *, force_stable: downloader._build_video_ytdlp_command(
+                            "runner-cancel",
+                            root,
+                            options,
+                            force_stable_downloader=force_stable,
+                            aria2_validation=validation,
+                        ),
+                        root,
+                        options,
+                        lambda _message: None,
+                        controller,
+                    )
+                except DownloadCancelled:
+                    pass
+                else:
+                    raise AssertionError("runner cancellation did not stop stable fallback")
+        finally:
+            downloader._run_ytdlp = old_run
+            downloader._cleanup_failed_media_attempt_partials = old_cleanup
+    _assert(len(calls) == 1, "stable fallback started after runner cancellation")
+
+
+def _test_runner_cookie_media_preparation_before_defer() -> None:
+    with TemporaryDirectory(prefix="cookie_media_defer_") as temp_dir:
+        root = Path(temp_dir)
+        runtime_paths = _runtime_paths(root, aria2=True)
+        validation = downloader._Aria2RuntimeValidation(True, True, runtime_paths["aria2c.exe"])
+        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+        cookie_path = root / "cookies.txt"
+        cookie_path.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+        options.cookies_enabled = True
+        options.cookies_path = str(cookie_path)
+        calls: list[list[str]] = []
+        delays: list[int] = []
+        old_run = downloader._run_ytdlp
+        old_sleep = downloader._sleep_with_cancel
+        old_targets = downloader.COOKIE_MEDIA_RETRY_TARGET_SECONDS
+        try:
+            downloader.COOKIE_MEDIA_RETRY_TARGET_SECONDS = (10, 30)
+
+            def fake_run(command, _controller=None):
+                calls.append(list(command))
+                if "--write-info-json" in command:
+                    _write_fake_infojson(command)
+                    return ""
+                if _contains_aria2(command):
+                    raise _failure(
+                        [],
+                        YtdlpFailureKind.HTTP_403,
+                        "ERROR: unable to download video data: HTTP Error 403: Forbidden",
+                        http_status=403,
+                    )
+                _assert_stable_fallback_command(command)
+                return ""
+
+            downloader._run_ytdlp = fake_run
+            downloader._sleep_with_cancel = lambda seconds, _controller=None: delays.append(int(seconds))
+            with _patched_runtime(runtime_paths):
+                downloader._run_media_ytdlp_with_engine_fallback(
+                    lambda *, force_stable: downloader._build_video_ytdlp_command(
+                        "cookie-media",
+                        root,
+                        options,
+                        force_stable_downloader=force_stable,
+                        aria2_validation=validation,
+                    ),
+                    root,
+                    options,
+                    lambda _message: None,
+                )
+        finally:
+            downloader._run_ytdlp = old_run
+            downloader._sleep_with_cancel = old_sleep
+            downloader.COOKIE_MEDIA_RETRY_TARGET_SECONDS = old_targets
+
+    _assert(len(calls) == 6, f"cookie-media defer call count was {len(calls)}")
+    initial, extract, saved_one, saved_two, saved_three, stable = calls
+    _assert(_contains_aria2(initial) and downloader._command_uses_cookies(initial), "initial aria2 media attempt did not use isolated cookies")
+    _assert("--write-info-json" in extract and not _contains_aria2(extract), "authenticated metadata extraction used aria2 or did not write info JSON")
+    for saved in (saved_one, saved_two, saved_three):
+        _assert(_contains_aria2(saved), "saved media retry did not keep aria2 before defer")
+        _assert("--load-info-json" in saved, "saved media retry did not load authenticated info JSON")
+        _assert(not downloader._command_uses_cookies(saved), "saved media retry re-enabled cookies")
+    _assert(delays == [10, 20], f"cookie-media 10/30 delays were not preserved: {delays}")
+    _assert_stable_fallback_command(stable)
+
+
 def _test_ineligible_failures_do_not_fallback() -> None:
     ineligible = (
         YtdlpFailureKind.HTTP_401,
@@ -267,7 +493,7 @@ def _test_ineligible_failures_do_not_fallback() -> None:
             calls: list[list[str]] = []
             old_run = downloader._run_ytdlp_with_retries
             try:
-                def fake_run(command, *_args, failure_kind=kind):
+                def fake_run(command, *_args, failure_kind=kind, **_kwargs):
                     calls.append(list(command))
                     raise _failure(command, failure_kind, failure_kind.value)
 
@@ -305,7 +531,7 @@ def _test_cancellation_before_stable_fallback() -> None:
         old_run = downloader._run_ytdlp_with_retries
         old_cleanup = downloader._cleanup_failed_media_attempt_partials
         try:
-            def fake_run(command, *_args):
+            def fake_run(command, *_args, **_kwargs):
                 calls.append(list(command))
                 raise _failure(command, YtdlpFailureKind.NETWORK_TIMEOUT, "timed out")
 
@@ -359,7 +585,109 @@ def _test_new_aria2_logs_do_not_expose_secrets() -> None:
         _assert(forbidden not in joined, f"aria2 log exposed {forbidden}")
 
 
-def _failure(command: list[str], kind: YtdlpFailureKind, text: str) -> YtdlpExecutionError:
+def _run_real_runner_transport_fallback(
+    kind: YtdlpFailureKind,
+    text: str,
+    *,
+    http_status: int | None = None,
+) -> tuple[list[list[str]], list]:
+    with TemporaryDirectory(prefix="real_runner_fallback_") as temp_dir:
+        root = Path(temp_dir)
+        runtime_paths = _runtime_paths(root, aria2=True)
+        validation = downloader._Aria2RuntimeValidation(True, True, runtime_paths["aria2c.exe"])
+        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+        calls: list[list[str]] = []
+        contexts = []
+        controller = DownloadController()
+
+        def callback(context):
+            contexts.append(context)
+            controller.submit_systemic_decision(context.block_id, BatchDecision.SKIP_CURRENT.value)
+
+        controller.systemic_block_callback = callback
+        old_run = downloader._run_ytdlp
+        try:
+            def fake_run(command, _controller=None):
+                calls.append(list(command))
+                if len(calls) == 1:
+                    raise _failure([], kind, text, http_status=http_status)
+                _assert_stable_fallback_command(list(command))
+                return ""
+
+            downloader._run_ytdlp = fake_run
+            with _patched_runtime(runtime_paths):
+                downloader._run_media_ytdlp_with_engine_fallback(
+                    lambda *, force_stable: downloader._build_video_ytdlp_command(
+                        "real-runner",
+                        root,
+                        options,
+                        force_stable_downloader=force_stable,
+                        aria2_validation=validation,
+                    ),
+                    root,
+                    options,
+                    lambda _message: None,
+                    controller,
+                )
+        finally:
+            downloader._run_ytdlp = old_run
+    return calls, contexts
+
+
+def _run_real_runner_ineligible_failure(kind: YtdlpFailureKind, text: str) -> list[list[str]]:
+    with TemporaryDirectory(prefix="real_runner_ineligible_") as temp_dir:
+        root = Path(temp_dir)
+        runtime_paths = _runtime_paths(root, aria2=True)
+        validation = downloader._Aria2RuntimeValidation(True, True, runtime_paths["aria2c.exe"])
+        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+        calls: list[list[str]] = []
+        old_run = downloader._run_ytdlp
+        try:
+            def fake_run(command, _controller=None):
+                calls.append(list(command))
+                raise _failure([], kind, text)
+
+            downloader._run_ytdlp = fake_run
+            with _patched_runtime(runtime_paths):
+                try:
+                    downloader._run_media_ytdlp_with_engine_fallback(
+                        lambda *, force_stable: downloader._build_video_ytdlp_command(
+                            "real-ineligible",
+                            root,
+                            options,
+                            force_stable_downloader=force_stable,
+                            aria2_validation=validation,
+                        ),
+                        root,
+                        options,
+                        lambda _message: None,
+                    )
+                except Exception:
+                    pass
+                else:
+                    raise AssertionError(f"{kind.value} unexpectedly succeeded")
+        finally:
+            downloader._run_ytdlp = old_run
+    return calls
+
+
+def _write_fake_infojson(command: list[str]) -> Path:
+    output_template = downloader._command_option_value(command, "-o")
+    _assert(output_template, "fake authenticated extraction had no output template")
+    output_path = Path(output_template.replace("%(ext)s", "info.json"))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text('{"id": "video123", "title": "Video"}', encoding="utf-8")
+    return output_path
+
+
+def _failure(
+    command: list[str],
+    kind: YtdlpFailureKind,
+    text: str,
+    *,
+    http_status: int | None = None,
+    stage: str = YTDLP_STAGE_DOWNLOAD,
+) -> YtdlpExecutionError:
     return YtdlpExecutionError(
         1,
         text,
@@ -368,8 +696,8 @@ def _failure(command: list[str], kind: YtdlpFailureKind, text: str) -> YtdlpExec
         stream_interrupted=kind in {YtdlpFailureKind.NETWORK, YtdlpFailureKind.NETWORK_TIMEOUT},
         failure_kind=kind,
         fatal_lines=[text],
-        http_status=403 if kind == YtdlpFailureKind.HTTP_403 else None,
-        stage=YTDLP_STAGE_DOWNLOAD,
+        http_status=http_status if http_status is not None else (403 if kind == YtdlpFailureKind.HTTP_403 else None),
+        stage=stage,
         part=downloader.PART_VIDEO,
         command=command,
     )
@@ -419,7 +747,9 @@ def _contains_aria2(command: list[str]) -> bool:
 def _assert_stable_fallback_command(command: list[str]) -> None:
     _assert(_option_value(command, "-N") == "1", "stable fallback command missed -N 1")
     _assert("--downloader" not in command, "stable fallback retained --downloader")
+    _assert("--external-downloader" not in command, "stable fallback retained --external-downloader")
     _assert("--downloader-args" not in command, "stable fallback retained --downloader-args")
+    _assert("--external-downloader-args" not in command, "stable fallback retained --external-downloader-args")
     _assert(not _contains_aria2(command), "stable fallback retained aria2 value")
 
 

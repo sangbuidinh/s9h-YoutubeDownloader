@@ -619,7 +619,7 @@ def _test_staged_mp4_validation_precedes_promotion() -> None:
         calls = []
         validations = []
 
-        def run_ytdlp(command, _options, _log, _cancel_controller=None, _cookie_retry_state=None):
+        def run_ytdlp(command, _options, _log, _cancel_controller=None, _cookie_retry_state=None, **_kwargs):
             calls.append("download")
             _output_path(command).write_bytes(b"new mp4")
 
@@ -672,7 +672,7 @@ def _test_invalid_staged_mp4_preserves_existing_final() -> None:
         promoted = []
         validated = []
 
-        def run_ytdlp(command, _options, _log, _cancel_controller=None, _cookie_retry_state=None):
+        def run_ytdlp(command, _options, _log, _cancel_controller=None, _cookie_retry_state=None, **_kwargs):
             _output_path(command).write_bytes(b"bad mp4")
 
         def validate(path, _log, _delete_invalid, _cancel_controller):
