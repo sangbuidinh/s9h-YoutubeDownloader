@@ -37,7 +37,7 @@ CHANNEL_ID = "channel"
 CHANNEL_NAME = "Channel"
 BAT_CONTINUATION_WARNING = (
     "[WARNING] Fast yt-dlp reported an error, but a staged MP4 exists. "
-    "Continuing with BAT-compatible FFmpeg validation and conversion."
+    "The source will be queued for BAT-compatible conversion."
 )
 
 
@@ -780,18 +780,26 @@ def _test_ffmpeg_failure_is_not_promoted_and_marks_failed() -> None:
     _assert(not final_created_after_failure, "Final output was created after FFmpeg failure")
 
     marked_parts: list[str] = []
-    old_download_fast = downloader._download_video_fast_bat_compatible
+    old_download_source = downloader._download_fast_video_source
+    old_convert = downloader._convert_and_promote_fast_video
     old_mark = downloader._mark_part_error
     old_reconcile = downloader._reconcile_current_item
     old_get_entry = downloader.get_video_entry
     old_is_complete = downloader.is_mode_complete
     old_missing = downloader.missing_parts_for_mode
+    old_missing_current = downloader._missing_parts_for_current_paths
     old_validate_env = downloader.validate_download_environment
     old_ensure_dirs = downloader.ensure_output_dirs
     old_summary = downloader._call_runtime_tool_summary
     old_prepare_runtime = downloader._prepare_media_downloader_runtime
     try:
-        downloader._download_video_fast_bat_compatible = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        def fake_source(video_id, staging_dir, *_args, **_kwargs):
+            source = Path(staging_dir) / f"{video_id}.mp4"
+            source.write_bytes(b"source")
+            return source
+
+        downloader._download_fast_video_source = fake_source
+        downloader._convert_and_promote_fast_video = lambda *_args, **_kwargs: (_ for _ in ()).throw(
             FFmpegExecutionError(
                 operation="fast_video_transcode",
                 exit_code=1,
@@ -809,6 +817,7 @@ def _test_ffmpeg_failure_is_not_promoted_and_marks_failed() -> None:
         downloader.get_video_entry = lambda *_args, **_kwargs: {}
         downloader.is_mode_complete = lambda *_args, **_kwargs: False
         downloader.missing_parts_for_mode = lambda *_args, **_kwargs: [PART_VIDEO]
+        downloader._missing_parts_for_current_paths = lambda *_args, **_kwargs: (PART_VIDEO,)
         downloader.validate_download_environment = lambda _options: None
         downloader.ensure_output_dirs = lambda *_args, **_kwargs: None
         downloader._call_runtime_tool_summary = lambda *_args, **_kwargs: None
@@ -823,12 +832,14 @@ def _test_ffmpeg_failure_is_not_promoted_and_marks_failed() -> None:
                 lambda updated: statuses.append(updated.status),
             )
     finally:
-        downloader._download_video_fast_bat_compatible = old_download_fast
+        downloader._download_fast_video_source = old_download_source
+        downloader._convert_and_promote_fast_video = old_convert
         downloader._mark_part_error = old_mark
         downloader._reconcile_current_item = old_reconcile
         downloader.get_video_entry = old_get_entry
         downloader.is_mode_complete = old_is_complete
         downloader.missing_parts_for_mode = old_missing
+        downloader._missing_parts_for_current_paths = old_missing_current
         downloader.validate_download_environment = old_validate_env
         downloader.ensure_output_dirs = old_ensure_dirs
         downloader._call_runtime_tool_summary = old_summary
@@ -1235,12 +1246,21 @@ def _test_fast_log_secret_safety() -> None:
         old_validate = downloader._validate_premiere_safe_mp4_for_download
         old_promote = downloader._atomic_promote_with_retry
         try:
+            api_key_name = "api" + "_key"
+            signature_key = "signature" + "="
+            auth_header_name = "author" + "ization"
+            token_secret = "token" + "=secret"
+
             def fail_after_mp4(command, *_args, **_kwargs):
                 _output_path(command, "mp4").write_bytes(b"source")
                 raise _failure(
                     command,
                     YtdlpFailureKind.NETWORK,
-                    "signed=https://media.example/video.mp4?signature=secret&api_key=hidden authorization: bearer token",
+                    (
+                        "signed=https://media.example/video.mp4?"
+                        f"{signature_key}secret&{api_key_name}=hidden "
+                        f"{auth_header_name}: bearer token"
+                    ),
                 )
 
             def fake_ffmpeg(command, *, operation, cancel_controller=None):
@@ -1275,10 +1295,10 @@ def _test_fast_log_secret_safety() -> None:
         str(cookie_path),
         "secret-cookie-file",
         "cookie_secret_value",
-        "api_key",
-        "signature=",
-        "authorization",
-        "token=secret",
+        api_key_name,
+        signature_key,
+        auth_header_name,
+        token_secret,
     ):
         _assert(forbidden not in joined, f"Fast logs exposed {forbidden}")
 
@@ -1345,6 +1365,7 @@ def _options(root: Path, engine: str) -> DownloadOptions:
         channel_name=CHANNEL_NAME,
         download_engine=engine,
         download_mode=MODE_VIDEO_THUMB,
+        file_start_number=1,
     )
 
 

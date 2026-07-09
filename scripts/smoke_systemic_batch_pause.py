@@ -374,6 +374,7 @@ def _run_two_video_batch(controller: DownloadController | None, failure: str) ->
                         channel_id="channel",
                         channel_name="Channel",
                         download_mode=MODE_VIDEO_THUMB,
+                        file_start_number=1,
                     ),
                     logs.append,
                     lambda _video_arg: None,

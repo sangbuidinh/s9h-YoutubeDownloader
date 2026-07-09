@@ -24,6 +24,7 @@ Sources inspected:
 | `bridge_cookie_path_var` | `tk.StringVar(value=load_bridge_cookie_path())` | Local Cookie Bridge `youtube_cookies.txt` path. Fresh default is empty; the old development `D:\...` path is compatibility-only and used only when `bridge_cookie_path` is absent and the real legacy file exists. |
 | `cookie_status_var` | `tk.StringVar()` | Inline status for the active cookie source/path: `Missing` or `Found | N bytes | modified YYYY-MM-DD HH:MM:SS`. |
 | `speed_limit_var` | `tk.StringVar()` | Download limit input. Validated by `validate_speed_limit()`; empty or zero means no limit. |
+| `file_start_number_var` | `tk.StringVar(value="")` | Required session-only start number for output filenames. Blank by default on each launch, positive integer only, not persisted. Downloads are blocked until a valid value is entered. |
 | `download_mode_var` | `tk.StringVar(value=MODE_VIDEO_THUMB)` | Current download mode. Values come from `DOWNLOAD_MODES`: `Video + Thumb`, `Audio MP3 + Thumb`, `Video + Audio MP3 + Thumb`. |
 | `download_engine_var` | `tk.StringVar(value="Stable - yt-dlp internal")` | Session-only download engine selector. Values map to downloader engines `stable` and `aria2_fast`; unknown labels fall back to stable. The selected value is captured for the batch and is locked while downloads run. |
 | `hide_below_enabled_var` | `tk.BooleanVar(value=True)` | Session-only lower duration filter checkbox. Defaults to enabled on every startup. |
@@ -98,8 +99,16 @@ Sources inspected:
 - Fast mode uses direct selected cookies through `effective_cookies_path(options)`, `youtube:player_client=ios,web`, `bestvideo[height<=1080]+bestaudio/best[height<=1080]/best`, and aria2 `-x 16 -s 16 -j 16 -k 1M`.
 - Fast mode does not enter the Stable info-json/cookieless/lookahead pipeline and does not use Stable `-N 1`, `--http-chunk-size`, or Premiere-safe format selection before download.
 - Fast video downloads include yt-dlp `--ignore-errors` to match the reference BAT video workflow. Fast direct-audio downloads remain strict and do not use `--ignore-errors`. When selecting a staged Fast video source, the application first prefers the exact merged `<video_id>.mp4` output, then another non-fragment MP4, and only then a `.f###.mp4` format fragment. Regardless of source selection, FFmpeg conversion, Premiere-safe validation, and atomic promotion remain mandatory.
+- Fast video batches run in two phases: phase 1 downloads all source videos and thumbnails in selected-list order, then phase 2 converts, validates, and promotes queued videos in the same order. A staged source MP4 does not count as downloaded; final video status updates only after FFmpeg conversion, Premiere-safe validation, and atomic promotion. Stable remains sequential.
 - Fast video output is post-processed before promotion with FFmpeg `libx264`, preset `slow`, CRF `18`, audio `aac`, and `+faststart`; only the converted MP4 is promoted.
 - Fast direct-audio mode uses the same direct-cookie, `ios,web`, and aria2 16/16/16/1M transport. Thumbnail download remains separate and does not inherit Fast media downloader arguments.
+
+### File Start Number
+
+- The download frame includes a required `File start number` entry. It is blank by default, accepts only a positive integer at batch validation, and is locked while a batch is running.
+- The value is session-only and is not written to app settings, SQLite, channel records, the registry, or environment variables.
+- Output stems use minimum three-digit formatting: `001 Title`, `009 Title`, `051 Title`, `999 Title`, and `1000 Title`. Video, audio, and thumbnail outputs for the same item share the same numbered stem.
+- Number assignment is fixed by original selected-list order. Skipped, failed, unavailable, cancelled, and partially complete items still consume their assigned number; later items are not renumbered based on success count.
 
 Manual status context menu commands:
 

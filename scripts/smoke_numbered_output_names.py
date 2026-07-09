@@ -1,0 +1,164 @@
+import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from core import downloader
+from core.download_modes import MODE_VIDEO_AUDIO_THUMB, MODE_VIDEO_THUMB, PART_THUMB, PART_VIDEO
+from core.downloader import DownloadError, DownloadOptions
+from core.file_status import build_output_paths
+from core.state_store import STATUS_DOWNLOADED
+
+
+def main() -> int:
+    _test_validate_file_start_number()
+    _test_number_formatting()
+    _test_fixed_assignment_consumes_skips_and_failures()
+    _test_numbered_stem_and_shared_part_paths()
+    _test_path_aware_numbered_skip()
+    print("numbered output names smoke passed")
+    return 0
+
+
+def _test_validate_file_start_number() -> None:
+    required_values = (None, "", "   ")
+    for value in required_values:
+        try:
+            downloader.validate_file_start_number(value)
+        except DownloadError as exc:
+            _assert(str(exc) == downloader.FILE_START_NUMBER_REQUIRED_MESSAGE, f"{value!r} did not raise required")
+        else:
+            raise AssertionError(f"{value!r} did not fail")
+
+    invalid_values = (0, "0", -1, "-1", "1.5", "abc", True)
+    for value in invalid_values:
+        try:
+            downloader.validate_file_start_number(value)
+        except DownloadError as exc:
+            _assert(str(exc) == downloader.FILE_START_NUMBER_INVALID_MESSAGE, f"{value!r} did not raise invalid")
+        else:
+            raise AssertionError(f"{value!r} did not fail")
+
+    for value, expected in (("1", 1), ("001", 1), (1, 1), ("1000", 1000)):
+        _assert(downloader.validate_file_start_number(value) == expected, f"{value!r} normalized incorrectly")
+
+
+def _test_number_formatting() -> None:
+    expected = {
+        1: "001",
+        9: "009",
+        51: "051",
+        999: "999",
+        1000: "1000",
+    }
+    for number, text in expected.items():
+        _assert(downloader._format_output_number(number) == text, f"{number} formatted incorrectly")
+
+
+def _test_fixed_assignment_consumes_skips_and_failures() -> None:
+    assignments = [downloader._assigned_output_number(101, index) for index in range(4)]
+    _assert(assignments == [101, 102, 103, 104], f"assignment shifted: {assignments}")
+    outcomes = {"A": assignments[0], "B_skip": assignments[1], "C_fail": assignments[2], "D_success": assignments[3]}
+    _assert(outcomes["D_success"] == 104, "D did not retain 104 after skip/failure")
+    try:
+        downloader._assigned_output_number(101, -1)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("negative selected_index did not fail")
+
+
+def _test_numbered_stem_and_shared_part_paths() -> None:
+    with TemporaryDirectory(prefix="numbered_paths_") as temp_dir:
+        options = DownloadOptions(
+            base_folder=temp_dir,
+            channel_id="channel",
+            channel_name="Channel",
+            download_mode=MODE_VIDEO_AUDIO_THUMB,
+            file_start_number=51,
+        )
+        video = _video("video-1", "Example: title?.mp4")
+        assigned, stem, paths = downloader._prepare_numbered_output_for_video(video, options, 0)
+
+    _assert(assigned == 51, "assigned number mismatch")
+    _assert(stem.startswith("051 "), f"number prefix missing: {stem}")
+    _assert(paths.video_path.name == f"{stem}.mp4", "video name did not use numbered stem")
+    _assert(paths.audio_path.name == f"{stem}.mp3", "audio name did not use numbered stem")
+    _assert(paths.thumb_path.name == f"{stem}.jpg", "thumb name did not use numbered stem")
+    _assert(video.sanitized_filename_base == stem, "video canonical stem was not updated")
+
+
+def _test_path_aware_numbered_skip() -> None:
+    with TemporaryDirectory(prefix="numbered_skip_") as temp_dir:
+        root = Path(temp_dir)
+        options = DownloadOptions(
+            base_folder=temp_dir,
+            channel_id="channel",
+            channel_name="Channel",
+            download_mode=MODE_VIDEO_THUMB,
+            file_start_number=1,
+        )
+        video = _video("video-old", "Title")
+        _assigned, stem, paths = downloader._prepare_numbered_output_for_video(video, options, 0)
+        old_paths = build_output_paths(temp_dir, "Channel", "Title")
+        old_paths.video_path.parent.mkdir(parents=True, exist_ok=True)
+        old_paths.thumb_path.parent.mkdir(parents=True, exist_ok=True)
+        old_paths.video_path.write_bytes(b"old video")
+        old_paths.thumb_path.write_bytes(b"old thumb")
+        _assert(stem == "001 Title", "unexpected numbered stem")
+
+        old_get = downloader.get_video_entry
+        old_part_status = downloader.part_status_from_entry
+        old_update = downloader.update_video_part_state
+        updates: list[tuple[str, str]] = []
+        legacy_video_exists = False
+        legacy_thumb_exists = False
+        try:
+            downloader.get_video_entry = lambda *_args, **_kwargs: {
+                "video_status": STATUS_DOWNLOADED,
+                "thumb_status": STATUS_DOWNLOADED,
+            }
+            downloader.part_status_from_entry = lambda entry, part: entry[f"{part}_status"]
+            downloader.update_video_part_state = lambda *_args, **_kwargs: updates.append((_args[5], _args[6]))
+            missing = downloader._missing_parts_for_current_paths(
+                options,
+                video,
+                paths,
+                (PART_VIDEO, PART_THUMB),
+            )
+            legacy_video_exists = old_paths.video_path.exists()
+            legacy_thumb_exists = old_paths.thumb_path.exists()
+        finally:
+            downloader.get_video_entry = old_get
+            downloader.part_status_from_entry = old_part_status
+            downloader.update_video_part_state = old_update
+
+    _assert(missing == (PART_VIDEO, PART_THUMB), f"old unnumbered files satisfied numbered paths: {missing}")
+    _assert(updates == [(PART_VIDEO, downloader.STATUS_NOT_DOWNLOADED), (PART_THUMB, downloader.STATUS_NOT_DOWNLOADED)], "missing numbered files did not clear stale part states")
+    _assert(legacy_video_exists, "legacy video was renamed or deleted")
+    _assert(legacy_thumb_exists, "legacy thumb was renamed or deleted")
+
+
+def _video(video_id: str, title: str):
+    return SimpleNamespace(
+        video_id=video_id,
+        title=title,
+        sanitized_filename_base=title,
+        thumbnail_url="",
+        status="",
+        display_order=1,
+    )
+
+
+def _assert(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

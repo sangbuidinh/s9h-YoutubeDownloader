@@ -143,7 +143,13 @@ def _test_cancelled_batch_does_not_emit_batch_completed() -> None:
             downloader._log_runtime_tool_summary = lambda _log: None
             downloader.download_items(
                 [_video()],
-                DownloadOptions(str(Path(temp_dir)), "channel", "Channel", download_mode=MODE_VIDEO_THUMB),
+                DownloadOptions(
+                    str(Path(temp_dir)),
+                    "channel",
+                    "Channel",
+                    download_mode=MODE_VIDEO_THUMB,
+                    file_start_number=1,
+                ),
                 lambda _message: None,
                 lambda _video: None,
                 cancel_controller=controller,

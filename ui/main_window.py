@@ -21,6 +21,7 @@ from core.downloader import (
     DownloadOptions,
     SystemicBlockContext,
     validate_download_environment,
+    validate_file_start_number,
     validate_speed_limit,
     download_items,
 )
@@ -191,6 +192,7 @@ class YouTubeDownloaderWindow:
         self.bridge_cookie_path_var = tk.StringVar(value=load_bridge_cookie_path())
         self.cookie_status_var = tk.StringVar()
         self.speed_limit_var = tk.StringVar()
+        self.file_start_number_var = tk.StringVar(value="")
         self.download_mode_var = tk.StringVar(value=MODE_VIDEO_THUMB)
         self.download_engine_var = tk.StringVar(value=DOWNLOAD_ENGINE_LABELS[DOWNLOAD_ENGINE_STABLE])
         self.hide_below_enabled_var = tk.BooleanVar(value=True)
@@ -798,7 +800,18 @@ class YouTubeDownloaderWindow:
         self.speed_limit_entry.grid(row=0, column=0, sticky="w")
         ttk.Label(speed_frame, text="MB/s").grid(row=0, column=1, sticky="w", padx=(6, 0))
 
-        ttk.Label(download_frame, text="Download engine").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=2)
+        ttk.Label(download_frame, text="File start number").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=2)
+        file_number_validate = (self.root.register(self._validate_file_start_number_input), "%P")
+        self.file_start_number_entry = ttk.Entry(
+            download_frame,
+            textvariable=self.file_start_number_var,
+            width=10,
+            validate="key",
+            validatecommand=file_number_validate,
+        )
+        self.file_start_number_entry.grid(row=2, column=1, sticky="w", pady=2)
+
+        ttk.Label(download_frame, text="Download engine").grid(row=3, column=0, sticky="w", padx=(0, 8), pady=2)
         self.download_engine_box = ttk.Combobox(
             download_frame,
             textvariable=self.download_engine_var,
@@ -806,11 +819,11 @@ class YouTubeDownloaderWindow:
             state="readonly",
             width=30,
         )
-        self.download_engine_box.grid(row=2, column=1, columnspan=2, sticky="ew", pady=2)
+        self.download_engine_box.grid(row=3, column=1, columnspan=2, sticky="ew", pady=2)
         self._block_combobox_mousewheel(self.download_engine_box)
 
         download_actions = ttk.Frame(download_frame)
-        download_actions.grid(row=3, column=0, columnspan=3, sticky="e", pady=(8, 0))
+        download_actions.grid(row=4, column=0, columnspan=3, sticky="e", pady=(8, 0))
         self.download_button = ttk.Button(download_actions, command=self.start_download, style="Primary.TButton")
         self.download_button.grid(row=0, column=0, sticky="e")
         self.stop_button = ttk.Button(
@@ -1207,6 +1220,9 @@ class YouTubeDownloaderWindow:
     def _on_duration_filter_text_changed(self, *_args) -> None:
         self._apply_live_duration_filter_if_valid()
 
+    def _validate_file_start_number_input(self, proposed: str) -> bool:
+        return proposed == "" or proposed.isdigit()
+
     def open_select_by_date_dialog(self) -> None:
         if self.downloading:
             return
@@ -1375,6 +1391,13 @@ class YouTubeDownloaderWindow:
             self._show_error_dialog(friendly)
             return
 
+        try:
+            file_start_number = validate_file_start_number(self.file_start_number_var.get())
+        except DownloadError as exc:
+            self._show_error_dialog(str(exc), title="Starting file number required")
+            self.file_start_number_entry.focus_set()
+            return
+
         options = DownloadOptions(
             base_folder=self.save_folder_var.get().strip(),
             channel_id=self.channel_info.channel_id,
@@ -1386,6 +1409,7 @@ class YouTubeDownloaderWindow:
             cookie_source=self._current_cookie_source(),
             bridge_cookie_path=self.bridge_cookie_path_var.get().strip(),
             download_engine=self._current_download_engine(),
+            file_start_number=file_start_number,
         )
         if not save_cookie_preferences(
             options.cookie_source,
@@ -2463,6 +2487,7 @@ class YouTubeDownloaderWindow:
         self._configure_widget_state("select_by_date_button", download_state)
         self._configure_widget_state("cookies_check", download_state)
         self._configure_widget_state("speed_limit_entry", download_state)
+        self._configure_widget_state("file_start_number_entry", download_state)
         self._configure_widget_state("download_engine_box", download_combo_state)
         self._configure_widget_state("filter_box", download_combo_state)
         self._update_cookies_state()

@@ -44,7 +44,7 @@ def _test_download_items_passes_controller_to_summary() -> None:
 
         downloader._log_runtime_tool_summary = summary
         with TemporaryDirectory(prefix="probe_summary_controller_") as temp_dir:
-            options = DownloadOptions(str(Path(temp_dir)), "channel", "Channel")
+            options = DownloadOptions(str(Path(temp_dir)), "channel", "Channel", file_start_number=1)
             downloader.download_items(
                 [],
                 options,

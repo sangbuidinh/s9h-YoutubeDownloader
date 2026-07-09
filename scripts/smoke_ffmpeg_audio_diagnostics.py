@@ -658,6 +658,7 @@ def _test_outer_loop_friendly_log() -> None:
         (downloader, "get_video_entry", lambda channel_id, video_id: object()),
         (downloader, "is_mode_complete", lambda entry, mode: False),
         (downloader, "missing_parts_for_mode", lambda entry, mode: (PART_AUDIO,)),
+        (downloader, "_missing_parts_for_current_paths", lambda options, video, paths, mode_parts: (PART_AUDIO,)),
         (downloader, "_premiere_safe_mp4_ready_for_download", lambda path, cancel_controller=None: True),
         (downloader, "_extract_mp3_from_video", lambda *args, **kwargs: (_ for _ in ()).throw(ffmpeg_error)),
         (downloader, "update_video_part_state", update_state),
@@ -676,6 +677,7 @@ def _test_outer_loop_friendly_log() -> None:
             "channel",
             "Channel",
             download_mode=MODE_VIDEO_AUDIO_THUMB,
+            file_start_number=1,
         )
         with _patched_many(patches):
             downloader.download_items(
