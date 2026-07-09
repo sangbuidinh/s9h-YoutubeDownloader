@@ -23,6 +23,8 @@ def main() -> int:
     _test_unknown_line_is_ignored()
     _test_secret_text_is_not_displayed_raw()
     _test_speed_is_labeled_as_ytdlp_speed()
+    _test_ffmpeg_progress_uses_speed_label()
+    _test_ffmpeg_progress_localizes_to_requested_line()
     _test_video_event_formats_as_two_lines()
     _test_thumbnail_event_formats_as_two_lines()
     _test_mp3_event_formats_as_two_lines()
@@ -99,6 +101,40 @@ def _test_speed_is_labeled_as_ytdlp_speed() -> None:
         ProgressEvent(phase="Video", speed="10.4MiB/s", percent="45.2%")
     )
     _assert("yt-dlp 10.4MiB/s" in detail_line, "yt-dlp speed label was missing")
+
+
+def _test_ffmpeg_progress_uses_speed_label() -> None:
+    _current_line, detail_line = format_progress_event_lines(
+        ProgressEvent(
+            kind="ffmpeg_progress",
+            phase="Fast phase 2/2",
+            title="001 Title",
+            percent="43%",
+            speed="1.18x",
+        )
+    )
+    _assert(
+        detail_line == "Processing: 001 Title.mp4 | 43% | speed 1.18x",
+        f"FFmpeg progress detail line was wrong: {detail_line}",
+    )
+    _assert("yt-dlp" not in detail_line, "FFmpeg progress used yt-dlp speed label")
+
+
+def _test_ffmpeg_progress_localizes_to_requested_line() -> None:
+    window = _progress_window()
+    _current_line, detail_line = window._localized_progress_lines(
+        ProgressEvent(
+            kind="ffmpeg_progress",
+            phase="Fast phase 2/2",
+            title="001 Title",
+            percent="43%",
+            speed="1.18x",
+        )
+    )
+    _assert(
+        detail_line == "Đang xử lý: 001 Title.mp4 | 43% | speed 1.18x",
+        f"localized FFmpeg progress line was wrong: {detail_line}",
+    )
 
 
 def _test_video_event_formats_as_two_lines() -> None:

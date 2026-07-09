@@ -1,4 +1,5 @@
 import os
+import queue
 import re
 import hashlib
 import inspect
@@ -62,6 +63,9 @@ MAX_FINAL_PATH_LENGTH = 240
 FFMPEG_OUTPUT_LINE_LIMIT = 20
 FFMPEG_OUTPUT_LINE_CHAR_LIMIT = 500
 FFMPEG_COMBINED_OUTPUT_LIMIT = 8192
+FFMPEG_PROGRESS_EMIT_INTERVAL_SECONDS = 0.3
+FFMPEG_PROGRESS_QUEUE_POLL_SECONDS = 0.1
+FFMPEG_PROGRESS_SPEED_UNKNOWN = "--"
 YTDLP_OUTPUT_TAIL_LIMIT = 200
 YTDLP_FATAL_LINE_LIMIT = 12
 YTDLP_STAGE_EXTRACT = "extract"
@@ -186,6 +190,15 @@ class _ProgressContext:
     video_total: int
     phase: str
     last_emit: float = 0.0
+
+
+@dataclass
+class _FfmpegProgressState:
+    duration_seconds: float | None
+    out_time_seconds: float = 0.0
+    speed: str = FFMPEG_PROGRESS_SPEED_UNKNOWN
+    percent_value: int = 0
+    last_emit_monotonic: float = 0.0
 
 
 _PROGRESS_CONTEXT = threading.local()
@@ -2553,11 +2566,15 @@ def _transcode_fast_video_like_bat(
         raise DownloadError("Fast source MP4 missing before conversion")
 
     fixed_path = temp_dir / f"{_safe_temp_stem(source_video_path.stem)}_FIXED.mp4"
+    duration_seconds = _probe_media_duration_seconds(source_video_path, cancel_controller)
     command = [
         str(runtime_file("ffmpeg.exe")),
         "-y",
         "-i",
         str(source_video_path),
+        "-progress",
+        "pipe:1",
+        "-nostats",
         "-c:v",
         ARIA2_FAST_TRANSCODE_VIDEO_CODEC,
         "-preset",
@@ -2572,7 +2589,7 @@ def _transcode_fast_video_like_bat(
     ]
 
     log("[INFO] Fast post-processing: libx264 preset=slow crf=18 audio=aac faststart=yes")
-    _run_ffmpeg_for_fast_video(command, cancel_controller)
+    _run_ffmpeg_for_fast_video(command, duration_seconds, cancel_controller)
 
     if not _final_file_ready(fixed_path):
         raise DownloadError("Fast FFmpeg conversion failed")
@@ -2588,12 +2605,205 @@ def _run_ffmpeg_for_audio(command: list[str], cancel_controller: DownloadControl
     )
 
 
-def _run_ffmpeg_for_fast_video(command: list[str], cancel_controller: DownloadController | None = None) -> str:
+def _run_ffmpeg_for_fast_video(
+    command: list[str],
+    duration_seconds: float | None,
+    cancel_controller: DownloadController | None = None,
+) -> str:
     return _run_ffmpeg_command(
         command,
         operation="fast_video_transcode",
         cancel_controller=cancel_controller,
+        progress_duration_seconds=duration_seconds,
     )
+
+
+def _parse_media_timestamp_seconds(value: object) -> float | None:
+    text = str(value or "").strip()
+    if not text or text.upper() == "N/A":
+        return None
+    try:
+        if re.fullmatch(r"\d+(?:\.\d+)?", text):
+            seconds = float(text)
+            return seconds if seconds >= 0 else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+    match = re.fullmatch(r"(?P<hours>\d+):(?P<minutes>\d{1,2}):(?P<seconds>\d{1,2}(?:\.\d+)?)", text)
+    if match is None:
+        return None
+    try:
+        hours = int(match.group("hours"))
+        minutes = int(match.group("minutes"))
+        seconds = float(match.group("seconds"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if minutes >= 60 or seconds >= 60:
+        return None
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def _probe_media_duration_seconds(
+    path: Path,
+    cancel_controller: DownloadController | None = None,
+) -> float | None:
+    try:
+        if not Path(path).exists():
+            return None
+    except OSError:
+        return None
+
+    ffmpeg_path = runtime_file("ffmpeg.exe")
+    ffprobe_path = ffmpeg_path.with_name("ffprobe.exe")
+    commands: list[list[str]] = []
+    if ffprobe_path.exists():
+        commands.append(
+            [
+                str(ffprobe_path),
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ]
+        )
+    commands.append([str(ffmpeg_path), "-hide_banner", "-i", str(path)])
+
+    for command in commands:
+        try:
+            output = _run_probe_command(command, cancel_controller)
+        except DownloadCancelled:
+            raise
+        except Exception:
+            continue
+
+        for line in str(output or "").splitlines():
+            seconds = _parse_media_timestamp_seconds(line)
+            if seconds is not None and seconds > 0:
+                return seconds
+
+        match = re.search(r"(?i)\bDuration:\s*([^,\s]+)", output or "")
+        if match is not None:
+            seconds = _parse_media_timestamp_seconds(match.group(1))
+            if seconds is not None and seconds > 0:
+                return seconds
+
+    return None
+
+
+def _parse_ffmpeg_progress_line(line: str) -> tuple[str, str] | None:
+    text = str(line or "").strip()
+    if not text or "=" not in text:
+        return None
+    key, value = text.split("=", 1)
+    key = key.strip()
+    if not key:
+        return None
+    return key, value.strip()
+
+
+def _ffmpeg_out_time_seconds(key: str, value: str) -> float | None:
+    normalized_key = str(key or "").strip().lower()
+    if normalized_key in {"out_time_us", "out_time_ms"}:
+        try:
+            seconds = float(str(value or "").strip()) / 1_000_000.0
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return seconds if seconds >= 0 else None
+    if normalized_key == "out_time":
+        return _parse_media_timestamp_seconds(value)
+    return None
+
+
+def _normalize_ffmpeg_speed(value: str | None) -> str:
+    text = _sanitize_subprocess_output_line(value or "")
+    if not text or text.upper() == "N/A":
+        return FFMPEG_PROGRESS_SPEED_UNKNOWN
+    return _bound_subprocess_output_line(text)
+
+
+def _ffmpeg_progress_percent(
+    out_time_seconds: float,
+    duration_seconds: float | None,
+    completed: bool = False,
+) -> int:
+    if completed:
+        return 100
+    try:
+        duration = float(duration_seconds) if duration_seconds is not None else 0.0
+        out_time = max(0.0, float(out_time_seconds))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    if duration <= 0:
+        return 0
+    return max(0, min(99, int((out_time / duration) * 100)))
+
+
+def _emit_ffmpeg_conversion_progress(
+    state: _FfmpegProgressState,
+    completed: bool = False,
+    force: bool = False,
+) -> None:
+    now = time.monotonic()
+    if not force and now - state.last_emit_monotonic < FFMPEG_PROGRESS_EMIT_INTERVAL_SECONDS:
+        return
+
+    percent_value = _ffmpeg_progress_percent(
+        state.out_time_seconds,
+        state.duration_seconds,
+        completed=completed,
+    )
+    if not completed:
+        percent_value = max(state.percent_value, percent_value)
+    state.percent_value = percent_value
+    state.last_emit_monotonic = now
+    _emit_current_progress(
+        "Fast phase 2/2",
+        kind="ffmpeg_progress",
+        message="",
+        percent=f"{state.percent_value}%",
+        speed=state.speed,
+        eta=None,
+        fragment=None,
+    )
+
+
+def _consume_ffmpeg_progress_line(line: str, state: _FfmpegProgressState) -> bool:
+    parsed = _parse_ffmpeg_progress_line(line)
+    if parsed is None:
+        return False
+
+    key, value = parsed
+    normalized_key = key.strip().lower()
+    out_time_seconds = _ffmpeg_out_time_seconds(normalized_key, value)
+    if out_time_seconds is not None:
+        state.out_time_seconds = out_time_seconds
+        return True
+
+    if normalized_key == "speed":
+        state.speed = _normalize_ffmpeg_speed(value)
+        return True
+
+    if normalized_key == "progress":
+        normalized_value = value.strip().lower()
+        if normalized_value == "end":
+            _emit_ffmpeg_conversion_progress(state, completed=True, force=True)
+        elif normalized_value == "continue":
+            _emit_ffmpeg_conversion_progress(state)
+        return True
+
+    return True
+
+
+def _read_process_stream(stream, stream_name: str, output_queue: queue.Queue) -> None:
+    try:
+        if stream is not None:
+            for raw_line in stream:
+                output_queue.put((stream_name, str(raw_line).rstrip("\r\n")))
+    finally:
+        output_queue.put((stream_name, None))
 
 
 def _run_ffmpeg_command(
@@ -2601,11 +2811,19 @@ def _run_ffmpeg_command(
     *,
     operation: str,
     cancel_controller: DownloadController | None = None,
+    progress_duration_seconds: float | None = None,
 ) -> str:
     creationflags = _subprocess_creationflags()
     process = None
-    stdout = ""
-    stderr = ""
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+    return_code = -1
+    progress_enabled = operation == "fast_video_transcode" or progress_duration_seconds is not None
+    progress_state = (
+        _FfmpegProgressState(progress_duration_seconds)
+        if progress_enabled
+        else None
+    )
     try:
         process = subprocess.Popen(
             command,
@@ -2618,15 +2836,47 @@ def _run_ffmpeg_command(
         )
         if cancel_controller is not None:
             cancel_controller.set_current_process(process)
-        while True:
+
+        output_queue: queue.Queue = queue.Queue()
+        stream_count = 0
+        for stream_name, stream in (
+            ("stdout", getattr(process, "stdout", None)),
+            ("stderr", getattr(process, "stderr", None)),
+        ):
+            if stream is None:
+                continue
+            stream_count += 1
+            threading.Thread(
+                target=_read_process_stream,
+                args=(stream, stream_name, output_queue),
+                daemon=True,
+            ).start()
+
+        while stream_count > 0:
             if _cancel_requested(cancel_controller):
                 _terminate_process_tree(process)
                 raise DownloadCancelled("download cancelled/interrupted")
             try:
-                stdout, stderr = process.communicate(timeout=0.25)
-                break
-            except subprocess.TimeoutExpired:
+                stream_name, line = output_queue.get(timeout=FFMPEG_PROGRESS_QUEUE_POLL_SECONDS)
+            except queue.Empty:
                 continue
+            if line is None:
+                stream_count -= 1
+                continue
+            if stream_name == "stdout":
+                if progress_state is not None and _consume_ffmpeg_progress_line(line, progress_state):
+                    continue
+                _append_limited(stdout_lines, line, YTDLP_OUTPUT_TAIL_LIMIT)
+            else:
+                _append_limited(stderr_lines, line, YTDLP_OUTPUT_TAIL_LIMIT)
+
+        while True:
+            if _cancel_requested(cancel_controller):
+                _terminate_process_tree(process)
+                raise DownloadCancelled("download cancelled/interrupted")
+            return_code = _wait_for_process_exit(process, FFMPEG_PROGRESS_QUEUE_POLL_SECONDS)
+            if return_code is not None:
+                break
     except FileNotFoundError:
         raise DownloadError("ffmpeg.exe missing")
     except OSError as exc:
@@ -2643,12 +2893,15 @@ def _run_ffmpeg_command(
 
     if _cancel_requested(cancel_controller):
         raise DownloadCancelled("download cancelled/interrupted")
-    if process.returncode == 0:
+    stdout = "\n".join(stdout_lines)
+    stderr = "\n".join(stderr_lines)
+    if return_code == 0:
+        if progress_state is not None:
+            _emit_ffmpeg_conversion_progress(progress_state, completed=True, force=True)
         return _bounded_sanitized_subprocess_output(stdout, stderr)
 
     output_lines = _ffmpeg_output_lines(stdout, stderr)
     combined_output = _bounded_sanitized_subprocess_output(stdout, stderr)
-    return_code = process.returncode if process.returncode is not None else -1
     initial = FFmpegExecutionError(
         operation=operation,
         exit_code=return_code,

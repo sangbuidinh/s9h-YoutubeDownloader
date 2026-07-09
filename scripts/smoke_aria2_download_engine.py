@@ -256,7 +256,7 @@ def _test_fast_bypasses_stable_helpers() -> None:
                 _output_path(command, "mp4").write_bytes(b"fast source")
                 return ""
 
-            def fake_ffmpeg(command, *, operation, cancel_controller=None):
+            def fake_ffmpeg(command, *, operation, cancel_controller=None, progress_duration_seconds=None):
                 _assert(operation == "fast_video_transcode", "Fast conversion used wrong operation")
                 Path(command[-1]).write_bytes(b"fixed")
                 return ""
@@ -350,24 +350,32 @@ def _test_exact_fast_ffmpeg_command() -> None:
         source = root / "source.mp4"
         source.write_bytes(b"mp4")
         captured: list[list[str]] = []
+        captured_durations: list[float | None] = []
         old_run = downloader._run_ffmpeg_command
+        old_probe = downloader._probe_media_duration_seconds
         try:
-            def fake_run(command, *, operation, cancel_controller=None):
+            def fake_run(command, *, operation, cancel_controller=None, progress_duration_seconds=None):
                 captured.append(list(command))
+                captured_durations.append(progress_duration_seconds)
                 Path(command[-1]).write_bytes(b"fixed")
                 return ""
 
             downloader._run_ffmpeg_command = fake_run
+            downloader._probe_media_duration_seconds = lambda *_args, **_kwargs: 120.0
             with _patched_runtime(paths):
                 fixed_path = downloader._transcode_fast_video_like_bat(source, root, lambda _message: None)
         finally:
             downloader._run_ffmpeg_command = old_run
+            downloader._probe_media_duration_seconds = old_probe
 
     expected = [
         str(paths["ffmpeg.exe"]),
         "-y",
         "-i",
         str(source),
+        "-progress",
+        "pipe:1",
+        "-nostats",
         "-c:v",
         "libx264",
         "-preset",
@@ -381,6 +389,54 @@ def _test_exact_fast_ffmpeg_command() -> None:
         str(fixed_path),
     ]
     _assert(captured == [expected], f"Fast FFmpeg command mismatch: {captured}")
+    _assert(captured_durations == [120.0], f"Fast FFmpeg duration was not passed through: {captured_durations}")
+    command = captured[0]
+    _assert(command.count("-progress") == 1, "Fast FFmpeg command did not contain exactly one -progress")
+    _assert(command.count("pipe:1") == 1, "Fast FFmpeg command did not contain exactly one pipe:1")
+    _assert(command.count("-nostats") == 1, "Fast FFmpeg command did not contain exactly one -nostats")
+    _assert(command.index("-progress") + 1 == command.index("pipe:1"), "-progress did not immediately precede pipe:1")
+    _assert(command[-1] == str(fixed_path), "Fast FFmpeg final argument was not the fixed MP4 path")
+    _assert(_option_value(command, "-c:v") == ARIA2_FAST_TRANSCODE_VIDEO_CODEC, "Fast FFmpeg video codec changed")
+    _assert(_option_value(command, "-preset") == ARIA2_FAST_TRANSCODE_PRESET, "Fast FFmpeg preset changed")
+    _assert(_option_value(command, "-crf") == ARIA2_FAST_TRANSCODE_CRF, "Fast FFmpeg CRF changed")
+    _assert(_option_value(command, "-c:a") == ARIA2_FAST_TRANSCODE_AUDIO_CODEC, "Fast FFmpeg audio codec changed")
+    _assert(_option_value(command, "-movflags") == "+faststart", "Fast FFmpeg faststart flag changed")
+
+    with TemporaryDirectory(prefix="no_ffmpeg_progress_") as temp_dir:
+        root = Path(temp_dir)
+        paths = _runtime_paths(root, aria2=True)
+        mp3_source = root / "source.mp4"
+        mp3_source.write_bytes(b"mp4")
+        mp3_final = root / "final.mp3"
+        mp3_commands: list[list[str]] = []
+        old_validate = downloader._validate_premiere_safe_mp4_for_download
+        old_audio = downloader._run_ffmpeg_for_audio
+        try:
+            def fake_audio(command, cancel_controller=None):
+                mp3_commands.append(list(command))
+                Path(command[-1]).write_bytes(b"mp3")
+                return ""
+
+            downloader._validate_premiere_safe_mp4_for_download = lambda *_args, **_kwargs: None
+            downloader._run_ffmpeg_for_audio = fake_audio
+            with _patched_runtime(paths):
+                stable_command = downloader._build_stable_video_ytdlp_command(
+                    "stable-video",
+                    root,
+                    _options(root, DOWNLOAD_ENGINE_STABLE),
+                )
+                downloader._extract_mp3_from_video(mp3_source, root, mp3_final, lambda _message: None)
+        finally:
+            downloader._validate_premiere_safe_mp4_for_download = old_validate
+            downloader._run_ffmpeg_for_audio = old_audio
+
+    _assert("-progress" not in stable_command, "Stable video command received FFmpeg progress protocol")
+    _assert("pipe:1" not in stable_command, "Stable video command received FFmpeg progress pipe")
+    _assert("-nostats" not in stable_command, "Stable video command received FFmpeg -nostats")
+    _assert(mp3_commands, "MP3 extraction command was not captured")
+    _assert("-progress" not in mp3_commands[0], "MP3 extraction received FFmpeg progress protocol")
+    _assert("pipe:1" not in mp3_commands[0], "MP3 extraction received FFmpeg progress pipe")
+    _assert("-nostats" not in mp3_commands[0], "MP3 extraction received FFmpeg -nostats")
 
 
 def _test_converted_output_is_promoted() -> None:
@@ -405,7 +461,7 @@ def _test_converted_output_is_promoted() -> None:
                 source.write_bytes(b"source")
                 source_paths.append(source)
 
-            def fake_ffmpeg(command, *, operation, cancel_controller=None):
+            def fake_ffmpeg(command, *, operation, cancel_controller=None, progress_duration_seconds=None):
                 Path(command[-1]).write_bytes(b"fixed")
                 return ""
 
@@ -464,7 +520,7 @@ def _test_fast_ytdlp_failure_with_usable_mp4_continues() -> None:
                 source_paths.append(source)
                 raise _failure(command, YtdlpFailureKind.NETWORK, "aria2c exited with code 22")
 
-            def fake_ffmpeg(command, *, operation, cancel_controller=None):
+            def fake_ffmpeg(command, *, operation, cancel_controller=None, progress_duration_seconds=None):
                 _assert(operation == "fast_video_transcode", "Fast conversion used wrong operation after yt-dlp error")
                 ffmpeg_calls.append(list(command))
                 Path(command[-1]).write_bytes(b"fixed")
@@ -684,7 +740,7 @@ def _test_ytdlp_error_prefers_exact_merged_mp4_over_fragment() -> None:
                 _set_mtime_ns(fragment, 2_000_000_000)
                 raise _failure(command, YtdlpFailureKind.NETWORK, "aria2c exited with code 22")
 
-            def fake_ffmpeg(command, *, operation, cancel_controller=None):
+            def fake_ffmpeg(command, *, operation, cancel_controller=None, progress_duration_seconds=None):
                 ffmpeg_inputs.append(Path(command[3]))
                 Path(command[-1]).write_bytes(b"fixed")
                 return ""
@@ -866,7 +922,7 @@ def _test_corrupt_fast_mp4_is_not_promoted() -> None:
                 _output_path(command, "mp4").write_bytes(b"corrupt")
                 raise _failure(command, YtdlpFailureKind.NETWORK, "aria2c exited with code 22")
 
-            def fake_ffmpeg(command, *, operation, cancel_controller=None):
+            def fake_ffmpeg(command, *, operation, cancel_controller=None, progress_duration_seconds=None):
                 Path(command[-1]).write_bytes(b"fixed-but-invalid")
                 return ""
 
@@ -1062,7 +1118,7 @@ def _test_fast_has_no_automatic_fallback() -> None:
     old_promote = downloader._atomic_promote_with_retry
     old_build_stable = downloader._build_stable_video_ytdlp_command
     try:
-        def fake_ffmpeg(command, *, operation, cancel_controller=None):
+        def fake_ffmpeg(command, *, operation, cancel_controller=None, progress_duration_seconds=None):
             calls.append(list(command))
             Path(command[-1]).write_bytes(b"fixed")
             return ""
@@ -1263,7 +1319,7 @@ def _test_fast_log_secret_safety() -> None:
                     ),
                 )
 
-            def fake_ffmpeg(command, *, operation, cancel_controller=None):
+            def fake_ffmpeg(command, *, operation, cancel_controller=None, progress_duration_seconds=None):
                 Path(command[-1]).write_bytes(b"fixed")
                 return ""
 

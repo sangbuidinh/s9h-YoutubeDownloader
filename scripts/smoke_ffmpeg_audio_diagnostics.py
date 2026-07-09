@@ -1,3 +1,4 @@
+import io
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -45,30 +46,44 @@ def main() -> int:
 
 class _FakeProcess:
     def __init__(self, *, stdout: str = "", stderr: str = "", returncode: int = 0):
-        self.stdout_text = stdout
-        self.stderr_text = stderr
+        self.stdout = io.StringIO(stdout)
+        self.stderr = io.StringIO(stderr)
         self.returncode = returncode
         self.pid = 4242
 
-    def communicate(self, timeout=None):
-        return self.stdout_text, self.stderr_text
-
     def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
         return self.returncode
 
 
 class _TimeoutProcess:
     def __init__(self, on_timeout):
+        self.stdout = _CancellingStream(lambda: on_timeout(self))
+        self.stderr = io.StringIO("")
         self.returncode = None
         self.pid = 4243
-        self.on_timeout = on_timeout
 
-    def communicate(self, timeout=None):
-        self.on_timeout(self)
-        raise subprocess.TimeoutExpired("ffmpeg.exe", timeout)
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            raise subprocess.TimeoutExpired("ffmpeg.exe", timeout)
+        return self.returncode
 
     def poll(self):
         return self.returncode
+
+
+class _CancellingStream:
+    def __init__(self, on_read):
+        self._on_read = on_read
+        self._used = False
+
+    def __iter__(self):
+        if not self._used:
+            self._used = True
+            self._on_read()
+        return iter(())
 
 
 @contextmanager

@@ -124,6 +124,8 @@ def _detail_text(event: ProgressEvent, phase: str) -> str:
     message = _compact_text(event.message, 72)
     if event.kind == "error" and message:
         return message
+    if event.kind == "ffmpeg_progress":
+        return _ffmpeg_progress_detail_text(event)
     if _is_priority_progress_message(message):
         return message
 
@@ -155,6 +157,28 @@ def _progress_detail_parts(event: ProgressEvent) -> list[str]:
     if event.fragment and event.percent:
         parts.append(f"Fragment {_compact_text(event.fragment, 24)}")
     return parts
+
+
+def _ffmpeg_progress_detail_text(event: ProgressEvent) -> str:
+    parts = []
+    filename = _ffmpeg_progress_filename(event)
+    if filename:
+        parts.append(filename)
+    if event.percent:
+        parts.append(_compact_text(event.percent, 24))
+    if event.speed:
+        parts.append(f"speed {_compact_text(event.speed, 32)}")
+    return " | ".join(parts) if parts else "-"
+
+
+def _ffmpeg_progress_filename(event: ProgressEvent) -> str:
+    title = _compact_text(event.title, 90)
+    if not title:
+        return ""
+    filename = _safe_display_filename(title)
+    if not filename.lower().endswith(".mp4"):
+        filename = f"{filename}.mp4"
+    return _compact_text(filename, 96)
 
 
 def _is_priority_progress_message(message: str) -> bool:

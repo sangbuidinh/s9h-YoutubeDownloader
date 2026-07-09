@@ -102,6 +102,8 @@ Sources inspected:
 - Fast video batches run in two phases: phase 1 downloads all source videos and thumbnails in selected-list order, then phase 2 converts, validates, and promotes queued videos in the same order. A staged source MP4 does not count as downloaded; final video status updates only after FFmpeg conversion, Premiere-safe validation, and atomic promotion. Stable remains sequential.
 - Skip Current Video during Fast phase 1 stops all remaining work for that video. The item is counted only as skipped, is not queued for phase 2, and is never converted or promoted. Phase 2 also defensively ignores any job whose skipped flag is set.
 - Fast video output is post-processed before promotion with FFmpeg `libx264`, preset `slow`, CRF `18`, audio `aac`, and `+faststart`; only the converted MP4 is promoted.
+- During Fast phase 2, FFmpeg conversion streams machine-readable progress through `-progress pipe:1 -nostats`. The processing line displays only `<numbered filename>.mp4 | <percent> | speed <multiplier>`, for example `Đang xử lý: 001 Title.mp4 | 43% | speed 1.18x`.
+- The UI does not show FFmpeg frame count, timestamp, duration, ETA, bitrate, staging path, command line, or raw progress records. Updates are throttled in the downloader and delivered through the existing latest-event queue; reader threads never update Tkinter directly. If the duration probe fails, conversion still runs; progress remains at `0%` until completion emits `100%`.
 - Fast direct-audio mode uses the same direct-cookie, `ios,web`, and aria2 16/16/16/1M transport. Thumbnail download remains separate and does not inherit Fast media downloader arguments.
 
 ### File Start Number
@@ -426,6 +428,7 @@ Rows use `iid=str(video.display_order)` and values:
 - The download worker passes `progress_callback=self._enqueue_progress_event` into `download_items(...)`.
 - `_enqueue_progress_event()` writes to `progress_queue` with `put_latest_progress_event(...)`.
 - `_poll_progress_queue()` runs every 300 ms, drains the queue to the latest event, merges sticky percent/speed/fragment display fields, formats lines with `format_progress_event_lines(...)`, and writes both Tkinter variables.
+- FFmpeg conversion progress uses `ProgressEvent(kind="ffmpeg_progress", phase="Fast phase 2/2")`; its detail line uses the `speed` label instead of the yt-dlp speed label.
 - Sticky progress state resets for `batch_complete`, `stop_requested`, and `error` events.
 
 ### Log Text
