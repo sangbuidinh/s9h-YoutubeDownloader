@@ -100,6 +100,7 @@ Sources inspected:
 - Fast mode does not enter the Stable info-json/cookieless/lookahead pipeline and does not use Stable `-N 1`, `--http-chunk-size`, or Premiere-safe format selection before download.
 - Fast video downloads include yt-dlp `--ignore-errors` to match the reference BAT video workflow. Fast direct-audio downloads remain strict and do not use `--ignore-errors`. When selecting a staged Fast video source, the application first prefers the exact merged `<video_id>.mp4` output, then another non-fragment MP4, and only then a `.f###.mp4` format fragment. Regardless of source selection, FFmpeg conversion, Premiere-safe validation, and atomic promotion remain mandatory.
 - Fast video batches run in two phases: phase 1 downloads all source videos and thumbnails in selected-list order, then phase 2 converts, validates, and promotes queued videos in the same order. A staged source MP4 does not count as downloaded; final video status updates only after FFmpeg conversion, Premiere-safe validation, and atomic promotion. Stable remains sequential.
+- Skip Current Video during Fast phase 1 stops all remaining work for that video. The item is counted only as skipped, is not queued for phase 2, and is never converted or promoted. Phase 2 also defensively ignores any job whose skipped flag is set.
 - Fast video output is post-processed before promotion with FFmpeg `libx264`, preset `slow`, CRF `18`, audio `aac`, and `+faststart`; only the converted MP4 is promoted.
 - Fast direct-audio mode uses the same direct-cookie, `ios,web`, and aria2 16/16/16/1M transport. Thumbnail download remains separate and does not inherit Fast media downloader arguments.
 
@@ -108,6 +109,7 @@ Sources inspected:
 - The download frame includes a required `File start number` entry. It is blank by default, accepts only a positive integer at batch validation, and is locked while a batch is running.
 - The value is session-only and is not written to app settings, SQLite, channel records, the registry, or environment variables.
 - Output stems use minimum three-digit formatting: `001 Title`, `009 Title`, `051 Title`, `999 Title`, and `1000 Title`. Video, audio, and thumbnail outputs for the same item share the same numbered stem.
+- Numbered output stems are rebuilt from the video's canonical title for every batch. A numbered stem from a previous run must never be used as the next batch's source title, so prefixes cannot accumulate.
 - Number assignment is fixed by original selected-list order. Skipped, failed, unavailable, cancelled, and partially complete items still consume their assigned number; later items are not renumbered based on success count.
 
 Manual status context menu commands:

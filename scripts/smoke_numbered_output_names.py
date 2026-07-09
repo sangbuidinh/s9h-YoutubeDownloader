@@ -10,7 +10,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from core import downloader
 from core.download_modes import MODE_VIDEO_AUDIO_THUMB, MODE_VIDEO_THUMB, PART_THUMB, PART_VIDEO
-from core.downloader import DownloadError, DownloadOptions
+from core.downloader import DOWNLOAD_ENGINE_ARIA2_FAST, DOWNLOAD_ENGINE_STABLE, DownloadError, DownloadOptions
 from core.file_status import build_output_paths
 from core.state_store import STATUS_DOWNLOADED
 
@@ -18,7 +18,12 @@ from core.state_store import STATUS_DOWNLOADED
 def main() -> int:
     _test_validate_file_start_number()
     _test_number_formatting()
+    _test_repeated_prefix_cleanup_examples()
     _test_fixed_assignment_consumes_skips_and_failures()
+    _test_same_object_retry_numbering()
+    _test_corrupted_fallback_numbering()
+    _test_legitimate_numeric_title_is_preserved()
+    _test_stable_and_fast_share_numbering_helper()
     _test_numbered_stem_and_shared_part_paths()
     _test_path_aware_numbered_skip()
     print("numbered output names smoke passed")
@@ -60,6 +65,20 @@ def _test_number_formatting() -> None:
         _assert(downloader._format_output_number(number) == text, f"{number} formatted incorrectly")
 
 
+def _test_repeated_prefix_cleanup_examples() -> None:
+    examples = {
+        "001 Title": "Title",
+        "051 001 Title": "Title",
+        "1000 Title": "Title",
+        "1234 051 001 Title": "Title",
+        "Title": "Title",
+        "": "",
+    }
+    for value, expected in examples.items():
+        actual = downloader._strip_existing_output_number_prefixes(value)
+        _assert(actual == expected, f"{value!r} cleaned to {actual!r}, expected {expected!r}")
+
+
 def _test_fixed_assignment_consumes_skips_and_failures() -> None:
     assignments = [downloader._assigned_output_number(101, index) for index in range(4)]
     _assert(assignments == [101, 102, 103, 104], f"assignment shifted: {assignments}")
@@ -73,15 +92,59 @@ def _test_fixed_assignment_consumes_skips_and_failures() -> None:
         raise AssertionError("negative selected_index did not fail")
 
 
+def _test_same_object_retry_numbering() -> None:
+    with TemporaryDirectory(prefix="numbered_retry_") as temp_dir:
+        options = _options(temp_dir, start_number=1)
+        video = _video("retry-video", "Title")
+
+        _assigned, first_stem, _paths = downloader._prepare_numbered_output_for_video(video, options, 0)
+        options.file_start_number = 51
+        _assigned, second_stem, _paths = downloader._prepare_numbered_output_for_video(video, options, 0)
+        options.file_start_number = 101
+        _assigned, third_stem, _paths = downloader._prepare_numbered_output_for_video(video, options, 0)
+
+    _assert(first_stem == "001 Title", f"first stem wrong: {first_stem}")
+    _assert(second_stem == "051 Title", f"second stem accumulated prefix: {second_stem}")
+    _assert(third_stem == "101 Title", f"third stem accumulated prefix: {third_stem}")
+    _assert(second_stem != "051 001 Title", "second stem reused previous numbered output")
+    _assert("101 051" not in third_stem, "third retry retained previous prefixes")
+
+
+def _test_corrupted_fallback_numbering() -> None:
+    with TemporaryDirectory(prefix="numbered_corrupt_") as temp_dir:
+        options = _options(temp_dir, start_number=201)
+        video = _video("corrupt-video", "", sanitized_filename_base="101 051 001 Title")
+        _assigned, stem, _paths = downloader._prepare_numbered_output_for_video(video, options, 0)
+
+    _assert(stem == "201 Title", f"corrupted fallback was not cleaned: {stem}")
+
+
+def _test_legitimate_numeric_title_is_preserved() -> None:
+    numeric_title = "2024\u5e74\u306e\u51fa\u6765\u4e8b"
+    with TemporaryDirectory(prefix="numbered_numeric_") as temp_dir:
+        options = _options(temp_dir, start_number=51)
+        video = _video("numeric-video", numeric_title, sanitized_filename_base="001 old value")
+        _assigned, stem, _paths = downloader._prepare_numbered_output_for_video(video, options, 0)
+
+    _assert(stem == f"051 {numeric_title}", f"canonical numeric title was stripped: {stem}")
+
+
+def _test_stable_and_fast_share_numbering_helper() -> None:
+    with TemporaryDirectory(prefix="numbered_engine_") as temp_dir:
+        stable_options = _options(temp_dir, start_number=7, engine=DOWNLOAD_ENGINE_STABLE)
+        fast_options = _options(temp_dir, start_number=7, engine=DOWNLOAD_ENGINE_ARIA2_FAST)
+        stable_video = _video("stable-video", "Shared Title")
+        fast_video = _video("fast-video", "Shared Title")
+        _assigned, stable_stem, _paths = downloader._prepare_numbered_output_for_video(stable_video, stable_options, 0)
+        _assigned, fast_stem, _paths = downloader._prepare_numbered_output_for_video(fast_video, fast_options, 0)
+
+    _assert(stable_stem == "007 Shared Title", f"stable stem wrong: {stable_stem}")
+    _assert(fast_stem == stable_stem, f"fast stem diverged from stable: {fast_stem}")
+
+
 def _test_numbered_stem_and_shared_part_paths() -> None:
     with TemporaryDirectory(prefix="numbered_paths_") as temp_dir:
-        options = DownloadOptions(
-            base_folder=temp_dir,
-            channel_id="channel",
-            channel_name="Channel",
-            download_mode=MODE_VIDEO_AUDIO_THUMB,
-            file_start_number=51,
-        )
+        options = _options(temp_dir, start_number=51, download_mode=MODE_VIDEO_AUDIO_THUMB)
         video = _video("video-1", "Example: title?.mp4")
         assigned, stem, paths = downloader._prepare_numbered_output_for_video(video, options, 0)
 
@@ -96,13 +159,7 @@ def _test_numbered_stem_and_shared_part_paths() -> None:
 def _test_path_aware_numbered_skip() -> None:
     with TemporaryDirectory(prefix="numbered_skip_") as temp_dir:
         root = Path(temp_dir)
-        options = DownloadOptions(
-            base_folder=temp_dir,
-            channel_id="channel",
-            channel_name="Channel",
-            download_mode=MODE_VIDEO_THUMB,
-            file_start_number=1,
-        )
+        options = _options(temp_dir, start_number=1)
         video = _video("video-old", "Title")
         _assigned, stem, paths = downloader._prepare_numbered_output_for_video(video, options, 0)
         old_paths = build_output_paths(temp_dir, "Channel", "Title")
@@ -144,11 +201,28 @@ def _test_path_aware_numbered_skip() -> None:
     _assert(legacy_thumb_exists, "legacy thumb was renamed or deleted")
 
 
-def _video(video_id: str, title: str):
+def _options(
+    base_folder: str,
+    *,
+    start_number: int,
+    download_mode: str = MODE_VIDEO_THUMB,
+    engine: str = DOWNLOAD_ENGINE_STABLE,
+) -> DownloadOptions:
+    return DownloadOptions(
+        base_folder=base_folder,
+        channel_id="channel",
+        channel_name="Channel",
+        download_mode=download_mode,
+        download_engine=engine,
+        file_start_number=start_number,
+    )
+
+
+def _video(video_id: str, title: str, *, sanitized_filename_base: str | None = None):
     return SimpleNamespace(
         video_id=video_id,
         title=title,
-        sanitized_filename_base=title,
+        sanitized_filename_base=title if sanitized_filename_base is None else sanitized_filename_base,
         thumbnail_url="",
         status="",
         display_order=1,

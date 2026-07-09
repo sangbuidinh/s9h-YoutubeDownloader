@@ -97,6 +97,7 @@ ARIA2_FAST_TRANSCODE_CRF = "18"
 ARIA2_FAST_TRANSCODE_AUDIO_CODEC = "aac"
 ARIA2_VERSION_TIMEOUT_SECONDS = 3.0
 OUTPUT_NUMBER_MIN_WIDTH = 3
+_NUMBERED_OUTPUT_PREFIX_PATTERN = re.compile(r"^\d{3,}\s+")
 FILE_START_NUMBER_REQUIRED_MESSAGE = "Please enter a starting file number before downloading."
 FILE_START_NUMBER_INVALID_MESSAGE = "Starting file number must be a positive whole number."
 BRIDGE_COOKIE_FILE_MISSING_MESSAGE = (
@@ -758,6 +759,31 @@ def _build_numbered_output_stem(raw_title: object, assigned_number: int) -> str:
     return stem
 
 
+def _strip_existing_output_number_prefixes(value: object) -> str:
+    text = str(value or "").strip()
+
+    while text:
+        stripped = _NUMBERED_OUTPUT_PREFIX_PATTERN.sub("", text, count=1).strip()
+        if stripped == text:
+            break
+        text = stripped
+
+    return text
+
+
+def _numbering_source_title(video) -> str:
+    original_title = str(getattr(video, "title", "") or "").strip()
+    if original_title:
+        return original_title
+
+    fallback_title = str(getattr(video, "sanitized_filename_base", "") or "").strip()
+    fallback_title = _strip_existing_output_number_prefixes(fallback_title)
+    if fallback_title:
+        return fallback_title
+
+    return "video"
+
+
 def _prepare_numbered_output_for_video(
     video,
     options: DownloadOptions,
@@ -767,7 +793,7 @@ def _prepare_numbered_output_for_video(
         validate_file_start_number(options.file_start_number),
         selected_index,
     )
-    raw_title = getattr(video, "sanitized_filename_base", "") or getattr(video, "title", "")
+    raw_title = _numbering_source_title(video)
     stem = _build_numbered_output_stem(raw_title, assigned_number)
     video.sanitized_filename_base = stem
     paths = build_output_paths(options.base_folder, options.channel_name, stem)
@@ -1241,8 +1267,10 @@ def _download_fast_video_batch_two_phase(
                 staging_dir=staging_dir,
             )
             run_parts_current_run: list[str] = []
-            phase1_error = False
-            queued_for_phase2 = False
+            source_ready = False
+            item_skipped = False
+            item_failed = False
+            phase2_existing_video_audio = False
 
             if PART_VIDEO in missing_parts:
                 _remember_run_part(run_parts_current_run, PART_VIDEO)
@@ -1272,28 +1300,28 @@ def _download_fast_video_batch_two_phase(
                         cancel_controller,
                         aria2_validation,
                     )
-                    queued_jobs.append(job)
-                    queued_for_phase2 = True
+                    source_ready = True
                 except DownloadCancelled:
                     cancelled = True
-                    _restore_progress_context(previous_progress)
                     break
                 except SkipCurrentVideo:
                     job.skipped = True
+                    item_skipped = True
                     skipped_count += 1
+                    log(f"[SKIP] Skipped current video after user decision: {stem}")
+                    _emit_progress(progress_callback, "Skipped", video, index, video_total)
                     _reconcile_current_item(
                         options,
                         video,
                         paths,
                         log,
                         status_callback,
-                        run_parts=tuple(run_parts_current_run) or None,
+                        run_parts=None,
                     )
-                    log(f"[SKIP] Skipped current video after user decision: {stem}")
-                    _emit_progress(progress_callback, "Skipped", video, index, video_total)
+                    continue
                 except (YtdlpExecutionError, FFmpegExecutionError, DownloadError, PermissionError, Exception) as exc:
                     job.video_download_error = exc
-                    phase1_error = True
+                    item_failed = True
                     _handle_fast_batch_part_error(
                         exc,
                         options,
@@ -1311,8 +1339,7 @@ def _download_fast_video_batch_two_phase(
                     _restore_progress_context(previous_progress)
             elif PART_AUDIO in missing_parts and _part_output_ready(paths, PART_VIDEO):
                 job.conversion_completed = True
-                queued_jobs.append(job)
-                queued_for_phase2 = True
+                phase2_existing_video_audio = True
 
             if cancelled or _cancel_requested(cancel_controller):
                 cancelled = True
@@ -1365,23 +1392,24 @@ def _download_fast_video_batch_two_phase(
                     _emit_progress(progress_callback, "Thumbnail", video, index, video_total, message="Completed")
                 except DownloadCancelled:
                     cancelled = True
-                    _restore_progress_context(previous_progress)
                     break
                 except SkipCurrentVideo:
                     job.skipped = True
+                    item_skipped = True
                     skipped_count += 1
+                    log(f"[SKIP] Skipped current video after user decision: {stem}")
+                    _emit_progress(progress_callback, "Skipped", video, index, video_total)
                     _reconcile_current_item(
                         options,
                         video,
                         paths,
                         log,
                         status_callback,
-                        run_parts=tuple(run_parts_current_run) or None,
+                        run_parts=None,
                     )
-                    log(f"[SKIP] Skipped current video after user decision: {stem}")
-                    _emit_progress(progress_callback, "Skipped", video, index, video_total)
+                    continue
                 except (YtdlpExecutionError, FFmpegExecutionError, DownloadError, PermissionError, Exception) as exc:
-                    phase1_error = True
+                    item_failed = True
                     _handle_fast_batch_part_error(
                         exc,
                         options,
@@ -1402,7 +1430,28 @@ def _download_fast_video_batch_two_phase(
                 cancelled = True
                 break
 
-            if not queued_for_phase2:
+            if item_skipped or job.skipped:
+                continue
+
+            if source_ready and job.source_mp4_path is not None:
+                queued_jobs.append(job)
+                continue
+
+            if phase2_existing_video_audio:
+                queued_jobs.append(job)
+                continue
+
+            if item_failed:
+                _reconcile_current_item(
+                    options,
+                    video,
+                    paths,
+                    log,
+                    status_callback,
+                    run_parts=tuple(run_parts_current_run) or None,
+                )
+                failed_count += 1
+            else:
                 final_status = _reconcile_current_item(
                     options,
                     video,
@@ -1414,8 +1463,6 @@ def _download_fast_video_batch_two_phase(
                 if final_status == STATUS_DOWNLOADED:
                     downloaded_count += 1
                     log(f"[SUCCESS] Downloaded {_success_file_list(stem, options.download_mode)}")
-                elif phase1_error:
-                    failed_count += 1
                 else:
                     failed_count += 1
                     _emit_progress(
@@ -1436,6 +1483,9 @@ def _download_fast_video_batch_two_phase(
         _emit_progress(progress_callback, "Fast phase 2/2", message="Converting videos")
 
         for job in queued_jobs:
+            if job.skipped:
+                continue
+
             index = job.selected_index + 1
             video = job.video
             stem = job.stem

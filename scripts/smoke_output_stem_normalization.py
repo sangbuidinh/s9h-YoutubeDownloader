@@ -134,14 +134,20 @@ def _test_manual_status_redownload_uses_extensionless_stem() -> None:
             download_items([video], options, lambda _message: None, lambda _video: None)
             entry = db_store.get_video_entry(CHANNEL_ID, video.video_id, save_base_folder=SAVE_BASE_FOLDER)
 
-    _assert(video.sanitized_filename_base == "001 sample", "downloader did not normalize numbered in-memory stem")
-    _assert(calls["video_path"].name == "001 sample.mp4", "redownload video path has wrong name")
-    _assert(calls["thumb_path"].name == "001 sample.jpg", "redownload thumb path has wrong name")
+    _assert(
+        video.sanitized_filename_base == "001 Original YouTube Title",
+        "downloader did not rebuild numbered stem from canonical title",
+    )
+    _assert(calls["video_path"].name == "001 Original YouTube Title.mp4", "redownload video path has wrong name")
+    _assert(calls["thumb_path"].name == "001 Original YouTube Title.jpg", "redownload thumb path has wrong name")
     _assert(calls["video_path"].name != "sample.mp4.mp4", "redownload created duplicated video extension")
     _assert(calls["thumb_path"].name != "sample.mp4.jpg", "redownload created contaminated thumb extension")
-    _assert(entry["sanitized_filename_base"] == "001 sample", "redownload saved contaminated sanitized_filename_base")
-    _assert(entry["video_filename"] == "001 sample.mp4", "redownload video filename is wrong")
-    _assert(entry["thumb_filename"] == "001 sample.jpg", "redownload thumb filename is wrong")
+    _assert(
+        entry["sanitized_filename_base"] == "001 Original YouTube Title",
+        "redownload saved contaminated sanitized_filename_base",
+    )
+    _assert(entry["video_filename"] == "001 Original YouTube Title.mp4", "redownload video filename is wrong")
+    _assert(entry["thumb_filename"] == "001 Original YouTube Title.jpg", "redownload thumb filename is wrong")
 
 
 def _patch_downloader_for_dry_run(data_dir: Path) -> dict:
