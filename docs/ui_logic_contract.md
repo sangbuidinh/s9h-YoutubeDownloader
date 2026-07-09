@@ -91,12 +91,14 @@ Sources inspected:
 - The download frame includes a session-only `Download engine` readonly combobox with `Stable - yt-dlp internal` as the default and `Fast - aria2c experimental` as the optional fast mode.
 - `Stable - yt-dlp internal` maps to `DownloadOptions.download_engine == "stable"` and preserves the existing yt-dlp internal media downloader behavior.
 - `Fast - aria2c experimental` maps to `DownloadOptions.download_engine == "aria2_fast"` and resolves the optional runtime through `data/bin/aria2c.exe` via `runtime_file("aria2c.exe")`.
-- The selected engine is fixed for the entire batch. Stable batches stay on yt-dlp internal transfer with `-N 1`; Fast batches stay on aria2 for actual yt-dlp media transfer.
+- The selected engine is fixed for the entire batch. Stable batches stay on yt-dlp internal transfer with `-N 1`; Fast batches use the BAT-compatible aria2 pipeline.
 - Missing, invalid, or unstartable aria2 prevents a Fast batch from starting. Stable mode, application startup, and package preflight do not require aria2.
 - Fast failures do not automatically switch to Stable. The selector is not changed by errors; users can manually choose Stable for a later batch and retry.
-- aria2 applies only to video media transfer, direct audio media transfer, and saved-info-json media transfer performed by yt-dlp. Metadata extraction, one-video lookahead metadata preparation, thumbnails, YouTube API calls, Cookie Bridge, SQLite, FFmpeg extraction, probing, and Premiere-safe validation do not use aria2.
-- Authenticated info-json extraction strips media-only downloader arguments. The later saved-media transfer uses the selected batch engine, so Fast saved-media transfer still uses aria2 and Stable saved-media transfer still uses yt-dlp internal transfer.
-- Cookie-media timing, including the 10/30 strategy configured by `app.py`, isolated cookies, one-video lookahead, hidden staging, atomic promotion, systemic Retry/Skip/Stop, and no-secret logging requirements remain unchanged.
+- Stable mode keeps the existing Premiere-safe yt-dlp pipeline: `PREMIERE_SAFE_VIDEO_FORMAT`, isolated per-attempt cookies, authenticated info-json/cookieless fallback, 10/30 cookie-media timing from `app.py`, one-video lookahead, validation, and atomic promotion.
+- Fast mode uses direct selected cookies through `effective_cookies_path(options)`, `youtube:player_client=ios,web`, `bestvideo[height<=1080]+bestaudio/best[height<=1080]/best`, and aria2 `-x 16 -s 16 -j 16 -k 1M`.
+- Fast mode does not enter the Stable info-json/cookieless/lookahead pipeline and does not use Stable `-N 1`, `--http-chunk-size`, or Premiere-safe format selection before download.
+- Fast video output is post-processed before promotion with FFmpeg `libx264`, preset `slow`, CRF `18`, audio `aac`, and `+faststart`; only the converted MP4 is promoted.
+- Fast direct-audio mode uses the same direct-cookie, `ios,web`, and aria2 16/16/16/1M transport. Thumbnail download remains separate and does not inherit Fast media downloader arguments.
 
 Manual status context menu commands:
 
