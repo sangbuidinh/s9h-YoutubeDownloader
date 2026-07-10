@@ -79,6 +79,10 @@ COOKIE_MEDIA_PROBE_INTERVAL_VIDEOS = 10
 _STANDALONE_SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)\b(?P<name>key|api_key|token|access_token)="
 )
+_ARIA2_HTTP_RESPONSE_EXIT_PATTERN = re.compile(
+    r"\baria2c(?:\.exe)?\s+exited\s+with\s+code\s+22\b",
+    flags=re.IGNORECASE,
+)
 OUTPUT_PATH_TOO_LONG_MESSAGE = (
     "Output path too long. Please choose a shorter save folder or shorten filename limit."
 )
@@ -89,6 +93,8 @@ DOWNLOAD_ENGINE_STABLE = "stable"
 DOWNLOAD_ENGINE_ARIA2_FAST = "aria2_fast"
 DEFAULT_DOWNLOAD_ENGINE = DOWNLOAD_ENGINE_STABLE
 ARIA2_FAST_DOWNLOADER_ARGS = "aria2c:-x 16 -s 16 -j 16 -k 1M"
+# aria2 exit 22 means the HTTP response header was bad or unexpected.
+ARIA2_HTTP_RESPONSE_EXIT_CODE = 22
 ARIA2_VERSION_TIMEOUT_SECONDS = 3.0
 OUTPUT_NUMBER_MIN_WIDTH = 3
 _NUMBERED_OUTPUT_PREFIX_PATTERN = re.compile(r"^\d{3,}\s+")
@@ -3011,6 +3017,8 @@ def _run_ytdlp_with_retries(
             failure_kind = classify_ytdlp_failure_kind(exc, options)
             exc.failure_kind = failure_kind
             _log_ytdlp_attempt_failure(log, exc, failure_kind, attempt_number)
+            if _is_aria2_http_response_media_failure(exc):
+                log("[YT-DLP CLASS DETAIL] aria2_http_response_exit_22")
 
             if _should_use_authenticated_infojson_fallback(
                 exc,
@@ -3021,11 +3029,19 @@ def _run_ytdlp_with_retries(
             ):
                 attempt_state.cookieless_fallback_used = True
                 attempt_state.authenticated_infojson_fallback_used = True
-                log(
-                    "[COOKIE FALLBACK] Cookie-authenticated media request returned HTTP 403. "
-                    "Extracting authenticated metadata, then downloading the saved media URLs "
-                    "without cookies."
-                )
+                if _is_aria2_http_response_media_failure(exc):
+                    log(
+                        "[COOKIE FALLBACK] aria2 media transfer failed because the HTTP "
+                        "response header was bad or unexpected (exit code 22). "
+                        "Extracting authenticated metadata, then downloading the saved media "
+                        "URLs without cookies through aria2c."
+                    )
+                else:
+                    log(
+                        "[COOKIE FALLBACK] Cookie-authenticated media request returned HTTP 403. "
+                        "Extracting authenticated metadata, then downloading the saved media URLs "
+                        "without cookies."
+                    )
                 attempt_number += 1
                 try:
                     current_command = _prepare_authenticated_infojson_download_command(
@@ -3052,14 +3068,16 @@ def _run_ytdlp_with_retries(
                 _start_attempt_lookahead(attempt_state, log)
                 continue
 
-            cookieless_saved_media_403 = _is_cookieless_saved_media_http_403(
-                exc,
-                failure_kind,
-                attempt_info,
-                attempt_state,
-                current_command,
+            cookieless_saved_media_access_failure = (
+                _is_cookieless_saved_media_access_failure(
+                    exc,
+                    failure_kind,
+                    attempt_info,
+                    attempt_state,
+                    current_command,
+                )
             )
-            if cookieless_saved_media_403:
+            if cookieless_saved_media_access_failure:
                 current_age = _cookie_media_age_seconds(
                     cookie_media_metadata_ready_monotonic,
                     cookie_media_waited_seconds,
@@ -3075,31 +3093,52 @@ def _run_ytdlp_with_retries(
                         )
                         _record_cookie_media_probe_failure(attempt_state.batch_state)
                         cookie_media_probe_active = False
-                        log(
-                            "[COOKIE BATCH MODE] Short delay probe still received HTTP 403. "
-                            f"Returning toward the learned {learned_delay}-second delay."
-                        )
+                        if _is_aria2_http_response_media_failure(exc):
+                            log(
+                                "[COOKIE BATCH MODE] Short delay probe still received aria2 "
+                                "HTTP response exit code 22. Returning toward the learned "
+                                f"{learned_delay}-second delay."
+                            )
+                        else:
+                            log(
+                                "[COOKIE BATCH MODE] Short delay probe still received HTTP 403. "
+                                f"Returning toward the learned {learned_delay}-second delay."
+                            )
                     cookie_media_waited_seconds = retry_target
-                    log(
-                        "[WARNING] HTTP 403 during cookieless media transfer. "
-                        f"Retrying in {delay} seconds "
-                        f"(metadata age target: {retry_target} seconds)."
-                    )
+                    if _is_aria2_http_response_media_failure(exc):
+                        log(
+                            "[WARNING] aria2 HTTP response failure during cookieless media "
+                            f"transfer (exit code 22). Retrying in {delay} seconds "
+                            f"(metadata age target: {retry_target} seconds)."
+                        )
+                    else:
+                        log(
+                            "[WARNING] HTTP 403 during cookieless media transfer. "
+                            f"Retrying in {delay} seconds "
+                            f"(metadata age target: {retry_target} seconds)."
+                        )
                     _sleep_with_cancel(delay, cancel_controller)
                     continue
 
             if (
-                not cookieless_saved_media_403
+                not cookieless_saved_media_access_failure
                 and failure_kind == YtdlpFailureKind.HTTP_403
                 and not attempt_state.verified_retry_used
                 and http_403_retries < len(http_403_delays)
             ):
                 delay = http_403_delays[http_403_retries]
                 http_403_retries += 1
-                log(
-                    f"[WARNING] HTTP 403 during {exc.part}/{exc.stage}. "
-                    f"Retrying in {delay} seconds (retry {http_403_retries}/2)."
-                )
+                if _is_aria2_http_response_media_failure(exc):
+                    log(
+                        "[WARNING] aria2 HTTP response failure during "
+                        f"{exc.part}/{exc.stage} (exit code 22). "
+                        f"Retrying in {delay} seconds (retry {http_403_retries}/2)."
+                    )
+                else:
+                    log(
+                        f"[WARNING] HTTP 403 during {exc.part}/{exc.stage}. "
+                        f"Retrying in {delay} seconds (retry {http_403_retries}/2)."
+                    )
                 _sleep_with_cancel(delay, cancel_controller)
                 continue
 
@@ -3247,7 +3286,7 @@ def _next_cookie_media_retry_target(waited_seconds: int) -> int | None:
     return None
 
 
-def _is_cookieless_saved_media_http_403(
+def _is_cookieless_saved_media_access_failure(
     exc: YtdlpExecutionError,
     failure_kind: YtdlpFailureKind,
     attempt_info: _PreparedCookieAttempt | None,
@@ -3255,13 +3294,11 @@ def _is_cookieless_saved_media_http_403(
     command: list[str],
 ) -> bool:
     return bool(
-        failure_kind == YtdlpFailureKind.HTTP_403
-        and exc.part == PART_VIDEO
+        _is_video_media_access_failure(exc, failure_kind)
         and attempt_state.authenticated_infojson_fallback_used
         and attempt_info is not None
         and not attempt_info.cookies_used
         and "--load-info-json" in command
-        and _is_video_data_http_403(exc)
     )
 
 
@@ -3316,9 +3353,21 @@ def _should_use_authenticated_infojson_fallback(
         and attempt_info is not None
         and attempt_info.cookies_used
         and not attempt_state.authenticated_infojson_fallback_used
-        and failure_kind == YtdlpFailureKind.HTTP_403
-        and exc.part == PART_VIDEO
-        and _is_video_data_http_403(exc)
+        and _is_video_media_access_failure(exc, failure_kind)
+    )
+
+
+def _is_video_media_access_failure(
+    exc: YtdlpExecutionError,
+    failure_kind: YtdlpFailureKind,
+) -> bool:
+    if exc.part != PART_VIDEO:
+        return False
+    if failure_kind != YtdlpFailureKind.HTTP_403:
+        return False
+    return bool(
+        _is_video_data_http_403(exc)
+        or _is_aria2_http_response_media_failure(exc)
     )
 
 
@@ -3461,9 +3510,44 @@ def _select_authenticated_infojson(bootstrap_dir: Path) -> Path:
     return matches[0]
 
 
+def _contains_aria2_http_response_exit_error(text: object) -> bool:
+    return bool(_ARIA2_HTTP_RESPONSE_EXIT_PATTERN.search(str(text or "")))
+
+
+def _ytdlp_error_evidence_text(exc: YtdlpExecutionError) -> str:
+    fatal_text = "\n".join(exc.fatal_lines or exc.output_lines)
+    if fatal_text.strip():
+        return fatal_text
+    if exc.combined_output.strip():
+        return exc.combined_output
+    return "\n".join([str(exc), *exc.output_lines])
+
+
+def _is_aria2_http_response_media_failure(exc: YtdlpExecutionError) -> bool:
+    if exc.part != PART_VIDEO:
+        return False
+    if not _command_uses_aria2(exc.command):
+        return False
+    return _contains_aria2_http_response_exit_error(
+        _ytdlp_error_evidence_text(exc)
+    )
+
+
+def _media_access_failure_description(exc: YtdlpExecutionError) -> str:
+    if _is_aria2_http_response_media_failure(exc):
+        return (
+            "aria2 HTTP response failure "
+            "(exit code 22: bad or unexpected HTTP response header)"
+        )
+    return "HTTP 403"
+
+
 def classify_ytdlp_failure_kind(exc: YtdlpExecutionError, options: DownloadOptions) -> YtdlpFailureKind:
-    if exc.failure_kind is not None:
+    if exc.failure_kind is not None and exc.failure_kind != YtdlpFailureKind.UNKNOWN:
         return exc.failure_kind
+
+    if _is_aria2_http_response_media_failure(exc):
+        return YtdlpFailureKind.HTTP_403
 
     fatal_text = "\n".join(exc.fatal_lines or exc.output_lines)
     if fatal_text:
@@ -3821,6 +3905,19 @@ def _command_uses_cookies(command: list[str]) -> bool:
         value == YTDLP_COOKIES_OPTION or str(value).startswith(f"{YTDLP_COOKIES_OPTION}=")
         for value in command
     )
+
+
+def _command_uses_aria2(
+    command: list[str] | tuple[str, ...] | None,
+) -> bool:
+    if not command:
+        return False
+    downloader_value = _command_option_value(list(command), "--downloader")
+    if not downloader_value:
+        return False
+    downloader_name = Path(str(downloader_value)).name.lower()
+    return downloader_name in {"aria2c", "aria2c.exe"}
+
 
 def _command_option_value(command: list[str], option: str) -> str:
     for index, value in enumerate(command):

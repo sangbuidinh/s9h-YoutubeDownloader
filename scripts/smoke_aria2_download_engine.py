@@ -38,6 +38,8 @@ def main() -> int:
     _test_fast_has_no_ignore_errors()
     _test_fast_uses_premiere_safe_selector()
     _test_fast_uses_aria2_profile()
+    _test_command_uses_aria2_detects_only_fast()
+    _test_aria2_code_22_helper_is_video_only()
     _test_authenticated_extract_strips_aria2()
     _test_saved_media_transfer_retains_aria2()
     _test_fast_uses_retry_pipeline()
@@ -215,6 +217,80 @@ def _test_fast_uses_aria2_profile() -> None:
     )
 
 
+def _test_command_uses_aria2_detects_only_fast() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        paths = _runtime_paths(root)
+        fast_command = _fast_video_command(root, paths)
+        stable_options = _options(root, DOWNLOAD_ENGINE_STABLE)
+        with _patched_runtime(paths):
+            stable_command = downloader._build_stable_video_ytdlp_command(
+                VIDEO_ID,
+                root,
+                stable_options,
+            )
+
+    _assert(downloader._command_uses_aria2(fast_command), "Fast command was not recognized as aria2")
+    _assert(not downloader._command_uses_aria2(stable_command), "Stable command was recognized as aria2")
+    _assert(downloader._command_uses_aria2(["yt-dlp", "--downloader", "aria2c"]), "aria2c name missed")
+    _assert(
+        downloader._command_uses_aria2(["yt-dlp", "--downloader", "aria2c.exe"]),
+        "aria2c.exe name missed",
+    )
+
+
+def _test_aria2_code_22_helper_is_video_only() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        paths = _runtime_paths(root)
+        fast_command = _fast_video_command(root, paths)
+        stable_options = _options(root, DOWNLOAD_ENGINE_STABLE)
+        with _patched_runtime(paths):
+            stable_command = downloader._build_stable_video_ytdlp_command(
+                VIDEO_ID,
+                root,
+                stable_options,
+            )
+
+    line = "ERROR: aria2c exited with code 22"
+    video_error = YtdlpExecutionError(
+        1,
+        "nonzero yt-dlp exit code",
+        [line],
+        combined_output=line,
+        failure_kind=YtdlpFailureKind.UNKNOWN,
+        fatal_lines=[line],
+        stage=YTDLP_STAGE_DOWNLOAD,
+        part=PART_VIDEO,
+        command=fast_command,
+    )
+    audio_error = YtdlpExecutionError(
+        1,
+        "nonzero yt-dlp exit code",
+        [line],
+        combined_output=line,
+        failure_kind=YtdlpFailureKind.UNKNOWN,
+        fatal_lines=[line],
+        stage=YTDLP_STAGE_DOWNLOAD,
+        part=downloader.PART_AUDIO,
+        command=fast_command,
+    )
+    stable_error = YtdlpExecutionError(
+        1,
+        "nonzero yt-dlp exit code",
+        [line],
+        combined_output=line,
+        failure_kind=YtdlpFailureKind.UNKNOWN,
+        fatal_lines=[line],
+        stage=YTDLP_STAGE_DOWNLOAD,
+        part=PART_VIDEO,
+        command=stable_command,
+    )
+    _assert(downloader._is_aria2_http_response_media_failure(video_error), "Fast video code 22 was missed")
+    _assert(not downloader._is_aria2_http_response_media_failure(audio_error), "Fast audio code 22 matched")
+    _assert(not downloader._is_aria2_http_response_media_failure(stable_error), "Stable code-22 text matched")
+
+
 def _test_authenticated_extract_strips_aria2() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -227,6 +303,7 @@ def _test_authenticated_extract_strips_aria2() -> None:
 
     _assert("--downloader" not in extract_command, "Metadata extraction retained aria2 downloader")
     _assert("--downloader-args" not in extract_command, "Metadata extraction retained aria2 args")
+    _assert(not downloader._command_uses_aria2(extract_command), "Metadata extraction was aria2-backed")
     _assert("--skip-download" in extract_command, "Metadata extraction missed skip-download")
     _assert("--write-info-json" in extract_command, "Metadata extraction missed write-info-json")
 
@@ -240,6 +317,7 @@ def _test_saved_media_transfer_retains_aria2() -> None:
         media_command = downloader._build_infojson_media_download_command(command, info_json_path)
 
     _assert(_option_value(media_command, "--downloader") == str(paths.aria2), "Saved-media transfer lost aria2")
+    _assert(downloader._command_uses_aria2(media_command), "Saved-media transfer was not aria2-backed")
     _assert(
         _option_value(media_command, "--downloader-args") == ARIA2_FAST_DOWNLOADER_ARGS,
         "Saved-media transfer lost aria2 profile",

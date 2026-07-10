@@ -18,6 +18,7 @@ def main() -> int:
     _test_prefetched_metadata_waits_only_remaining_age()
     _test_lookahead_worker_prepares_and_hands_off_metadata()
     _test_fallback_starts_next_lookahead_before_current_media_transfer()
+    _test_aria2_code_22_preserves_age_retry_and_lookahead_reuse()
     _test_download_controller_tracks_parallel_processes()
     print("cookie media lookahead smoke passed")
     return 0
@@ -213,6 +214,95 @@ def _media_403_error() -> downloader.YtdlpExecutionError:
     )
 
 
+def _test_aria2_code_22_preserves_age_retry_and_lookahead_reuse() -> None:
+    with TemporaryDirectory(prefix="lookahead_aria2_code22_") as temp_dir:
+        root = Path(temp_dir)
+        options = _options(root)
+        batch_state = downloader._YtdlpBatchState()
+        lookahead_calls: list[str] = []
+        first_state = downloader._YtdlpAttemptState(
+            batch_state=batch_state,
+            lookahead_callback=lambda: lookahead_calls.append("started"),
+        )
+        calls: list[list[str]] = []
+        delays: list[int] = []
+        logs: list[str] = []
+
+        def sequence(command, _controller=None):
+            calls.append(list(command))
+            if len(calls) == 1:
+                raise _aria2_code_22_error(command)
+            if len(calls) == 2:
+                output_template = Path(downloader._command_option_value(command, "-o"))
+                output_template.parent.mkdir(parents=True, exist_ok=True)
+                info_path = output_template.parent / "authenticated.info.json"
+                info_path.write_text("{}", encoding="utf-8")
+                return ""
+            if len(calls) == 3:
+                raise _aria2_code_22_error(command)
+            if len(calls) in {4, 5}:
+                return ""
+            raise AssertionError(f"unexpected aria2 lookahead call {len(calls)}")
+
+        old_run = downloader._run_ytdlp
+        old_sleep = downloader._sleep_with_cancel
+        try:
+            downloader._run_ytdlp = sequence
+            downloader._sleep_with_cancel = lambda seconds, _controller=None: delays.append(int(seconds))
+            with _progress_phase("Video"):
+                downloader._run_ytdlp_with_retries(
+                    _aria2_video_command(root, "first-code22"),
+                    options,
+                    logs.append,
+                    cookie_retry_state=first_state,
+                )
+
+            expected_target = downloader.COOKIE_MEDIA_RETRY_TARGET_SECONDS[0]
+            prefetched = _prefetch(root, age_seconds=float(expected_target) + 0.2)
+            following_state = downloader._YtdlpAttemptState(
+                batch_state=batch_state,
+                prefetched_media=prefetched,
+            )
+            with _progress_phase("Video"):
+                downloader._run_ytdlp_with_retries(
+                    _aria2_video_command(root, "following-video"),
+                    options,
+                    logs.append,
+                    cookie_retry_state=following_state,
+                )
+        finally:
+            downloader._run_ytdlp = old_run
+            downloader._sleep_with_cancel = old_sleep
+
+        expected_target = downloader.COOKIE_MEDIA_RETRY_TARGET_SECONDS[0]
+        _assert(delays == [expected_target], f"aria2 metadata-age sequence changed: {delays}")
+        _assert(lookahead_calls == ["started"], f"aria2 fallback lost lookahead: {lookahead_calls}")
+        _assert(batch_state.cookie_bootstrap_media_mode, "aria2 fallback did not enable batch mode")
+        _assert(len(calls) == 5, f"aria2 lookahead sequence call count was wrong: {len(calls)}")
+        _assert("--load-info-json" in calls[4], "following video did not reuse prefetched metadata")
+        _assert(downloader._command_uses_aria2(calls[4]), "prefetched Fast transfer lost aria2")
+        _assert(not downloader._command_uses_cookies(calls[4]), "prefetched transfer restored cookies")
+        _assert(
+            "aria2 HTTP response failure during cookieless media transfer" in "\n".join(logs),
+            "aria2 metadata-age retry log missing",
+        )
+
+
+def _aria2_code_22_error(command: list[str]) -> downloader.YtdlpExecutionError:
+    line = "ERROR: aria2c exited with code 22"
+    return downloader.YtdlpExecutionError(
+        1,
+        "nonzero yt-dlp exit code",
+        [line],
+        combined_output=line,
+        failure_kind=downloader.YtdlpFailureKind.UNKNOWN,
+        fatal_lines=[line],
+        stage=downloader.YTDLP_STAGE_DOWNLOAD,
+        part=downloader.PART_VIDEO,
+        command=command,
+    )
+
+
 def _test_download_controller_tracks_parallel_processes() -> None:
     class FakeProcess:
         def __init__(self):
@@ -268,6 +358,17 @@ def _video_command(root: Path, video_id: str) -> list[str]:
         str(root / "output" / "video.%(ext)s"),
         f"https://www.youtube.com/watch?v={video_id}",
     ]
+
+
+def _aria2_video_command(root: Path, video_id: str) -> list[str]:
+    command = _video_command(root, video_id)
+    command[1:1] = [
+        "--downloader",
+        str(root / "data" / "bin" / "aria2c.exe"),
+        "--downloader-args",
+        downloader.ARIA2_FAST_DOWNLOADER_ARGS,
+    ]
+    return command
 
 
 @contextmanager

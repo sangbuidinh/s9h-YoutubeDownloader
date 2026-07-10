@@ -103,6 +103,21 @@ Sources inspected:
 - Saved-media transfer from authenticated info-json retains Fast aria2 media-transfer options while removing cookies and the YouTube watch URL.
 - Fast does not perform a full video transcode. If no MP4 H.264/AAC format at 1080p or below exists, both engines fail strictly instead of downloading VP9/AV1 or transcoding unrestricted streams.
 
+### aria2 HTTP-response exit handling
+
+Fast media transfer may surface `ERROR: aria2c exited with code 22`. aria2 code 22 means the HTTP response header was bad or unexpected; it does not prove an HTTP 403 status.
+
+For a Fast video media command, this failure is routed into the existing HTTP media-access recovery workflow:
+
+1. The initial media attempt uses an isolated cookie copy.
+2. Code 22 triggers authenticated info-json extraction.
+3. Metadata extraction does not use aria2.
+4. Saved media URLs are downloaded cookieless through aria2.
+5. Repeated code 22 during saved-media transfer follows the existing metadata-age retry targets and one-video lookahead.
+6. Media transfer never automatically switches to Stable.
+
+The internal `HTTP_403` failure kind is reused as a compatibility class for retry routing, while technical logs retain the distinct `aria2_http_response_exit_22` detail.
+
 ### File Start Number
 
 - The download frame includes a required `File start number` entry. It is blank by default, accepts only a positive integer at batch validation, and is locked while a batch is running.
