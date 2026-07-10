@@ -8,6 +8,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core.progress_status import (
+    STAGE_MERGING,
+    STAGE_PREPARING,
+    STAGE_PROMOTING,
+    STAGE_VALIDATING,
+    TRANSFER_SOURCE_ARIA2,
+    TRANSFER_SOURCE_YTDLP,
     ProgressEvent,
     format_progress_event_lines,
     parse_ytdlp_progress_line,
@@ -23,6 +29,8 @@ def main() -> int:
     _test_unknown_line_is_ignored()
     _test_secret_text_is_not_displayed_raw()
     _test_speed_is_labeled_as_ytdlp_speed()
+    _test_stable_and_fast_display_parity()
+    _test_localized_video_stages()
     _test_ffmpeg_progress_uses_speed_label()
     _test_ffmpeg_progress_localizes_to_requested_line()
     _test_video_event_formats_as_two_lines()
@@ -34,6 +42,7 @@ def main() -> int:
     _test_sticky_partial_event_keeps_same_item_speed()
     _test_sticky_new_video_resets_speed()
     _test_sticky_new_phase_resets_speed()
+    _test_completed_video_part_allows_thumbnail_progress()
     _test_sticky_terminal_events_reset_speed()
     _test_progress_queue_put_latest_does_not_block()
     print("progress status smoke tests passed")
@@ -101,6 +110,46 @@ def _test_speed_is_labeled_as_ytdlp_speed() -> None:
         ProgressEvent(phase="Video", speed="10.4MiB/s", percent="45.2%")
     )
     _assert("yt-dlp 10.4MiB/s" in detail_line, "yt-dlp speed label was missing")
+
+
+def _test_stable_and_fast_display_parity() -> None:
+    _current_line, stable = format_progress_event_lines(
+        ProgressEvent(
+            phase="Video",
+            percent="3.6%",
+            speed="47.72MiB/s",
+            source=TRANSFER_SOURCE_YTDLP,
+        )
+    )
+    _assert(stable == "Processing: 3.6% | yt-dlp 47.72MiB/s", f"Stable display changed: {stable}")
+
+    _current_line, fast = format_progress_event_lines(
+        ProgressEvent(
+            phase="Video",
+            percent="97.0%",
+            speed="36MiB/s",
+            source=TRANSFER_SOURCE_ARIA2,
+            eta="21s",
+        )
+    )
+    _assert(fast == "Processing: 97.0% | aria2c 36MiB/s", f"Fast display was wrong: {fast}")
+    _assert("ETA" not in fast and "21s" not in fast, "Fast display included ETA")
+    _assert("CN:" not in fast, "Fast display included connection count")
+
+
+def _test_localized_video_stages() -> None:
+    window = _progress_window()
+    cases = (
+        ("Video", STAGE_PREPARING, "Đang xử lý: Đang chuẩn bị tải..."),
+        ("Video", STAGE_MERGING, "Đang xử lý: Đang ghép video và âm thanh..."),
+        ("Validating MP4", STAGE_VALIDATING, "Đang xử lý: Đang kiểm tra file MP4..."),
+        ("Video", STAGE_PROMOTING, "Đang xử lý: Đang hoàn tất file..."),
+    )
+    for phase, message, expected in cases:
+        _current_line, detail_line = window._localized_progress_lines(
+            ProgressEvent(phase=phase, title="012 Title", message=message)
+        )
+        _assert(detail_line == expected, f"localized stage was wrong: {detail_line}")
 
 
 def _test_ffmpeg_progress_uses_speed_label() -> None:
@@ -258,6 +307,24 @@ def _test_sticky_new_phase_resets_speed() -> None:
     _assert("1.91MiB/s" not in detail_line, "new phase reused old speed")
     _assert("ETA" not in detail_line, "new phase displayed ETA label")
     _assert("00:40" not in detail_line, "new phase displayed old ETA value")
+
+
+def _test_completed_video_part_allows_thumbnail_progress() -> None:
+    window = _progress_window()
+    _sticky_lines(
+        window,
+        ProgressEvent(video_index=1, phase="Video", title="A", percent="100.0%", generation=1),
+    )
+    _sticky_lines(
+        window,
+        ProgressEvent(video_index=1, phase="Video", title="A", message="Completed"),
+    )
+    current_line, detail_line = _sticky_lines(
+        window,
+        ProgressEvent(video_index=1, phase="Thumbnail", title="A", message="Downloading image"),
+    )
+    _assert("Thumbnail" in current_line, "completed video part blocked thumbnail phase")
+    _assert("Downloading image" in detail_line, "thumbnail detail was blocked after video completion")
 
 
 def _test_sticky_terminal_events_reset_speed() -> None:

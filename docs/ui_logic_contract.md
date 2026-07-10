@@ -448,7 +448,33 @@ Rows use `iid=str(video.display_order)` and values:
 - `_enqueue_progress_event()` writes to `progress_queue` with `put_latest_progress_event(...)`.
 - `_poll_progress_queue()` runs every 300 ms, drains the queue to the latest event, merges sticky percent/speed/fragment display fields, formats lines with `format_progress_event_lines(...)`, and writes both Tkinter variables.
 - Generic FFmpeg progress events use `ProgressEvent(kind="ffmpeg_progress", phase="FFmpeg")`; their detail line uses the `speed` label instead of the yt-dlp speed label. The production Fast video path does not use full-transcode progress.
-- Sticky progress state resets for `batch_complete`, `stop_requested`, and `error` events.
+- Sticky progress state resets for `batch_complete`, `stop_requested`, and `error` events. Video order and attempt generation guards prevent a stale attempt or prior-video event from replacing newer status.
+
+### Transfer progress parity
+
+- Stable parses yt-dlp progress and retains the existing detail format, for example `3.6% | yt-dlp 47.72MiB/s`.
+- Fast parses aria2 terminal status emitted through yt-dlp's external-downloader process, for example `97.0% | aria2c 36MiB/s`.
+- The actual command determines the transfer source. Authenticated metadata-only extraction does not claim aria2 progress; saved-media Fast transfer retains aria2.
+- The first line retains the numbered filename. The second line moves through `Đang chuẩn bị tải...`, live transfer, `Đang ghép video và âm thanh...` when a merger actually runs, `Đang kiểm tra file MP4...`, and `Đang hoàn tất file...`.
+- ETA is not displayed. aria2 connection count is retained only in parsed diagnostic data and is not shown in the normal two-line UI.
+- aria2 refreshes are throttled before enqueueing; cancellation checks and subprocess reads are not throttled.
+
+### aria2 progress-line handling
+
+- ANSI/control characters and carriage-return snapshots are normalized before aria2 status parsing. When one read contains multiple complete snapshots, the final snapshot is used.
+- Pure aria2 progress snapshots such as `[#abc ...]` are excluded from concise yt-dlp fatal-error evidence.
+- `aria2c exited with code 22` remains fatal evidence, retains the `aria2_http_response_exit_22` detail, and follows the existing compatibility classification and fallback behavior.
+- Private bounded subprocess output may retain progress snapshots for diagnosis; raw subprocess lines and signed media URLs are never sent to the UI.
+
+### Download-stage timing
+
+- One sanitized `[PERF]` summary is logged for each logical video download result: success, final failure, or cancellation.
+- `engine` is `yt-dlp` or `aria2c` from the actual initial media command; `part` is `video`; `attempts` counts media subprocess attempts.
+- `prepare` measures attempt start to first transfer progress, or the complete attempt when no transfer progress appears.
+- `transfer` measures first transfer progress to merger start, or process finish when no merger runs. `merge` is nonzero only when a real `[Merger]` stage occurs.
+- `validate` and `promote` measure the existing Premiere-safe validation and atomic promotion calls. `retry_wait` sums existing video retry delays without changing them.
+- `total` is logical wall duration and may exceed or differ from the sum of stages because process startup, cleanup, staging, retry control, and filesystem gaps are diagnostic overhead.
+- PERF lines contain no title, output path, cookie path/value, URL, header, authorization value, or API key. Timing is diagnostic only and does not change downloader behavior.
 
 ### Log Text
 

@@ -15,6 +15,8 @@ if str(REPO_ROOT) not in sys.path:
 from core import downloader
 from core.download_modes import MODE_VIDEO_THUMB
 from core.downloader import DownloadController, DownloadOptions
+from core.progress_status import ProgressEvent, format_progress_event_lines
+from ui.main_window import YouTubeDownloaderWindow
 
 
 def main() -> int:
@@ -22,6 +24,7 @@ def main() -> int:
     if os.name == "nt":
         _test_terminate_process_tree_kills_windows_child_process()
     _test_streamed_runner_cancels_quickly()
+    _test_aria2_progress_cancel_stops_events_and_logs_timing()
     _test_cancelled_batch_does_not_emit_batch_completed()
     print("progress cancel smoke tests passed")
     return 0
@@ -130,6 +133,85 @@ def _test_streamed_runner_cancels_quickly() -> None:
     _assert(controller.current_process is None, "current process was not cleared")
 
 
+def _test_aria2_progress_cancel_stops_events_and_logs_timing() -> None:
+    controller = DownloadController()
+    events: list[ProgressEvent] = []
+    logs: list[str] = []
+    result: list[str] = []
+    video = _video()
+    code = (
+        "import time\n"
+        "print('[#abc 3MiB/100MiB(3%) CN:4 DL:8MiB]', flush=True)\n"
+        "time.sleep(30)\n"
+        "print('[#abc 90MiB/100MiB(90%) CN:4 DL:8MiB]', flush=True)\n"
+    )
+
+    with TemporaryDirectory(prefix="aria2_cancel_") as temp_dir:
+        root = Path(temp_dir)
+        final_path = root / "final.mp4"
+        options = DownloadOptions(str(root), "channel", "Channel")
+        old_builder = downloader._build_video_ytdlp_command
+        downloader._build_video_ytdlp_command = lambda *_args, **_kwargs: [
+            sys.executable,
+            "-u",
+            "-c",
+            code,
+            "--downloader",
+            "aria2c",
+        ]
+
+        def run() -> None:
+            previous = downloader._set_progress_context(events.append, video, 1, 1, "Video")
+            try:
+                downloader._download_video(
+                    video.video_id,
+                    video.sanitized_filename_base,
+                    root,
+                    final_path,
+                    options,
+                    logs.append,
+                    controller,
+                )
+            except downloader.DownloadCancelled:
+                result.append("cancelled")
+            except BaseException as exc:
+                result.append(f"{type(exc).__name__}: {exc}")
+            else:
+                result.append("completed")
+            finally:
+                downloader._restore_progress_context(previous)
+
+        try:
+            worker = threading.Thread(target=run, daemon=True)
+            worker.start()
+            _wait_for_aria2_progress(events)
+            _assert(controller.has_active_process(), "aria2 fake process was not active")
+            controller.request_cancel()
+            worker.join(timeout=5)
+            _assert(not worker.is_alive(), "aria2 fake process did not stop after cancellation")
+            _assert(result == ["cancelled"], f"aria2 cancellation result was wrong: {result}")
+            event_count = len(events)
+            time.sleep(0.1)
+            _assert(len(events) == event_count, "progress arrived after cancellation completed")
+        finally:
+            downloader._build_video_ytdlp_command = old_builder
+
+    _assert(any(event.source == "aria2c" and event.percent == "3.0%" for event in events), "aria2 progress was not accepted")
+    perf_lines = [line for line in logs if line.startswith("[PERF]")]
+    _assert(len(perf_lines) == 1, f"cancellation emitted {len(perf_lines)} PERF lines")
+    _assert("engine=aria2c" in perf_lines[0] and "result=cancelled" in perf_lines[0], "cancel PERF line was wrong")
+    _assert("attempts=1" in perf_lines[0] and "retry_wait=0.00s" in perf_lines[0], "cancel retried unexpectedly")
+    _assert(sum(1 for line in logs if line.startswith("[YT-DLP START]")) == 1, "retry started after cancellation")
+
+    window = YouTubeDownloaderWindow.__new__(YouTubeDownloaderWindow)
+    window._reset_progress_sticky(reset_order=True)
+    for event in events:
+        window._merge_progress_event_for_display(event)
+    stopped = window._merge_progress_event_for_display(ProgressEvent(kind="stop_requested"))
+    _current_line, detail_line = format_progress_event_lines(stopped)
+    _assert("3.0%" not in detail_line, "cancelled UI retained stale aria2 percentage")
+
+
 def _test_cancelled_batch_does_not_emit_batch_completed() -> None:
     controller = DownloadController()
     controller.request_cancel()
@@ -171,6 +253,15 @@ def _wait_for_current_process(controller: DownloadController) -> None:
             return
         time.sleep(0.05)
     raise AssertionError("runner did not register current process")
+
+
+def _wait_for_aria2_progress(events: list[ProgressEvent]) -> None:
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if any(event.source == "aria2c" and event.percent for event in events):
+            return
+        time.sleep(0.05)
+    raise AssertionError("fake aria2 progress was not emitted")
 
 
 def _windows_process_exists(pid: int) -> bool:

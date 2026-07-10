@@ -232,7 +232,7 @@ class YouTubeDownloaderWindow:
         self.search_status_var = tk.StringVar()
         self.progress_current_var = tk.StringVar(value="Đang tải: Sẵn sàng")
         self.progress_detail_var = tk.StringVar(value="Đang xử lý: -")
-        self._reset_progress_sticky()
+        self._reset_progress_sticky(reset_order=True)
         self.search_match_orders: list[int] = []
         self.current_search_match_index = -1
         self.tree_column_drag: dict | None = None
@@ -1492,7 +1492,7 @@ class YouTubeDownloaderWindow:
             systemic_block_callback=lambda context: self.events.put(("systemic_download_block", context))
         )
         self._clear_progress_queue()
-        self._reset_progress_sticky()
+        self._reset_progress_sticky(reset_order=True)
         self.progress_current_var.set("Đang tải: Sẵn sàng")
         self.progress_detail_var.set("Đang xử lý: -")
         self._set_download_controls_locked(True)
@@ -2823,18 +2823,69 @@ class YouTubeDownloaderWindow:
             return "Đang xử lý:" + line[len("Processing:") :]
         return line
 
-    def _reset_progress_sticky(self) -> None:
+    def _reset_progress_sticky(self, *, reset_order: bool = False) -> None:
         self._progress_display_key = None
         self._progress_sticky_percent = None
         self._progress_sticky_speed = None
         self._progress_sticky_fragment = None
+        self._progress_sticky_source = None
+        if reset_order or not hasattr(self, "_progress_latest_item_key"):
+            self._progress_latest_item_key = None
+            self._progress_latest_generation = None
+            self._progress_last_display_event = None
+            self._progress_terminal_guard = False
 
     def _merge_progress_event_for_display(self, event: ProgressEvent) -> ProgressEvent:
-        if event.kind in {"batch_complete", "stop_requested", "error"}:
+        item_key = (event.video_total, event.video_index, event.title)
+        terminal = event.kind in {"batch_complete", "stop_requested", "error"}
+        if terminal:
             self._reset_progress_sticky()
+            if event.video_index is not None:
+                if self._progress_latest_item_key != item_key:
+                    self._progress_latest_generation = None
+                self._progress_latest_item_key = item_key
+            if event.generation is not None:
+                self._progress_latest_generation = event.generation
+            self._progress_terminal_guard = True
+            self._progress_last_display_event = event
             return event
 
-        key = (event.video_index, event.video_total, event.phase, event.title)
+        latest_item = self._progress_latest_item_key
+        if (
+            latest_item is not None
+            and event.video_index is not None
+            and latest_item[1] is not None
+            and event.video_total == latest_item[0]
+            and event.video_index < latest_item[1]
+        ):
+            return self._progress_last_display_event or event
+
+        same_item = latest_item == item_key
+        if same_item and event.generation is not None and self._progress_latest_generation is not None:
+            if event.generation < self._progress_latest_generation:
+                return self._progress_last_display_event or event
+
+        newer_generation = bool(
+            same_item
+            and event.generation is not None
+            and (
+                self._progress_latest_generation is None
+                or event.generation > self._progress_latest_generation
+            )
+        )
+        new_item = latest_item != item_key
+        if self._progress_terminal_guard and not (new_item or newer_generation):
+            return self._progress_last_display_event or event
+        if new_item or newer_generation:
+            self._reset_progress_sticky()
+            self._progress_terminal_guard = False
+            self._progress_latest_item_key = item_key
+            if new_item:
+                self._progress_latest_generation = None
+        if event.generation is not None:
+            self._progress_latest_generation = event.generation
+
+        key = (event.video_index, event.video_total, event.phase, event.title, event.generation)
         if key != self._progress_display_key:
             self._reset_progress_sticky()
             self._progress_display_key = key
@@ -2845,8 +2896,10 @@ class YouTubeDownloaderWindow:
             self._progress_sticky_speed = event.speed
         if event.fragment:
             self._progress_sticky_fragment = event.fragment
+        if event.source:
+            self._progress_sticky_source = event.source
 
-        return ProgressEvent(
+        display_event = ProgressEvent(
             kind=event.kind,
             phase=event.phase,
             message=event.message,
@@ -2857,7 +2910,11 @@ class YouTubeDownloaderWindow:
             speed=event.speed or self._progress_sticky_speed,
             eta=None,
             fragment=event.fragment or self._progress_sticky_fragment,
+            source=event.source or self._progress_sticky_source,
+            generation=event.generation,
         )
+        self._progress_last_display_event = display_event
+        return display_event
 
     def _append_log(self, message: str) -> None:
         safe_message = sanitize_log_text(message)

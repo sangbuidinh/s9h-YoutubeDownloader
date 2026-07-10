@@ -30,7 +30,20 @@ from core.file_status import (
     build_output_paths,
     ensure_output_dirs,
 )
-from core.progress_status import ProgressEvent, parse_ytdlp_progress_line
+from core.progress_status import (
+    STAGE_MERGING,
+    STAGE_PREPARING,
+    STAGE_PROMOTING,
+    STAGE_RETRY_WAIT,
+    STAGE_VALIDATING,
+    TRANSFER_SOURCE_ARIA2,
+    TRANSFER_SOURCE_YTDLP,
+    ParsedTransferProgress,
+    ProgressEvent,
+    _is_aria2_progress_line,
+    parse_aria2_progress,
+    parse_ytdlp_progress_line,
+)
 from core.error_messages import (
     SHOW_TECHNICAL_WARNINGS,
     classify_general_error,
@@ -186,6 +199,110 @@ class _ProgressContext:
     video_total: int
     phase: str
     last_emit: float = 0.0
+    generation: int = 0
+    transfer_started: bool = False
+    last_aria2_percent: float | None = None
+    last_aria2_speed: str | None = None
+    last_aria2_emit: float | None = None
+
+
+@dataclass
+class _YtdlpAttemptTiming:
+    attempt_number: int
+    source: str
+    started_at: float
+    first_transfer_at: float | None = None
+    merge_started_at: float | None = None
+    finished_at: float | None = None
+    succeeded: bool = False
+    clock: object = field(default=time.perf_counter, repr=False, compare=False)
+
+    def mark_first_transfer(self) -> None:
+        if self.first_transfer_at is None:
+            self.first_transfer_at = float(self.clock())
+
+    def mark_merge_started(self) -> None:
+        if self.merge_started_at is None:
+            self.merge_started_at = float(self.clock())
+
+    def finish(self, succeeded: bool) -> None:
+        if self.finished_at is None:
+            self.finished_at = float(self.clock())
+            self.succeeded = bool(succeeded)
+
+    def stage_seconds(self) -> tuple[float, float, float]:
+        finished = self.finished_at if self.finished_at is not None else float(self.clock())
+        if self.first_transfer_at is None:
+            merge = (
+                max(0.0, finished - self.merge_started_at)
+                if self.merge_started_at is not None
+                else 0.0
+            )
+            return max(0.0, finished - self.started_at), 0.0, merge
+        merge_started = self.merge_started_at
+        transfer_finished = merge_started if merge_started is not None else finished
+        prepare = max(0.0, self.first_transfer_at - self.started_at)
+        transfer = max(0.0, transfer_finished - self.first_transfer_at)
+        merge = max(0.0, finished - merge_started) if merge_started is not None else 0.0
+        return prepare, transfer, merge
+
+
+@dataclass
+class _VideoDownloadTiming:
+    engine: str
+    logical_started_at: float
+    attempts: list[_YtdlpAttemptTiming] = field(default_factory=list)
+    retry_wait_seconds: float = 0.0
+    validation_seconds: float = 0.0
+    promotion_seconds: float = 0.0
+    logical_finished_at: float | None = None
+    clock: object = field(default=time.perf_counter, repr=False, compare=False)
+
+    def start_attempt(self, attempt_number: int, source: str) -> _YtdlpAttemptTiming:
+        attempt = _YtdlpAttemptTiming(
+            attempt_number=max(1, int(attempt_number)),
+            source=source if source in {TRANSFER_SOURCE_YTDLP, TRANSFER_SOURCE_ARIA2} else TRANSFER_SOURCE_YTDLP,
+            started_at=float(self.clock()),
+            clock=self.clock,
+        )
+        self.attempts.append(attempt)
+        return attempt
+
+    def add_retry_wait(self, seconds: int | float) -> None:
+        self.retry_wait_seconds += max(0.0, float(seconds))
+
+    def add_validation(self, started_at: float) -> None:
+        self.validation_seconds += max(0.0, float(self.clock()) - float(started_at))
+
+    def add_promotion(self, started_at: float) -> None:
+        self.promotion_seconds += max(0.0, float(self.clock()) - float(started_at))
+
+    def finish_logical_download(self) -> None:
+        if self.logical_finished_at is None:
+            self.logical_finished_at = float(self.clock())
+
+    def stage_totals(self) -> tuple[float, float, float]:
+        prepare = transfer = merge = 0.0
+        for attempt in self.attempts:
+            current_prepare, current_transfer, current_merge = attempt.stage_seconds()
+            prepare += current_prepare
+            transfer += current_transfer
+            merge += current_merge
+        return prepare, transfer, merge
+
+    def format_summary(self, result: str) -> str:
+        self.finish_logical_download()
+        prepare, transfer, merge = self.stage_totals()
+        finished = self.logical_finished_at if self.logical_finished_at is not None else float(self.clock())
+        total = max(0.0, finished - self.logical_started_at)
+        engine = self.engine if self.engine in {TRANSFER_SOURCE_YTDLP, TRANSFER_SOURCE_ARIA2} else TRANSFER_SOURCE_YTDLP
+        normalized_result = result if result in {"success", "failed", "cancelled"} else "failed"
+        return (
+            f"[PERF] engine={engine} part=video attempts={len(self.attempts)} "
+            f"prepare={prepare:.2f}s transfer={transfer:.2f}s merge={merge:.2f}s "
+            f"validate={self.validation_seconds:.2f}s promote={self.promotion_seconds:.2f}s "
+            f"retry_wait={self.retry_wait_seconds:.2f}s total={total:.2f}s result={normalized_result}"
+        )
 
 
 @dataclass
@@ -198,6 +315,8 @@ class _FfmpegProgressState:
 
 
 _PROGRESS_CONTEXT = threading.local()
+_VIDEO_DOWNLOAD_TIMING_CONTEXT = threading.local()
+_YTDLP_ATTEMPT_TIMING_CONTEXT = threading.local()
 
 
 class DownloadController:
@@ -341,7 +460,11 @@ class YtdlpExecutionError(DownloadError):
     ):
         super().__init__(message)
         sanitized_output_lines = _sanitize_ytdlp_output_lines(output_lines)[-YTDLP_OUTPUT_TAIL_LIMIT:]
-        sanitized_fatal_lines = _sanitize_ytdlp_output_lines(fatal_lines or [])
+        sanitized_fatal_lines = [
+            line
+            for line in _sanitize_ytdlp_output_lines(fatal_lines or [])
+            if not _is_aria2_progress_line(line)
+        ]
         self.exit_code = int(exit_code)
         self.output_lines = sanitized_output_lines
         self.fatal_lines = tuple((sanitized_fatal_lines or _extract_ytdlp_fatal_lines(sanitized_output_lines))[-YTDLP_FATAL_LINE_LIMIT:])
@@ -485,6 +608,8 @@ def _emit_progress(
     speed: str | None = None,
     eta: str | None = None,
     fragment: str | None = None,
+    source: str | None = None,
+    generation: int | None = None,
 ) -> None:
     _emit_progress_event(
         progress_callback,
@@ -499,6 +624,8 @@ def _emit_progress(
             speed=speed,
             eta=eta,
             fragment=fragment,
+            source=source,
+            generation=generation,
         ),
     )
 
@@ -526,16 +653,66 @@ def _current_progress_context() -> _ProgressContext | None:
     return getattr(_PROGRESS_CONTEXT, "current", None)
 
 
-def _emit_current_progress(phase: str | None = None, message: str = "", **kwargs) -> None:
+@contextmanager
+def _video_download_timing_scope(timing: _VideoDownloadTiming):
+    previous = getattr(_VIDEO_DOWNLOAD_TIMING_CONTEXT, "current", None)
+    _VIDEO_DOWNLOAD_TIMING_CONTEXT.current = timing
+    try:
+        yield timing
+    finally:
+        _VIDEO_DOWNLOAD_TIMING_CONTEXT.current = previous
+
+
+def _current_video_download_timing() -> _VideoDownloadTiming | None:
+    return getattr(_VIDEO_DOWNLOAD_TIMING_CONTEXT, "current", None)
+
+
+@contextmanager
+def _ytdlp_attempt_timing_scope(timing: _YtdlpAttemptTiming | None):
+    previous = getattr(_YTDLP_ATTEMPT_TIMING_CONTEXT, "current", None)
+    _YTDLP_ATTEMPT_TIMING_CONTEXT.current = timing
+    try:
+        yield timing
+    finally:
+        _YTDLP_ATTEMPT_TIMING_CONTEXT.current = previous
+
+
+def _current_ytdlp_attempt_timing() -> _YtdlpAttemptTiming | None:
+    return getattr(_YTDLP_ATTEMPT_TIMING_CONTEXT, "current", None)
+
+
+def _transfer_source_for_command(command: list[str] | tuple[str, ...]) -> str:
+    return TRANSFER_SOURCE_ARIA2 if _command_uses_aria2(command) else TRANSFER_SOURCE_YTDLP
+
+
+def _start_progress_attempt(source: str) -> int | None:
     context = _current_progress_context()
     if context is None:
+        return None
+    context.generation = int(getattr(context, "generation", 0)) + 1
+    context.transfer_started = False
+    context.last_emit = 0.0
+    context.last_aria2_percent = None
+    context.last_aria2_speed = None
+    context.last_aria2_emit = None
+    _emit_current_progress(
+        message=STAGE_PREPARING,
+        source=source,
+        generation=context.generation,
+    )
+    return context.generation
+
+
+def _emit_current_progress(phase: str | None = None, message: str = "", **kwargs) -> None:
+    context = _current_progress_context()
+    if context is None or getattr(context, "callback", None) is None:
         return
     _emit_progress(
         context.callback,
-        phase or context.phase,
-        context.video,
-        context.video_index,
-        context.video_total,
+        phase or getattr(context, "phase", "Status"),
+        getattr(context, "video", None),
+        getattr(context, "video_index", None),
+        getattr(context, "video_total", None),
         message=message,
         **kwargs,
     )
@@ -1210,7 +1387,7 @@ def download_items(
                                 "[INFO] Fast mode: aria2c handles media transfer; format selection, "
                                 "cookies, retries, merge, validation and promotion match Stable."
                             )
-                        _emit_progress(progress_callback, "Video", video, index, video_total, message="Downloading...")
+                        _emit_progress(progress_callback, "Video", video, index, video_total, message=STAGE_PREPARING)
                         previous_progress = _set_progress_context(
                             progress_callback, video, index, video_total, "Video"
                         )
@@ -1253,7 +1430,7 @@ def download_items(
                                         "cookies, retries, merge, validation and promotion match Stable."
                                     )
                                 _emit_progress(
-                                    progress_callback, "Video", video, index, video_total, message="Downloading..."
+                                    progress_callback, "Video", video, index, video_total, message=STAGE_PREPARING
                                 )
                                 previous_progress = _set_progress_context(
                                     progress_callback, video, index, video_total, "Video"
@@ -1617,19 +1794,57 @@ def _download_video(
         options,
         aria2_validation=aria2_validation,
     )
-    _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
-    staged_mp4_path = _select_staged_file(temp_dir, "*.mp4", ".mp4")
-    _emit_current_progress("Validating MP4")
-    _validate_premiere_safe_mp4_for_download(staged_mp4_path, log, True, cancel_controller)
-    _atomic_promote_with_retry(
-        staged_mp4_path,
-        final_path,
-        log,
-        replace_existing=True,
-        cancel_controller=cancel_controller,
+    timing = _VideoDownloadTiming(
+        engine=_transfer_source_for_command(command),
+        logical_started_at=time.perf_counter(),
     )
-    if not _final_file_ready(final_path):
-        raise DownloadError("video download failed")
+    result = "failed"
+    try:
+        with _video_download_timing_scope(timing):
+            _emit_current_progress(message=STAGE_PREPARING, source=timing.engine)
+            _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
+            staged_mp4_path = _select_staged_file(temp_dir, "*.mp4", ".mp4")
+
+            context = _current_progress_context()
+            _emit_current_progress(
+                "Validating MP4",
+                message=STAGE_VALIDATING,
+                generation=getattr(context, "generation", None) if context is not None else None,
+            )
+            validation_started = time.perf_counter()
+            try:
+                _validate_premiere_safe_mp4_for_download(staged_mp4_path, log, True, cancel_controller)
+            finally:
+                timing.add_validation(validation_started)
+
+            context = _current_progress_context()
+            _emit_current_progress(
+                "Video",
+                message=STAGE_PROMOTING,
+                generation=getattr(context, "generation", None) if context is not None else None,
+            )
+            promotion_started = time.perf_counter()
+            try:
+                _atomic_promote_with_retry(
+                    staged_mp4_path,
+                    final_path,
+                    log,
+                    replace_existing=True,
+                    cancel_controller=cancel_controller,
+                )
+            finally:
+                timing.add_promotion(promotion_started)
+            if not _final_file_ready(final_path):
+                raise DownloadError("video download failed")
+            result = "success"
+    except DownloadCancelled:
+        result = "cancelled"
+        raise
+    finally:
+        try:
+            log(timing.format_summary(result))
+        except Exception:
+            pass
 
 
 def _build_stable_video_ytdlp_command(
@@ -2850,6 +3065,22 @@ def _prepared_cookie_attempt(
     raise DownloadError("Cookie file changed while preparing isolated copy. Try again after export finishes.")
 
 
+def _wait_for_ytdlp_retry(
+    seconds: int | float,
+    cancel_controller: DownloadController | None,
+) -> None:
+    timing = _current_video_download_timing()
+    if timing is not None:
+        timing.add_retry_wait(seconds)
+    if float(seconds) > 0:
+        context = _current_progress_context()
+        _emit_current_progress(
+            message=STAGE_RETRY_WAIT,
+            generation=getattr(context, "generation", None) if context is not None else None,
+        )
+    _sleep_with_cancel(seconds, cancel_controller)
+
+
 def _run_ytdlp_with_retries(
     command: list[str],
     options: DownloadOptions,
@@ -2966,7 +3197,7 @@ def _run_ytdlp_with_retries(
                     f"{remaining_delay} seconds before the media transfer ({delay_kind}; "
                     f"metadata age target: {settle_delay} seconds)."
                 )
-                _sleep_with_cancel(remaining_delay, cancel_controller)
+                _wait_for_ytdlp_retry(remaining_delay, cancel_controller)
             elif settle_delay:
                 log(
                     "[COOKIE LOOKAHEAD] Metadata already reached the learned age; "
@@ -2989,7 +3220,25 @@ def _run_ytdlp_with_retries(
                 attempt_number += 1
                 attempt_part = _current_ytdlp_part()
                 log(_ytdlp_start_log_line(prepared_attempt.command, options, attempt_number, attempt_part))
-                stderr = _run_ytdlp(prepared_attempt.command, cancel_controller)
+                video_timing = _current_video_download_timing()
+                attempt_timing = (
+                    video_timing.start_attempt(
+                        attempt_number,
+                        _transfer_source_for_command(prepared_attempt.command),
+                    )
+                    if video_timing is not None
+                    else None
+                )
+                with _ytdlp_attempt_timing_scope(attempt_timing):
+                    try:
+                        stderr = _run_ytdlp(prepared_attempt.command, cancel_controller)
+                    except BaseException:
+                        if attempt_timing is not None:
+                            attempt_timing.finish(False)
+                        raise
+                    else:
+                        if attempt_timing is not None:
+                            attempt_timing.finish(True)
             if (
                 SHOW_TECHNICAL_WARNINGS
                 and stderr
@@ -3117,7 +3366,7 @@ def _run_ytdlp_with_retries(
                             f"Retrying in {delay} seconds "
                             f"(metadata age target: {retry_target} seconds)."
                         )
-                    _sleep_with_cancel(delay, cancel_controller)
+                    _wait_for_ytdlp_retry(delay, cancel_controller)
                     continue
 
             if (
@@ -3139,7 +3388,7 @@ def _run_ytdlp_with_retries(
                         f"[WARNING] HTTP 403 during {exc.part}/{exc.stage}. "
                         f"Retrying in {delay} seconds (retry {http_403_retries}/2)."
                     )
-                _sleep_with_cancel(delay, cancel_controller)
+                _wait_for_ytdlp_retry(delay, cancel_controller)
                 continue
 
             if (
@@ -3983,6 +4232,10 @@ def _is_ytdlp_postprocess_line(lower_line: str) -> bool:
 
 def _run_ytdlp(command: list[str], cancel_controller: DownloadController | None = None) -> str:
     creationflags = _subprocess_creationflags()
+    transfer_source = _transfer_source_for_command(command)
+    uses_aria2 = transfer_source == TRANSFER_SOURCE_ARIA2
+    _start_progress_attempt(transfer_source)
+    attempt_timing = _current_ytdlp_attempt_timing()
     process = None
     output_tail: list[str] = []
     meaningful_lines: list[str] = []
@@ -4005,18 +4258,28 @@ def _run_ytdlp(command: list[str], cancel_controller: DownloadController | None 
             _terminate_process_tree(process)
             raise DownloadCancelled("download cancelled/interrupted")
         if process.stdout is not None:
-            for line in process.stdout:
+            for raw_line in process.stdout:
                 if _cancel_requested(cancel_controller):
                     _terminate_process_tree(process)
                     raise DownloadCancelled("download cancelled/interrupted")
-                line = line.rstrip("\r\n")
+                line = raw_line.rstrip("\r\n")
                 sanitized = _sanitize_ytdlp_output_line(line)
                 if sanitized:
                     _append_limited(output_tail, sanitized, YTDLP_OUTPUT_TAIL_LIMIT)
                 if _is_meaningful_ytdlp_line(sanitized):
                     _append_limited(meaningful_lines, sanitized, 50)
                 stage = _ytdlp_stage_after_line(stage, sanitized)
-                _emit_ytdlp_progress_from_line(sanitized)
+                aria2_progress = parse_aria2_progress(raw_line) if uses_aria2 else None
+                if aria2_progress is not None:
+                    if attempt_timing is not None:
+                        attempt_timing.mark_first_transfer()
+                    _emit_aria2_progress(aria2_progress)
+                else:
+                    transfer_seen = _emit_ytdlp_progress_from_line(sanitized, transfer_source)
+                    if transfer_seen and attempt_timing is not None:
+                        attempt_timing.mark_first_transfer()
+                if sanitized.lower().startswith("[merger]") and attempt_timing is not None:
+                    attempt_timing.mark_merge_started()
                 if _cancel_requested(cancel_controller):
                     _terminate_process_tree(process)
                     raise DownloadCancelled("download cancelled/interrupted")
@@ -4105,7 +4368,7 @@ def _extract_ytdlp_fatal_lines(output_lines: list[str] | tuple[str, ...]) -> lis
     lines = [
         line
         for line in _sanitize_ytdlp_output_lines(output_lines)[-YTDLP_OUTPUT_TAIL_LIMIT:]
-        if _is_meaningful_ytdlp_line(line)
+        if _is_meaningful_ytdlp_line(line) and not _is_aria2_progress_line(line)
     ]
     if not lines:
         return []
@@ -4129,27 +4392,80 @@ def _is_ytdlp_fatal_marker_line(line: str) -> bool:
     )
 
 
-def _emit_ytdlp_progress_from_line(line: str) -> None:
+def _emit_aria2_progress(progress: ParsedTransferProgress) -> None:
     context = _current_progress_context()
     if context is None:
         return
+    now = time.monotonic()
+    elapsed = now - context.last_aria2_emit if context.last_aria2_emit is not None else 0.0
+    percent = progress.percent
+    percent_changed = (
+        context.last_aria2_percent is None
+        or percent is None
+        or abs(percent - context.last_aria2_percent) + 1e-9 >= 0.1
+    )
+    speed_changed = progress.speed_text != context.last_aria2_speed
+    should_emit = bool(
+        context.last_aria2_emit is None
+        or percent_changed
+        or (speed_changed and elapsed >= 0.25)
+        or elapsed >= 0.5
+        or (percent is not None and percent >= 100.0)
+    )
+    context.transfer_started = True
+    if not should_emit:
+        return
+
+    context.last_aria2_percent = percent
+    context.last_aria2_speed = progress.speed_text
+    context.last_aria2_emit = now
+    context.last_emit = now
+    _emit_progress(
+        context.callback,
+        context.phase,
+        context.video,
+        context.video_index,
+        context.video_total,
+        percent=f"{percent:.1f}%" if percent is not None else None,
+        speed=progress.speed_text,
+        source=TRANSFER_SOURCE_ARIA2,
+        generation=context.generation,
+    )
+
+
+def _is_complete_progress_percent(percent: object) -> bool:
+    try:
+        return float(str(percent or "").strip().removesuffix("%")) >= 100.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _emit_ytdlp_progress_from_line(line: str, source: str = TRANSFER_SOURCE_YTDLP) -> bool:
+    context = _current_progress_context()
     parsed = parse_ytdlp_progress_line(line)
     if not parsed:
-        return
+        return False
+    is_transfer = bool(parsed.get("percent") or parsed.get("fragment"))
+    if context is None:
+        return is_transfer
 
     now = time.monotonic()
     message = parsed.get("message") or ""
     percent = parsed.get("percent")
-    force = percent == "100%" or message in {
+    if source == TRANSFER_SOURCE_ARIA2 and message == STAGE_PREPARING and context.transfer_started:
+        return is_transfer
+    force = _is_complete_progress_percent(percent) or message in {
         "Already downloaded",
         "Extracting audio",
-        "Merging formats",
+        STAGE_MERGING,
         "Post-processing",
-        "Preparing download",
+        STAGE_PREPARING,
     }
     if not force and now - context.last_emit < 0.3:
-        return
+        return is_transfer
     context.last_emit = now
+    if is_transfer:
+        context.transfer_started = True
     _emit_progress(
         context.callback,
         context.phase,
@@ -4161,7 +4477,10 @@ def _emit_ytdlp_progress_from_line(line: str) -> None:
         speed=parsed.get("speed"),
         eta=parsed.get("eta"),
         fragment=parsed.get("fragment"),
+        source=source,
+        generation=context.generation,
     )
+    return is_transfer
 
 
 def _coerce_ytdlp_failure_kind(kind: YtdlpFailureKind | str | None) -> YtdlpFailureKind | None:
@@ -5017,6 +5336,8 @@ def _is_meaningful_ytdlp_line(line: str) -> bool:
     if not line:
         return False
     if line.strip().upper() == "ERROR:":
+        return False
+    if _is_aria2_progress_line(line):
         return False
     lower = line.lower()
     if lower.startswith("[download]") and "%" in lower and "eta" in lower:
