@@ -735,6 +735,7 @@ def _download_window(cookies_path: str):
     window.shutdown_started_at = None
     window.events = SimpleNamespace(put=lambda _event: None)
     window.speed_limit_var = _Var("")
+    window.file_start_number_var = _Var("1")
     window.save_folder_var = _Var(".")
     window.cookies_enabled_var = _Var(True)
     window.cookies_path_var = _Var(cookies_path)
@@ -749,11 +750,12 @@ def _download_window(cookies_path: str):
     window._selected_visible_videos = lambda: [video]
     window._videos_for_snapshot_ids = lambda _ids: [video]
     window._current_cookie_source = lambda: COOKIE_SOURCE_FILE
+    window._current_download_engine = lambda: downloader.DEFAULT_DOWNLOAD_ENGINE
     window._append_log = lambda message: window.logs.append(message)
     window._friendly_general_message = lambda message: message
     window._show_error_dialog = lambda message: window.dialogs.append(message)
     window._clear_progress_queue = lambda: None
-    window._reset_progress_sticky = lambda: None
+    window._reset_progress_sticky = lambda **_kwargs: None
     window._set_download_controls_locked = lambda _locked: None
     return window
 
