@@ -1,4 +1,3 @@
-import os
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -11,22 +10,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core import downloader
-from core.download_modes import MODE_VIDEO_THUMB, PART_AUDIO, PART_VIDEO
+from core.download_modes import MODE_VIDEO_THUMB, PART_VIDEO
 from core.downloader import (
-    ARIA2_FAST_AUDIO_FORMAT,
     ARIA2_FAST_DOWNLOADER_ARGS,
-    ARIA2_FAST_EXTRACTOR_ARGS,
-    ARIA2_FAST_TRANSCODE_AUDIO_CODEC,
-    ARIA2_FAST_TRANSCODE_CRF,
-    ARIA2_FAST_TRANSCODE_PRESET,
-    ARIA2_FAST_TRANSCODE_VIDEO_CODEC,
-    ARIA2_FAST_VIDEO_FORMAT,
     DOWNLOAD_ENGINE_ARIA2_FAST,
     DOWNLOAD_ENGINE_STABLE,
-    DownloadCancelled,
     DownloadError,
     DownloadOptions,
-    FFmpegExecutionError,
     YTDLP_STAGE_DOWNLOAD,
     YtdlpExecutionError,
     YtdlpFailureKind,
@@ -35,1495 +25,645 @@ from core.downloader import (
 
 CHANNEL_ID = "channel"
 CHANNEL_NAME = "Channel"
-BAT_CONTINUATION_WARNING = (
-    "[WARNING] Fast yt-dlp reported an error, but a staged MP4 exists. "
-    "The source will be queued for BAT-compatible conversion."
-)
+VIDEO_ID = "video-id"
 
 
 def main() -> int:
-    _test_exact_fast_constants()
-    _test_exact_fast_video_command()
-    _test_fast_base_default_is_strict()
-    _test_fast_base_explicit_ignore_errors()
-    _test_direct_fast_cookie_path()
-    _test_stable_commands_exclude_ignore_errors()
-    _test_fast_bypasses_stable_helpers()
-    _test_stable_still_uses_retry_pipeline()
-    _test_exact_fast_ffmpeg_command()
-    _test_converted_output_is_promoted()
-    _test_fast_ytdlp_failure_with_usable_mp4_continues()
-    _test_fast_ytdlp_failure_without_mp4_reraises()
-    _test_fast_ytdlp_failure_with_zero_byte_mp4_reraises()
-    _test_fixed_mp4_is_not_selected_as_source()
-    _test_zero_byte_exact_mp4_is_not_selected()
-    _test_exact_merged_mp4_beats_newer_fragment()
-    _test_non_fragment_fallback_beats_newer_fragment()
-    _test_fragment_is_last_fallback()
-    _test_ytdlp_error_prefers_exact_merged_mp4_over_fragment()
-    _test_ffmpeg_failure_is_not_promoted_and_marks_failed()
-    _test_corrupt_fast_mp4_is_not_promoted()
-    _test_fast_cancellation_before_continuation()
-    _test_stable_command_unchanged()
-    _test_fast_audio_command()
-    _test_fast_audio_remains_strict()
-    _test_fast_has_no_automatic_fallback()
-    _test_fast_does_not_start_lookahead()
-    _test_stable_still_starts_eligible_lookahead()
-    _test_runtime_logs()
-    _test_fast_log_secret_safety()
-    _test_sanitized_fast_command_probe()
+    _test_stable_video_command_unchanged()
+    _test_default_explicit_stable_and_malformed_engine_are_stable()
+    _test_fast_video_command_matches_stable_except_downloader()
+    _test_fast_audio_command_matches_stable_except_downloader()
+    _test_fast_has_no_extractor_override()
+    _test_fast_has_no_direct_cookie_option()
+    _test_fast_has_no_ignore_errors()
+    _test_fast_uses_premiere_safe_selector()
+    _test_fast_uses_aria2_profile()
+    _test_authenticated_extract_strips_aria2()
+    _test_saved_media_transfer_retains_aria2()
+    _test_fast_uses_retry_pipeline()
+    _test_fast_uses_isolated_cookie_copy()
+    _test_fast_uses_lookahead()
+    _test_fast_has_no_full_transcode()
+    _test_strict_format_failure_uses_existing_flow()
+    _test_runtime_logs_describe_engine_only_difference()
+    _test_stable_runtime_does_not_require_aria2()
     print("aria2 download engine smoke passed")
     return 0
 
 
-def _test_exact_fast_constants() -> None:
-    _assert(ARIA2_FAST_EXTRACTOR_ARGS == "youtube:player_client=ios,web", "Fast extractor args changed")
+def _test_stable_video_command_unchanged() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        paths = _runtime_paths(root)
+        options = _options(root, DOWNLOAD_ENGINE_STABLE)
+        with _patched_runtime(paths):
+            command = downloader._build_stable_video_ytdlp_command(VIDEO_ID, root, options)
+
+        expected = [
+            str(paths.ytdlp),
+            "--no-playlist",
+            "--newline",
+            "--no-overwrites",
+            "--retries",
+            "30",
+            "--fragment-retries",
+            "30",
+            "--file-access-retries",
+            "10",
+            "--socket-timeout",
+            "60",
+            "--http-chunk-size",
+            "1M",
+            "--ffmpeg-location",
+            str(paths.ffmpeg.parent),
+            "-N",
+            "1",
+            "-f",
+            downloader.PREMIERE_SAFE_VIDEO_FORMAT,
+            "--merge-output-format",
+            "mp4",
+            "--no-write-info-json",
+            "--no-write-description",
+            "--no-write-thumbnail",
+            "-o",
+            str(root / f"{VIDEO_ID}.%(ext)s"),
+            f"https://www.youtube.com/watch?v={VIDEO_ID}",
+        ]
+        _assert(command == expected, f"Stable video command changed: {command}")
+
+
+def _test_default_explicit_stable_and_malformed_engine_are_stable() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        paths = _runtime_paths(root)
+        with _patched_runtime(paths):
+            default_options = _options(root, DOWNLOAD_ENGINE_STABLE)
+            explicit_options = _options(root, DOWNLOAD_ENGINE_STABLE)
+            malformed_options = _options(root, "malformed")
+            default_command = downloader._build_video_ytdlp_command(VIDEO_ID, root, default_options)
+            explicit_command = downloader._build_video_ytdlp_command(VIDEO_ID, root, explicit_options)
+            malformed_command = downloader._build_video_ytdlp_command(VIDEO_ID, root, malformed_options)
+
+        _assert(default_command == explicit_command, "Default engine did not match explicit stable")
+        _assert(malformed_command == explicit_command, "Malformed engine did not normalize to stable")
+        for command in (default_command, explicit_command, malformed_command):
+            _assert("-N" in command and _option_value(command, "-N") == "1", "Stable command missed -N 1")
+            _assert("--downloader" not in command, "Stable command unexpectedly used aria2")
+            _assert("--downloader-args" not in command, "Stable command unexpectedly used aria2 args")
+
+
+def _test_fast_video_command_matches_stable_except_downloader() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        paths = _runtime_paths(root)
+        aria2_validation = _aria2_validation(paths)
+        stable_options = _options(root, DOWNLOAD_ENGINE_STABLE)
+        fast_options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+        with _patched_runtime(paths):
+            stable_command = downloader._build_stable_video_ytdlp_command(VIDEO_ID, root, stable_options)
+            fast_command = downloader._build_fast_video_ytdlp_command(
+                VIDEO_ID,
+                root,
+                fast_options,
+                aria2_validation,
+            )
+
+        _assert(
+            _remove_aria2_options(fast_command) == stable_command,
+            "Fast video command differs from Stable beyond aria2 options",
+        )
+
+
+def _test_fast_audio_command_matches_stable_except_downloader() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        paths = _runtime_paths(root)
+        aria2_validation = _aria2_validation(paths)
+        stable_options = _options(root, DOWNLOAD_ENGINE_STABLE)
+        fast_options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+        with _patched_runtime(paths):
+            stable_command = downloader._build_stable_audio_ytdlp_command(VIDEO_ID, root, stable_options)
+            fast_command = downloader._build_fast_audio_ytdlp_command(
+                VIDEO_ID,
+                root,
+                fast_options,
+                aria2_validation,
+            )
+
+        _assert(
+            _remove_aria2_options(fast_command) == stable_command,
+            "Fast audio command differs from Stable beyond aria2 options",
+        )
+
+
+def _test_fast_has_no_extractor_override() -> None:
+    command = _fast_video_command()
+    _assert("--extractor-args" not in command, "Fast still overrides extractor args")
+    _assert("ios,web" not in _joined(command), "Fast still forces ios,web")
+
+
+def _test_fast_has_no_direct_cookie_option() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        cookie_path = root / "canonical-cookies.txt"
+        cookie_path.write_text("cookie-data", encoding="utf-8")
+        paths = _runtime_paths(root)
+        options = _options(
+            root,
+            DOWNLOAD_ENGINE_ARIA2_FAST,
+            cookies_enabled=True,
+            cookies_path=str(cookie_path),
+        )
+        with _patched_runtime(paths):
+            command = downloader._build_fast_video_ytdlp_command(
+                VIDEO_ID,
+                root,
+                options,
+                _aria2_validation(paths),
+            )
+
+    _assert("--cookies" not in command, "Fast base command directly contains cookies")
+    _assert(str(cookie_path) not in command, "Fast command directly contains canonical cookie path")
+
+
+def _test_fast_has_no_ignore_errors() -> None:
+    command = _fast_video_command()
+    _assert("--ignore-errors" not in command, "Fast still uses ignore-errors")
+    _assert("--no-warnings" not in command, "Fast still suppresses warnings")
+
+
+def _test_fast_uses_premiere_safe_selector() -> None:
+    command = _fast_video_command()
     _assert(
-        ARIA2_FAST_VIDEO_FORMAT == "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-        "Fast video format changed",
+        _option_value(command, "-f") == downloader.PREMIERE_SAFE_VIDEO_FORMAT,
+        "Fast did not use Stable Premiere-safe selector",
     )
-    _assert(ARIA2_FAST_AUDIO_FORMAT == "bestaudio/best", "Fast audio format changed")
-    _assert(ARIA2_FAST_DOWNLOADER_ARGS == "aria2c:-x 16 -s 16 -j 16 -k 1M", "Fast aria2 args changed")
-    _assert(ARIA2_FAST_TRANSCODE_VIDEO_CODEC == "libx264", "Fast video codec changed")
-    _assert(ARIA2_FAST_TRANSCODE_PRESET == "slow", "Fast preset changed")
-    _assert(ARIA2_FAST_TRANSCODE_CRF == "18", "Fast CRF changed")
-    _assert(ARIA2_FAST_TRANSCODE_AUDIO_CODEC == "aac", "Fast audio codec changed")
-
-
-def _test_exact_fast_video_command() -> None:
-    with TemporaryDirectory(prefix="fast_video_command_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        validation = _aria2_validation(paths)
-        with _patched_runtime(paths):
-            command = downloader._build_fast_video_ytdlp_command(
-                "fast-video",
-                root,
-                _options(root, DOWNLOAD_ENGINE_ARIA2_FAST),
-                validation,
-            )
-
-    _assert(command.count("--no-playlist") == 1, "Fast command missed exactly one --no-playlist")
-    _assert(command.count("--extractor-args") == 1, "Fast command did not contain exactly one --extractor-args")
-    _assert(_option_value(command, "--extractor-args") == ARIA2_FAST_EXTRACTOR_ARGS, "Fast extractor args mismatch")
-    _assert(command.count("--ffmpeg-location") == 1, "Fast command did not contain exactly one --ffmpeg-location")
-    _assert(_option_value(command, "--ffmpeg-location") == str(paths["ffmpeg.exe"].parent), "Fast ffmpeg location mismatch")
-    _assert(command.count("--downloader") == 1, "Fast command did not contain exactly one --downloader")
-    _assert(_option_value(command, "--downloader") == str(paths["aria2c.exe"]), "Fast downloader path mismatch")
-    _assert(command.count("--downloader-args") == 1, "Fast command did not contain exactly one --downloader-args")
-    _assert(_option_value(command, "--downloader-args") == ARIA2_FAST_DOWNLOADER_ARGS, "Fast downloader args mismatch")
-    _assert(command.count("--ignore-errors") == 1, "Fast command did not contain exactly one --ignore-errors")
-    _assert(command.count("--no-warnings") == 1, "Fast command did not contain exactly one --no-warnings")
-    _assert(command.count("-f") == 1, "Fast command did not contain exactly one -f")
-    _assert(_option_value(command, "-f") == ARIA2_FAST_VIDEO_FORMAT, "Fast format mismatch")
-    _assert(_option_value(command, "--merge-output-format") == "mp4", "Fast merge format mismatch")
-    _assert("-N" not in command, "Fast command contained Stable -N")
-    _assert(downloader.PREMIERE_SAFE_VIDEO_FORMAT not in command, "Fast command used Premiere-safe selector")
-    _assert("--http-chunk-size" not in command, "Fast command used Stable chunk setting")
-    _assert("--load-info-json" not in command, "Fast command used saved info-json")
-
-
-def _test_fast_base_default_is_strict() -> None:
-    with TemporaryDirectory(prefix="fast_base_default_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        validation = _aria2_validation(paths)
-        with _patched_runtime(paths):
-            command = downloader._base_fast_ytdlp_command(
-                _options(root, DOWNLOAD_ENGINE_ARIA2_FAST),
-                validation,
-            )
-
-    _assert("--ignore-errors" not in command, "Fast base default included --ignore-errors")
-    _assert(_option_value(command, "--extractor-args") == ARIA2_FAST_EXTRACTOR_ARGS, "Fast base missed player client")
-    _assert(_option_value(command, "--downloader-args") == ARIA2_FAST_DOWNLOADER_ARGS, "Fast base missed aria2 profile")
-
-
-def _test_fast_base_explicit_ignore_errors() -> None:
-    with TemporaryDirectory(prefix="fast_base_ignore_errors_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        validation = _aria2_validation(paths)
-        with _patched_runtime(paths):
-            command = downloader._base_fast_ytdlp_command(
-                _options(root, DOWNLOAD_ENGINE_ARIA2_FAST),
-                validation,
-                ignore_errors=True,
-            )
-
-    _assert(command.count("--ignore-errors") == 1, "Fast base explicit ignore_errors did not add exactly one flag")
-
-
-def _test_direct_fast_cookie_path() -> None:
-    with TemporaryDirectory(prefix="fast_direct_cookies_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        validation = _aria2_validation(paths)
-        file_cookie = root / "file-cookies.txt"
-        bridge_cookie = root / "bridge-cookies.txt"
-        file_cookie.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
-        bridge_cookie.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
-        with _patched_runtime(paths):
-            file_options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
-            file_options.cookies_enabled = True
-            file_options.cookies_path = str(file_cookie)
-            file_command = downloader._build_fast_video_ytdlp_command("file-cookie", root, file_options, validation)
-
-            bridge_options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
-            bridge_options.cookies_enabled = True
-            bridge_options.cookie_source = downloader.COOKIE_SOURCE_BRIDGE
-            bridge_options.bridge_cookie_path = str(bridge_cookie)
-            bridge_command = downloader._build_fast_video_ytdlp_command("bridge-cookie", root, bridge_options, validation)
-
-    _assert(file_command.count("--cookies") == 1, "File cookie command did not contain exactly one --cookies")
-    _assert(_option_value(file_command, "--cookies") == str(file_cookie), "File cookie path was not direct canonical path")
-    _assert(bridge_command.count("--cookies") == 1, "Bridge cookie command did not contain exactly one --cookies")
-    _assert(_option_value(bridge_command, "--cookies") == str(bridge_cookie), "Bridge cookie path was not direct canonical path")
-    _assert(not list(root.glob(".s9h-*")), "Fast command construction created a temporary cookie/staging path")
-
-
-def _test_stable_commands_exclude_ignore_errors() -> None:
-    with TemporaryDirectory(prefix="stable_no_ignore_errors_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        options = _options(root, DOWNLOAD_ENGINE_STABLE)
-        captured_thumbnail: list[list[str]] = []
-        old_run = downloader._run_ytdlp_with_retries
-        try:
-            def fake_thumbnail(command, *_args, **_kwargs):
-                captured_thumbnail.append(list(command))
-                _output_path(command, "jpg").write_bytes(b"\xff\xd8\xff")
-
-            downloader._run_ytdlp_with_retries = fake_thumbnail
-            with _patched_runtime(paths):
-                stable_video = downloader._build_stable_video_ytdlp_command("stable-video", root, options)
-                stable_audio = downloader._build_stable_audio_ytdlp_command("stable-audio", root, options)
-                metadata_extract = downloader._build_authenticated_infojson_extract_command(
-                    stable_video,
-                    str(root / "authenticated.%(ext)s"),
-                )
-                metadata_media = downloader._build_infojson_media_download_command(
-                    stable_video,
-                    root / "authenticated.info.json",
-                )
-                downloader._download_thumbnail(
-                    SimpleNamespace(video_id="thumb-video", thumbnail_url=""),
-                    "thumb-video",
-                    root,
-                    root / "thumb.jpg",
-                    options,
-                    lambda _message: None,
-                )
-        finally:
-            downloader._run_ytdlp_with_retries = old_run
-
-    _assert("--ignore-errors" not in stable_video, "Stable video command contained --ignore-errors")
-    _assert("--ignore-errors" not in stable_audio, "Stable audio command contained --ignore-errors")
-    _assert("--ignore-errors" not in metadata_extract, "Metadata extract command contained --ignore-errors")
-    _assert("--ignore-errors" not in metadata_media, "Info-json media command contained --ignore-errors")
-    _assert(captured_thumbnail, "Thumbnail command was not captured")
-    _assert("--ignore-errors" not in captured_thumbnail[0], "Thumbnail command contained --ignore-errors")
-    _assert(not _contains_aria2(captured_thumbnail[0]), "Thumbnail command contained aria2")
-    _assert("--extractor-args" not in captured_thumbnail[0], "Thumbnail command contained Fast extractor args")
-
-
-def _test_fast_bypasses_stable_helpers() -> None:
-    with TemporaryDirectory(prefix="fast_bypass_helpers_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        final_path = root / "final.mp4"
-        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
-        validation = _aria2_validation(paths)
-        promoted: list[Path] = []
-        final_created = False
-
-        old_prepared = downloader._prepared_cookie_attempt
-        old_prepare_info = downloader._prepare_authenticated_infojson_download_command
-        old_extract_info = downloader._extract_authenticated_infojson_path
-        old_build_info = downloader._build_infojson_media_download_command
-        old_lookahead = downloader._start_cookie_media_lookahead
-        old_retries = downloader._run_ytdlp_with_retries
-        old_run_ytdlp = downloader._run_ytdlp
-        old_ffmpeg = downloader._run_ffmpeg_command
-        old_validate = downloader._validate_premiere_safe_mp4_for_download
-        old_promote = downloader._atomic_promote_with_retry
-        try:
-            def forbidden(*_args, **_kwargs):
-                raise AssertionError("Fast path called a Stable-only helper")
-
-            def fake_ytdlp(command, _controller=None):
-                _output_path(command, "mp4").write_bytes(b"fast source")
-                return ""
-
-            def fake_ffmpeg(command, *, operation, cancel_controller=None, progress_duration_seconds=None):
-                _assert(operation == "fast_video_transcode", "Fast conversion used wrong operation")
-                Path(command[-1]).write_bytes(b"fixed")
-                return ""
-
-            def fake_promote(source, target, *_args, **_kwargs):
-                promoted.append(Path(source))
-                Path(target).write_bytes(Path(source).read_bytes())
-
-            downloader._prepared_cookie_attempt = forbidden
-            downloader._prepare_authenticated_infojson_download_command = forbidden
-            downloader._extract_authenticated_infojson_path = forbidden
-            downloader._build_infojson_media_download_command = forbidden
-            downloader._start_cookie_media_lookahead = forbidden
-            downloader._run_ytdlp_with_retries = forbidden
-            downloader._run_ytdlp = fake_ytdlp
-            downloader._run_ffmpeg_command = fake_ffmpeg
-            downloader._validate_premiere_safe_mp4_for_download = lambda *_args, **_kwargs: None
-            downloader._atomic_promote_with_retry = fake_promote
-            with _patched_runtime(paths):
-                downloader._download_video_fast_bat_compatible(
-                    "fast-bypass",
-                    root,
-                    final_path,
-                    options,
-                    lambda _message: None,
-                    None,
-                    validation,
-                )
-                final_created = final_path.exists()
-        finally:
-            downloader._prepared_cookie_attempt = old_prepared
-            downloader._prepare_authenticated_infojson_download_command = old_prepare_info
-            downloader._extract_authenticated_infojson_path = old_extract_info
-            downloader._build_infojson_media_download_command = old_build_info
-            downloader._start_cookie_media_lookahead = old_lookahead
-            downloader._run_ytdlp_with_retries = old_retries
-            downloader._run_ytdlp = old_run_ytdlp
-            downloader._run_ffmpeg_command = old_ffmpeg
-            downloader._validate_premiere_safe_mp4_for_download = old_validate
-            downloader._atomic_promote_with_retry = old_promote
-
-    _assert(final_created, "Fast bypass test did not create final output")
-    _assert(promoted and promoted[0].name.endswith("_FIXED.mp4"), "Fast bypass test did not promote converted output")
-
-
-def _test_stable_still_uses_retry_pipeline() -> None:
-    with TemporaryDirectory(prefix="stable_retry_pipeline_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        final_path = root / "final.mp4"
-        options = _options(root, DOWNLOAD_ENGINE_STABLE)
-        calls: list[list[str]] = []
-
-        old_retries = downloader._run_ytdlp_with_retries
-        old_validate = downloader._validate_premiere_safe_mp4_for_download
-        old_promote = downloader._atomic_promote_with_retry
-        try:
-            def fake_retries(command, *_args, **_kwargs):
-                calls.append(list(command))
-                _output_path(command, "mp4").write_bytes(b"stable source")
-
-            def fake_promote(source, target, *_args, **_kwargs):
-                Path(target).write_bytes(Path(source).read_bytes())
-
-            downloader._run_ytdlp_with_retries = fake_retries
-            downloader._validate_premiere_safe_mp4_for_download = lambda *_args, **_kwargs: None
-            downloader._atomic_promote_with_retry = fake_promote
-            with _patched_runtime(paths):
-                downloader._download_video_stable(
-                    "stable-video",
-                    root,
-                    final_path,
-                    options,
-                    lambda _message: None,
-                    None,
-                    downloader._YtdlpAttemptState(),
-                )
-        finally:
-            downloader._run_ytdlp_with_retries = old_retries
-            downloader._validate_premiere_safe_mp4_for_download = old_validate
-            downloader._atomic_promote_with_retry = old_promote
-
-    _assert(calls, "Stable video did not use _run_ytdlp_with_retries")
-    _assert_stable_video_command(calls[0])
-
-
-def _test_exact_fast_ffmpeg_command() -> None:
-    with TemporaryDirectory(prefix="fast_ffmpeg_command_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        source = root / "source.mp4"
-        source.write_bytes(b"mp4")
-        captured: list[list[str]] = []
-        captured_durations: list[float | None] = []
-        old_run = downloader._run_ffmpeg_command
-        old_probe = downloader._probe_media_duration_seconds
-        try:
-            def fake_run(command, *, operation, cancel_controller=None, progress_duration_seconds=None):
-                captured.append(list(command))
-                captured_durations.append(progress_duration_seconds)
-                Path(command[-1]).write_bytes(b"fixed")
-                return ""
-
-            downloader._run_ffmpeg_command = fake_run
-            downloader._probe_media_duration_seconds = lambda *_args, **_kwargs: 120.0
-            with _patched_runtime(paths):
-                fixed_path = downloader._transcode_fast_video_like_bat(source, root, lambda _message: None)
-        finally:
-            downloader._run_ffmpeg_command = old_run
-            downloader._probe_media_duration_seconds = old_probe
-
-    expected = [
-        str(paths["ffmpeg.exe"]),
-        "-y",
-        "-i",
-        str(source),
-        "-progress",
-        "pipe:1",
-        "-nostats",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "slow",
-        "-crf",
-        "18",
-        "-c:a",
-        "aac",
-        "-movflags",
-        "+faststart",
-        str(fixed_path),
-    ]
-    _assert(captured == [expected], f"Fast FFmpeg command mismatch: {captured}")
-    _assert(captured_durations == [120.0], f"Fast FFmpeg duration was not passed through: {captured_durations}")
-    command = captured[0]
-    _assert(command.count("-progress") == 1, "Fast FFmpeg command did not contain exactly one -progress")
-    _assert(command.count("pipe:1") == 1, "Fast FFmpeg command did not contain exactly one pipe:1")
-    _assert(command.count("-nostats") == 1, "Fast FFmpeg command did not contain exactly one -nostats")
-    _assert(command.index("-progress") + 1 == command.index("pipe:1"), "-progress did not immediately precede pipe:1")
-    _assert(command[-1] == str(fixed_path), "Fast FFmpeg final argument was not the fixed MP4 path")
-    _assert(_option_value(command, "-c:v") == ARIA2_FAST_TRANSCODE_VIDEO_CODEC, "Fast FFmpeg video codec changed")
-    _assert(_option_value(command, "-preset") == ARIA2_FAST_TRANSCODE_PRESET, "Fast FFmpeg preset changed")
-    _assert(_option_value(command, "-crf") == ARIA2_FAST_TRANSCODE_CRF, "Fast FFmpeg CRF changed")
-    _assert(_option_value(command, "-c:a") == ARIA2_FAST_TRANSCODE_AUDIO_CODEC, "Fast FFmpeg audio codec changed")
-    _assert(_option_value(command, "-movflags") == "+faststart", "Fast FFmpeg faststart flag changed")
-
-    with TemporaryDirectory(prefix="no_ffmpeg_progress_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        mp3_source = root / "source.mp4"
-        mp3_source.write_bytes(b"mp4")
-        mp3_final = root / "final.mp3"
-        mp3_commands: list[list[str]] = []
-        old_validate = downloader._validate_premiere_safe_mp4_for_download
-        old_audio = downloader._run_ffmpeg_for_audio
-        try:
-            def fake_audio(command, cancel_controller=None):
-                mp3_commands.append(list(command))
-                Path(command[-1]).write_bytes(b"mp3")
-                return ""
-
-            downloader._validate_premiere_safe_mp4_for_download = lambda *_args, **_kwargs: None
-            downloader._run_ffmpeg_for_audio = fake_audio
-            with _patched_runtime(paths):
-                stable_command = downloader._build_stable_video_ytdlp_command(
-                    "stable-video",
-                    root,
-                    _options(root, DOWNLOAD_ENGINE_STABLE),
-                )
-                downloader._extract_mp3_from_video(mp3_source, root, mp3_final, lambda _message: None)
-        finally:
-            downloader._validate_premiere_safe_mp4_for_download = old_validate
-            downloader._run_ffmpeg_for_audio = old_audio
-
-    _assert("-progress" not in stable_command, "Stable video command received FFmpeg progress protocol")
-    _assert("pipe:1" not in stable_command, "Stable video command received FFmpeg progress pipe")
-    _assert("-nostats" not in stable_command, "Stable video command received FFmpeg -nostats")
-    _assert(mp3_commands, "MP3 extraction command was not captured")
-    _assert("-progress" not in mp3_commands[0], "MP3 extraction received FFmpeg progress protocol")
-    _assert("pipe:1" not in mp3_commands[0], "MP3 extraction received FFmpeg progress pipe")
-    _assert("-nostats" not in mp3_commands[0], "MP3 extraction received FFmpeg -nostats")
-
-
-def _test_converted_output_is_promoted() -> None:
-    with TemporaryDirectory(prefix="fast_promote_fixed_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        final_path = root / "final.mp4"
-        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
-        validation = _aria2_validation(paths)
-        promoted: list[Path] = []
-        source_paths: list[Path] = []
-        source_removed = False
-        final_was_fixed = False
-
-        old_run_fast = downloader._run_fast_ytdlp_command
-        old_ffmpeg = downloader._run_ffmpeg_command
-        old_validate = downloader._validate_premiere_safe_mp4_for_download
-        old_promote = downloader._atomic_promote_with_retry
-        try:
-            def fake_fast(command, *_args, **_kwargs):
-                source = _output_path(command, "mp4")
-                source.write_bytes(b"source")
-                source_paths.append(source)
-
-            def fake_ffmpeg(command, *, operation, cancel_controller=None, progress_duration_seconds=None):
-                Path(command[-1]).write_bytes(b"fixed")
-                return ""
-
-            def fake_promote(source, target, *_args, **_kwargs):
-                promoted.append(Path(source))
-                Path(target).write_bytes(Path(source).read_bytes())
-
-            downloader._run_fast_ytdlp_command = fake_fast
-            downloader._run_ffmpeg_command = fake_ffmpeg
-            downloader._validate_premiere_safe_mp4_for_download = lambda *_args, **_kwargs: None
-            downloader._atomic_promote_with_retry = fake_promote
-            with _patched_runtime(paths):
-                downloader._download_video_fast_bat_compatible(
-                    "fast-promote",
-                    root,
-                    final_path,
-                    options,
-                    lambda _message: None,
-                    None,
-                    validation,
-                )
-                source_removed = bool(source_paths and not source_paths[0].exists())
-                final_was_fixed = final_path.exists() and final_path.read_bytes() == b"fixed"
-        finally:
-            downloader._run_fast_ytdlp_command = old_run_fast
-            downloader._run_ffmpeg_command = old_ffmpeg
-            downloader._validate_premiere_safe_mp4_for_download = old_validate
-            downloader._atomic_promote_with_retry = old_promote
-
-    _assert(promoted and promoted[0].name.endswith("_FIXED.mp4"), "Fast did not promote converted MP4")
-    _assert(source_removed, "Fast original staging MP4 was not removed after promotion")
-    _assert(final_was_fixed, "Fast final output was not converted data")
-
-
-def _test_fast_ytdlp_failure_with_usable_mp4_continues() -> None:
-    with TemporaryDirectory(prefix="fast_error_with_mp4_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        final_path = root / "final.mp4"
-        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
-        validation = _aria2_validation(paths)
-        logs: list[str] = []
-        promoted: list[Path] = []
-        ffmpeg_calls: list[list[str]] = []
-        source_paths: list[Path] = []
-        final_ok = False
-
-        old_run_fast = downloader._run_fast_ytdlp_command
-        old_ffmpeg = downloader._run_ffmpeg_command
-        old_validate = downloader._validate_premiere_safe_mp4_for_download
-        old_promote = downloader._atomic_promote_with_retry
-        try:
-            def fail_after_mp4(command, *_args, **_kwargs):
-                source = _output_path(command, "mp4")
-                source.write_bytes(b"source")
-                source_paths.append(source)
-                raise _failure(command, YtdlpFailureKind.NETWORK, "aria2c exited with code 22")
-
-            def fake_ffmpeg(command, *, operation, cancel_controller=None, progress_duration_seconds=None):
-                _assert(operation == "fast_video_transcode", "Fast conversion used wrong operation after yt-dlp error")
-                ffmpeg_calls.append(list(command))
-                Path(command[-1]).write_bytes(b"fixed")
-                return ""
-
-            def fake_promote(source, target, *_args, **_kwargs):
-                promoted.append(Path(source))
-                Path(target).write_bytes(Path(source).read_bytes())
-
-            downloader._run_fast_ytdlp_command = fail_after_mp4
-            downloader._run_ffmpeg_command = fake_ffmpeg
-            downloader._validate_premiere_safe_mp4_for_download = lambda *_args, **_kwargs: None
-            downloader._atomic_promote_with_retry = fake_promote
-            with _patched_runtime(paths):
-                downloader._download_video_fast_bat_compatible(
-                    "fast-error-with-mp4",
-                    root,
-                    final_path,
-                    options,
-                    logs.append,
-                    None,
-                    validation,
-                )
-                final_ok = final_path.exists() and final_path.read_bytes() == b"fixed"
-        finally:
-            downloader._run_fast_ytdlp_command = old_run_fast
-            downloader._run_ffmpeg_command = old_ffmpeg
-            downloader._validate_premiere_safe_mp4_for_download = old_validate
-            downloader._atomic_promote_with_retry = old_promote
-
-    _assert(logs.count(BAT_CONTINUATION_WARNING) == 1, "BAT continuation warning count was wrong")
-    _assert(ffmpeg_calls, "FFmpeg was not called after yt-dlp error with MP4")
-    _assert(promoted and promoted[0].name.endswith("_FIXED.mp4"), "Converted output was not promoted")
-    _assert(source_paths and promoted[0] != source_paths[0], "Source MP4 was promoted directly")
-    _assert(final_ok, "Final output was not created from converted MP4")
-
-
-def _test_fast_ytdlp_failure_without_mp4_reraises() -> None:
-    with TemporaryDirectory(prefix="fast_error_without_mp4_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        final_path = root / "final.mp4"
-        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
-        validation = _aria2_validation(paths)
-        logs: list[str] = []
-        original_error = _failure([], YtdlpFailureKind.NETWORK, "aria2c exited with code 22")
-        ffmpeg_calls: list[list[str]] = []
-        final_exists = False
-
-        old_run_fast = downloader._run_fast_ytdlp_command
-        old_ffmpeg = downloader._run_ffmpeg_command
-        try:
-            def fail_without_mp4(*_args, **_kwargs):
-                raise original_error
-
-            def fake_ffmpeg(command, **_kwargs):
-                ffmpeg_calls.append(list(command))
-                return ""
-
-            downloader._run_fast_ytdlp_command = fail_without_mp4
-            downloader._run_ffmpeg_command = fake_ffmpeg
-            with _patched_runtime(paths):
-                try:
-                    downloader._download_video_fast_bat_compatible(
-                        "fast-error-no-mp4",
-                        root,
-                        final_path,
-                        options,
-                        logs.append,
-                        None,
-                        validation,
-                    )
-                except YtdlpExecutionError as exc:
-                    _assert(exc is original_error, "Original yt-dlp error was not re-raised")
-                else:
-                    raise AssertionError("Fast yt-dlp error without MP4 did not fail")
-                final_exists = final_path.exists()
-        finally:
-            downloader._run_fast_ytdlp_command = old_run_fast
-            downloader._run_ffmpeg_command = old_ffmpeg
-
-    _assert(not ffmpeg_calls, "FFmpeg ran without usable MP4")
-    _assert(not final_exists, "Final file was created without MP4")
-    _assert(BAT_CONTINUATION_WARNING not in logs, "Continuation warning was logged without MP4")
-
-
-def _test_fast_ytdlp_failure_with_zero_byte_mp4_reraises() -> None:
-    with TemporaryDirectory(prefix="fast_error_zero_mp4_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        final_path = root / "final.mp4"
-        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
-        validation = _aria2_validation(paths)
-        logs: list[str] = []
-        original_error = _failure([], YtdlpFailureKind.NETWORK, "aria2c exited with code 22")
-        ffmpeg_calls: list[list[str]] = []
-
-        old_run_fast = downloader._run_fast_ytdlp_command
-        old_ffmpeg = downloader._run_ffmpeg_command
-        try:
-            def fail_after_zero_mp4(command, *_args, **_kwargs):
-                _output_path(command, "mp4").write_bytes(b"")
-                raise original_error
-
-            def fake_ffmpeg(command, **_kwargs):
-                ffmpeg_calls.append(list(command))
-                return ""
-
-            downloader._run_fast_ytdlp_command = fail_after_zero_mp4
-            downloader._run_ffmpeg_command = fake_ffmpeg
-            with _patched_runtime(paths):
-                try:
-                    downloader._download_video_fast_bat_compatible(
-                        "fast-error-zero-mp4",
-                        root,
-                        final_path,
-                        options,
-                        logs.append,
-                        None,
-                        validation,
-                    )
-                except YtdlpExecutionError as exc:
-                    _assert(exc is original_error, "Original yt-dlp error was not re-raised for zero-byte MP4")
-                else:
-                    raise AssertionError("Fast yt-dlp error with zero-byte MP4 did not fail")
-        finally:
-            downloader._run_fast_ytdlp_command = old_run_fast
-            downloader._run_ffmpeg_command = old_ffmpeg
-
-    _assert(not ffmpeg_calls, "FFmpeg ran for zero-byte MP4")
-    _assert(not final_path.exists(), "Final file was created for zero-byte MP4")
-    _assert(BAT_CONTINUATION_WARNING not in logs, "Continuation warning was logged for zero-byte MP4")
-
-
-def _test_fixed_mp4_is_not_selected_as_source() -> None:
-    with TemporaryDirectory(prefix="fast_fixed_selector_") as temp_dir:
-        root = Path(temp_dir)
-        video_id = "video"
-        fixed = root / "video_FIXED.mp4"
-        fixed.write_bytes(b"fixed")
-        selected = downloader._select_fast_source_mp4(root, video_id)
-    _assert(selected is None, "_FIXED.mp4 was selected as Fast source")
-
-
-def _test_zero_byte_exact_mp4_is_not_selected() -> None:
-    with TemporaryDirectory(prefix="fast_zero_exact_selector_") as temp_dir:
-        root = Path(temp_dir)
-        video_id = "selector-video"
-        exact = root / f"{video_id}.mp4"
-        exact.write_bytes(b"")
-        selected = downloader._select_fast_source_mp4(root, video_id)
-    _assert(selected is None, "Zero-byte exact MP4 was selected as Fast source")
-
-
-def _test_exact_merged_mp4_beats_newer_fragment() -> None:
-    with TemporaryDirectory(prefix="fast_exact_selector_") as temp_dir:
-        root = Path(temp_dir)
-        video_id = "selector-video"
-        exact = root / f"{video_id}.mp4"
-        fragment = root / f"{video_id}.f137.mp4"
-        exact.write_bytes(b"exact")
-        fragment.write_bytes(b"fragment-larger")
-        _set_mtime_ns(exact, 1_000_000_000)
-        _set_mtime_ns(fragment, 2_000_000_000)
-        selected = downloader._select_fast_source_mp4(root, video_id)
-    _assert(selected == exact, "Exact merged MP4 did not beat newer fragment")
-
-
-def _test_non_fragment_fallback_beats_newer_fragment() -> None:
-    with TemporaryDirectory(prefix="fast_non_fragment_selector_") as temp_dir:
-        root = Path(temp_dir)
-        video_id = "selector-video"
-        alternate = root / "alternate.mp4"
-        fragment = root / f"{video_id}.f137.mp4"
-        alternate.write_bytes(b"alternate")
-        fragment.write_bytes(b"fragment-larger")
-        _set_mtime_ns(alternate, 1_000_000_000)
-        _set_mtime_ns(fragment, 2_000_000_000)
-        selected = downloader._select_fast_source_mp4(root, video_id)
-    _assert(selected == alternate, "Non-fragment fallback did not beat newer fragment")
-
-
-def _test_fragment_is_last_fallback() -> None:
-    with TemporaryDirectory(prefix="fast_fragment_selector_") as temp_dir:
-        root = Path(temp_dir)
-        video_id = "selector-video"
-        fragment = root / f"{video_id}.f137.mp4"
-        fragment.write_bytes(b"fragment")
-        selected = downloader._select_fast_source_mp4(root, video_id)
-    _assert(selected == fragment, "Fragment was not selected as last fallback")
-
-
-def _test_ytdlp_error_prefers_exact_merged_mp4_over_fragment() -> None:
-    with TemporaryDirectory(prefix="fast_error_exact_over_fragment_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        video_id = "fast-exact-over-fragment"
-        final_path = root / "final.mp4"
-        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
-        validation = _aria2_validation(paths)
-        logs: list[str] = []
-        ffmpeg_inputs: list[Path] = []
-        promoted: list[Path] = []
-        final_created = False
-        old_run_fast = downloader._run_fast_ytdlp_command
-        old_ffmpeg = downloader._run_ffmpeg_command
-        old_validate = downloader._validate_premiere_safe_mp4_for_download
-        old_promote = downloader._atomic_promote_with_retry
-        old_build_stable = downloader._build_stable_video_ytdlp_command
-        try:
-            def fail_after_exact_and_fragment(command, *_args, **_kwargs):
-                exact = _output_path(command, "mp4")
-                fragment = exact.with_name(f"{exact.stem}.f137.mp4")
-                exact.write_bytes(b"exact")
-                fragment.write_bytes(b"fragment-larger")
-                _set_mtime_ns(exact, 1_000_000_000)
-                _set_mtime_ns(fragment, 2_000_000_000)
-                raise _failure(command, YtdlpFailureKind.NETWORK, "aria2c exited with code 22")
-
-            def fake_ffmpeg(command, *, operation, cancel_controller=None, progress_duration_seconds=None):
-                ffmpeg_inputs.append(Path(command[3]))
-                Path(command[-1]).write_bytes(b"fixed")
-                return ""
-
-            def fake_promote(source, target, *_args, **_kwargs):
-                promoted.append(Path(source))
-                Path(target).write_bytes(Path(source).read_bytes())
-
-            def forbidden_stable(*_args, **_kwargs):
-                raise AssertionError("Fast generated a Stable fallback command")
-
-            downloader._run_fast_ytdlp_command = fail_after_exact_and_fragment
-            downloader._run_ffmpeg_command = fake_ffmpeg
-            downloader._validate_premiere_safe_mp4_for_download = lambda *_args, **_kwargs: None
-            downloader._atomic_promote_with_retry = fake_promote
-            downloader._build_stable_video_ytdlp_command = forbidden_stable
-            with _patched_runtime(paths):
-                downloader._download_video_fast_bat_compatible(
-                    video_id,
-                    root,
-                    final_path,
-                    options,
-                    logs.append,
-                    None,
-                    validation,
-                )
-                final_created = final_path.exists()
-        finally:
-            downloader._run_fast_ytdlp_command = old_run_fast
-            downloader._run_ffmpeg_command = old_ffmpeg
-            downloader._validate_premiere_safe_mp4_for_download = old_validate
-            downloader._atomic_promote_with_retry = old_promote
-            downloader._build_stable_video_ytdlp_command = old_build_stable
-
-    expected = root / f"{video_id}.mp4"
-    fragment = root / f"{video_id}.f137.mp4"
-    _assert(ffmpeg_inputs == [expected], f"FFmpeg did not receive exact merged MP4: {ffmpeg_inputs}")
-    _assert(fragment not in ffmpeg_inputs, "FFmpeg received fragment instead of exact merged MP4")
-    _assert(promoted and promoted[0].name.endswith("_FIXED.mp4"), "Converted MP4 was not promoted")
-    _assert(final_created, "Final MP4 was not created")
-
-
-def _test_ffmpeg_failure_is_not_promoted_and_marks_failed() -> None:
-    with TemporaryDirectory(prefix="fast_ffmpeg_failure_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        final_path = root / "final.mp4"
-        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
-        validation = _aria2_validation(paths)
-        final_created_after_failure = False
-        old_run_fast = downloader._run_fast_ytdlp_command
-        old_ffmpeg = downloader._run_ffmpeg_command
-        old_promote = downloader._atomic_promote_with_retry
-        try:
-            def fake_fast(command, *_args, **_kwargs):
-                _output_path(command, "mp4").write_bytes(b"source")
-                raise _failure(command, YtdlpFailureKind.NETWORK, "aria2c exited with code 22")
-
-            def fail_ffmpeg(*_args, **_kwargs):
-                raise FFmpegExecutionError(
-                    operation="fast_video_transcode",
-                    exit_code=1,
-                    message="ffmpeg fast_video_transcode failed: invalid_input",
-                    output_lines=("error",),
-                    combined_output="error",
-                )
-
-            downloader._run_fast_ytdlp_command = fake_fast
-            downloader._run_ffmpeg_command = fail_ffmpeg
-            downloader._atomic_promote_with_retry = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                AssertionError("Fast promoted after FFmpeg failure")
-            )
-            with _patched_runtime(paths):
-                try:
-                    downloader._download_video_fast_bat_compatible(
-                        "fast-fail",
-                        root,
-                        final_path,
-                        options,
-                        lambda _message: None,
-                        None,
-                        validation,
-                    )
-                except FFmpegExecutionError:
-                    pass
-                else:
-                    raise AssertionError("Fast FFmpeg failure did not propagate")
-                final_created_after_failure = final_path.exists()
-        finally:
-            downloader._run_fast_ytdlp_command = old_run_fast
-            downloader._run_ffmpeg_command = old_ffmpeg
-            downloader._atomic_promote_with_retry = old_promote
-    _assert(not final_created_after_failure, "Final output was created after FFmpeg failure")
-
-    marked_parts: list[str] = []
-    old_download_source = downloader._download_fast_video_source
-    old_convert = downloader._convert_and_promote_fast_video
-    old_mark = downloader._mark_part_error
-    old_reconcile = downloader._reconcile_current_item
-    old_get_entry = downloader.get_video_entry
-    old_is_complete = downloader.is_mode_complete
-    old_missing = downloader.missing_parts_for_mode
-    old_missing_current = downloader._missing_parts_for_current_paths
-    old_validate_env = downloader.validate_download_environment
-    old_ensure_dirs = downloader.ensure_output_dirs
-    old_summary = downloader._call_runtime_tool_summary
-    old_prepare_runtime = downloader._prepare_media_downloader_runtime
-    try:
-        def fake_source(video_id, staging_dir, *_args, **_kwargs):
-            source = Path(staging_dir) / f"{video_id}.mp4"
-            source.write_bytes(b"source")
-            return source
-
-        downloader._download_fast_video_source = fake_source
-        downloader._convert_and_promote_fast_video = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            FFmpegExecutionError(
-                operation="fast_video_transcode",
-                exit_code=1,
-                message="ffmpeg fast_video_transcode failed: invalid_input",
-                output_lines=("error",),
-                combined_output="error",
-            )
+    text = _joined(command)
+    for forbidden in ("bestvideo", "bestaudio", " best", "vp9", "av01"):
+        _assert(forbidden not in text, f"Fast command contains unrestricted selector value: {forbidden}")
+
+
+def _test_fast_uses_aria2_profile() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        paths = _runtime_paths(root)
+        command = _fast_video_command(root, paths)
+    _assert(_option_value(command, "--downloader") == str(paths.aria2), "Fast aria2 path mismatch")
+    _assert(
+        _option_value(command, "--downloader-args") == ARIA2_FAST_DOWNLOADER_ARGS,
+        "Fast aria2 profile mismatch",
+    )
+
+
+def _test_authenticated_extract_strips_aria2() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        paths = _runtime_paths(root)
+        command = _fast_video_command(root, paths)
+        extract_command = downloader._build_authenticated_infojson_extract_command(
+            command,
+            str(root / "bootstrap.%(ext)s"),
         )
-        downloader._mark_part_error = lambda _options, _video, _paths, part: marked_parts.append(part)
-        downloader._reconcile_current_item = lambda _options, video, _paths, _log, status_callback, **_kwargs: (
-            setattr(video, "status", downloader.STATUS_ERROR),
-            status_callback(video),
-            downloader.STATUS_ERROR,
-        )[-1]
-        downloader.get_video_entry = lambda *_args, **_kwargs: {}
-        downloader.is_mode_complete = lambda *_args, **_kwargs: False
-        downloader.missing_parts_for_mode = lambda *_args, **_kwargs: [PART_VIDEO]
-        downloader._missing_parts_for_current_paths = lambda *_args, **_kwargs: (PART_VIDEO,)
-        downloader.validate_download_environment = lambda _options: None
-        downloader.ensure_output_dirs = lambda *_args, **_kwargs: None
-        downloader._call_runtime_tool_summary = lambda *_args, **_kwargs: None
-        downloader._prepare_media_downloader_runtime = lambda *_args, **_kwargs: validation
-        with _patched_runtime(paths):
-            video = _video("fast-outer-fail")
-            statuses = []
-            downloader.download_items(
-                [video],
-                options,
-                lambda _message: None,
-                lambda updated: statuses.append(updated.status),
-            )
-    finally:
-        downloader._download_fast_video_source = old_download_source
-        downloader._convert_and_promote_fast_video = old_convert
-        downloader._mark_part_error = old_mark
-        downloader._reconcile_current_item = old_reconcile
-        downloader.get_video_entry = old_get_entry
-        downloader.is_mode_complete = old_is_complete
-        downloader.missing_parts_for_mode = old_missing
-        downloader._missing_parts_for_current_paths = old_missing_current
-        downloader.validate_download_environment = old_validate_env
-        downloader.ensure_output_dirs = old_ensure_dirs
-        downloader._call_runtime_tool_summary = old_summary
-        downloader._prepare_media_downloader_runtime = old_prepare_runtime
-    _assert(marked_parts == [PART_VIDEO], f"Outer state handling did not mark video failed: {marked_parts}")
-    _assert(statuses and statuses[-1] == downloader.STATUS_ERROR, "Outer state handling did not publish error status")
+
+    _assert("--downloader" not in extract_command, "Metadata extraction retained aria2 downloader")
+    _assert("--downloader-args" not in extract_command, "Metadata extraction retained aria2 args")
+    _assert("--skip-download" in extract_command, "Metadata extraction missed skip-download")
+    _assert("--write-info-json" in extract_command, "Metadata extraction missed write-info-json")
 
 
-def _test_corrupt_fast_mp4_is_not_promoted() -> None:
-    with TemporaryDirectory(prefix="fast_corrupt_mp4_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        final_path = root / "final.mp4"
-        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
-        validation = _aria2_validation(paths)
-        promoted = False
+def _test_saved_media_transfer_retains_aria2() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        paths = _runtime_paths(root)
+        command = _fast_video_command(root, paths)
+        info_json_path = root / "media.info.json"
+        media_command = downloader._build_infojson_media_download_command(command, info_json_path)
 
-        old_run_fast = downloader._run_fast_ytdlp_command
-        old_ffmpeg = downloader._run_ffmpeg_command
-        old_validate = downloader._validate_premiere_safe_mp4_for_download
-        old_promote = downloader._atomic_promote_with_retry
-        try:
-            def fail_after_mp4(command, *_args, **_kwargs):
-                _output_path(command, "mp4").write_bytes(b"corrupt")
-                raise _failure(command, YtdlpFailureKind.NETWORK, "aria2c exited with code 22")
-
-            def fake_ffmpeg(command, *, operation, cancel_controller=None, progress_duration_seconds=None):
-                Path(command[-1]).write_bytes(b"fixed-but-invalid")
-                return ""
-
-            def fail_validation(*_args, **_kwargs):
-                raise DownloadError("premiere_safe_mp4_validation_failed: corrupt")
-
-            def fake_promote(*_args, **_kwargs):
-                nonlocal promoted
-                promoted = True
-                raise AssertionError("Fast promoted corrupt MP4")
-
-            downloader._run_fast_ytdlp_command = fail_after_mp4
-            downloader._run_ffmpeg_command = fake_ffmpeg
-            downloader._validate_premiere_safe_mp4_for_download = fail_validation
-            downloader._atomic_promote_with_retry = fake_promote
-            with _patched_runtime(paths):
-                try:
-                    downloader._download_video_fast_bat_compatible(
-                        "fast-corrupt",
-                        root,
-                        final_path,
-                        options,
-                        lambda _message: None,
-                        None,
-                        validation,
-                    )
-                except DownloadError as exc:
-                    _assert("corrupt" in str(exc), "Validation failure did not propagate")
-                else:
-                    raise AssertionError("Corrupt Fast MP4 was accepted")
-        finally:
-            downloader._run_fast_ytdlp_command = old_run_fast
-            downloader._run_ffmpeg_command = old_ffmpeg
-            downloader._validate_premiere_safe_mp4_for_download = old_validate
-            downloader._atomic_promote_with_retry = old_promote
-
-    _assert(not promoted, "Corrupt MP4 was promoted")
-    _assert(not final_path.exists(), "Final file was created for corrupt MP4")
+    _assert(_option_value(media_command, "--downloader") == str(paths.aria2), "Saved-media transfer lost aria2")
+    _assert(
+        _option_value(media_command, "--downloader-args") == ARIA2_FAST_DOWNLOADER_ARGS,
+        "Saved-media transfer lost aria2 profile",
+    )
+    _assert(
+        _option_value(media_command, "--load-info-json") == str(info_json_path),
+        "Saved-media transfer missed load-info-json",
+    )
+    _assert("--cookies" not in media_command, "Saved-media transfer still contains cookies")
+    _assert(
+        not any(str(value).startswith("https://www.youtube.com/") for value in media_command),
+        "Saved-media transfer still contains the watch URL",
+    )
 
 
-def _test_fast_cancellation_before_continuation() -> None:
-    with TemporaryDirectory(prefix="fast_cancel_before_continue_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        final_path = root / "final.mp4"
-        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
-        validation = _aria2_validation(paths)
-        controller = downloader.DownloadController()
-        ffmpeg_calls: list[list[str]] = []
-        promoted = False
+def _test_fast_uses_retry_pipeline() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        paths = _runtime_paths(root)
+        stable_options = _options(root, DOWNLOAD_ENGINE_STABLE)
+        fast_options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+        calls: list[tuple[str, list[str]]] = []
+        direct_calls: list[list[str]] = []
 
-        old_run_fast = downloader._run_fast_ytdlp_command
-        old_ffmpeg = downloader._run_ffmpeg_command
-        old_promote = downloader._atomic_promote_with_retry
-        try:
-            def fail_after_cancel(command, *_args, **_kwargs):
-                _output_path(command, "mp4").write_bytes(b"source")
-                controller.request_cancel()
-                raise _failure(command, YtdlpFailureKind.NETWORK, "aria2c exited with code 22")
+        def fake_retry(command, options, log, cancel_controller=None, cookie_retry_state=None):
+            calls.append((options.download_engine, list(command)))
 
-            def fake_ffmpeg(command, **_kwargs):
-                ffmpeg_calls.append(list(command))
-                raise AssertionError("FFmpeg started after cancellation")
+        def fake_direct(command, cancel_controller=None):
+            direct_calls.append(list(command))
+            raise AssertionError("Fast used direct yt-dlp runner")
 
-            def fake_promote(*_args, **_kwargs):
-                nonlocal promoted
-                promoted = True
-                raise AssertionError("Promotion ran after cancellation")
+        def fake_select(staging_dir, pattern, suffix):
+            return root / "staged.mp4"
 
-            downloader._run_fast_ytdlp_command = fail_after_cancel
-            downloader._run_ffmpeg_command = fake_ffmpeg
-            downloader._atomic_promote_with_retry = fake_promote
-            with _patched_runtime(paths):
-                try:
-                    downloader._download_video_fast_bat_compatible(
-                        "fast-cancel",
-                        root,
-                        final_path,
-                        options,
-                        lambda _message: None,
-                        controller,
-                        validation,
-                    )
-                except DownloadCancelled:
-                    pass
-                else:
-                    raise AssertionError("Cancellation did not stop Fast continuation")
-        finally:
-            downloader._run_fast_ytdlp_command = old_run_fast
-            downloader._run_ffmpeg_command = old_ffmpeg
-            downloader._atomic_promote_with_retry = old_promote
+        def fake_validate(path, log, delete_invalid, cancel_controller):
+            return None
 
-    _assert(not ffmpeg_calls, "FFmpeg started after cancellation")
-    _assert(not promoted, "Promotion ran after cancellation")
-    _assert(not final_path.exists(), "Final file was created after cancellation")
+        def fake_promote(source, final, log, replace_existing=False, cancel_controller=None):
+            final.parent.mkdir(parents=True, exist_ok=True)
+            final.write_bytes(b"mp4")
 
-
-def _test_stable_command_unchanged() -> None:
-    with TemporaryDirectory(prefix="stable_command_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        with _patched_runtime(paths):
-            command = downloader._build_stable_video_ytdlp_command(
-                "stable-command",
+        with _patched_runtime(paths), _patched_attr(downloader, "_run_ytdlp_with_retries", fake_retry), _patched_attr(
+            downloader, "_run_ytdlp", fake_direct
+        ), _patched_attr(downloader, "_select_staged_file", fake_select), _patched_attr(
+            downloader, "_validate_premiere_safe_mp4_for_download", fake_validate
+        ), _patched_attr(
+            downloader, "_atomic_promote_with_retry", fake_promote
+        ):
+            downloader._download_video(
+                VIDEO_ID,
+                "001 Title",
                 root,
-                _options(root, DOWNLOAD_ENGINE_STABLE),
+                root / "stable.mp4",
+                stable_options,
+                _noop_log,
+                aria2_validation=_aria2_validation(paths),
             )
-    _assert_stable_video_command(command)
-    _assert(_option_value(command, "-f") == downloader.PREMIERE_SAFE_VIDEO_FORMAT, "Stable selector changed")
-    _assert("--extractor-args" not in command, "Stable command added Fast extractor args")
-    _assert(not _contains_aria2(command), "Stable command added aria2")
-
-
-def _test_fast_audio_command() -> None:
-    with TemporaryDirectory(prefix="fast_audio_command_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        validation = _aria2_validation(paths)
-        with _patched_runtime(paths):
-            command = downloader._build_fast_audio_ytdlp_command(
-                "fast-audio",
+            downloader._download_video(
+                VIDEO_ID,
+                "001 Title",
                 root,
-                _options(root, DOWNLOAD_ENGINE_ARIA2_FAST),
-                validation,
+                root / "fast.mp4",
+                fast_options,
+                _noop_log,
+                aria2_validation=_aria2_validation(paths),
             )
-    _assert(_option_value(command, "--extractor-args") == ARIA2_FAST_EXTRACTOR_ARGS, "Fast audio missed player client")
-    _assert(_option_value(command, "--downloader-args") == ARIA2_FAST_DOWNLOADER_ARGS, "Fast audio missed aria2 profile")
-    _assert(_option_value(command, "-f") == ARIA2_FAST_AUDIO_FORMAT, "Fast audio format mismatch")
-    _assert("-x" in command, "Fast audio did not request extraction")
-    _assert("--ignore-errors" not in command, "Fast audio command contained --ignore-errors")
-    _assert("-N" not in command, "Fast audio contained Stable -N")
+
+    _assert(len(calls) == 2, f"Retry runner was not used once per engine: {calls}")
+    _assert(not direct_calls, "Direct yt-dlp runner was used")
+    _assert(not hasattr(downloader, "_run_fast_ytdlp_command"), "Fast-specific yt-dlp runner still exists")
+    _assert("--downloader" not in calls[0][1], "Stable retry command unexpectedly had aria2")
+    _assert("--downloader" in calls[1][1], "Fast retry command missed aria2")
 
 
-def _test_fast_audio_remains_strict() -> None:
-    with TemporaryDirectory(prefix="fast_audio_strict_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        final_path = root / "final.mp3"
-        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
-        validation = _aria2_validation(paths)
-        moved = False
-        original_error: YtdlpExecutionError | None = None
-
-        old_run_fast = downloader._run_fast_ytdlp_command
-        old_move = downloader._move_single_file
-        try:
-            def fail_fast_audio(command, *_args, **_kwargs):
-                nonlocal original_error
-                _output_path(command, "mp3").write_bytes(b"partial")
-                original_error = _failure(
-                    command,
-                    YtdlpFailureKind.NETWORK,
-                    "aria2c audio transfer failed",
-                    part=PART_AUDIO,
-                )
-                raise original_error
-
-            def fake_move(*_args, **_kwargs):
-                nonlocal moved
-                moved = True
-                raise AssertionError("Fast audio moved partial file after yt-dlp failure")
-
-            downloader._run_fast_ytdlp_command = fail_fast_audio
-            downloader._move_single_file = fake_move
-            with _patched_runtime(paths):
-                try:
-                    downloader._download_audio(
-                        "fast-audio-strict",
-                        "fast-audio-strict",
-                        root,
-                        final_path,
-                        options,
-                        lambda _message: None,
-                        aria2_validation=validation,
-                    )
-                except YtdlpExecutionError as exc:
-                    _assert(original_error is not None and exc is original_error, "Fast audio did not re-raise yt-dlp error")
-                else:
-                    raise AssertionError("Fast audio failure did not propagate")
-        finally:
-            downloader._run_fast_ytdlp_command = old_run_fast
-            downloader._move_single_file = old_move
-
-    _assert(not moved, "Fast audio attempted to move a partial file")
-    _assert(not final_path.exists(), "Fast audio created final output after yt-dlp failure")
-
-
-def _test_fast_has_no_automatic_fallback() -> None:
-    calls: list[list[str]] = []
-    old_run_fast = downloader._run_fast_ytdlp_command
-    old_ffmpeg = downloader._run_ffmpeg_command
-    old_validate = downloader._validate_premiere_safe_mp4_for_download
-    old_promote = downloader._atomic_promote_with_retry
-    old_build_stable = downloader._build_stable_video_ytdlp_command
-    try:
-        def fake_ffmpeg(command, *, operation, cancel_controller=None, progress_duration_seconds=None):
-            calls.append(list(command))
-            Path(command[-1]).write_bytes(b"fixed")
-            return ""
-
-        def fake_promote(source, target, *_args, **_kwargs):
-            Path(target).write_bytes(Path(source).read_bytes())
-
-        def forbidden_stable(*_args, **_kwargs):
-            raise AssertionError("Fast generated a Stable fallback command")
-
-        downloader._run_ffmpeg_command = fake_ffmpeg
-        downloader._validate_premiere_safe_mp4_for_download = lambda *_args, **_kwargs: None
-        downloader._atomic_promote_with_retry = fake_promote
-        downloader._build_stable_video_ytdlp_command = forbidden_stable
-
-        with TemporaryDirectory(prefix="fast_no_fallback_with_mp4_") as temp_dir:
-            root = Path(temp_dir)
-            paths = _runtime_paths(root, aria2=True)
-            validation = _aria2_validation(paths)
-            options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
-
-            def fail_with_mp4(command, *_args, **_kwargs):
-                calls.append(list(command))
-                _output_path(command, "mp4").write_bytes(b"source")
-                raise _failure(command, YtdlpFailureKind.NETWORK, "connection reset by peer")
-
-            downloader._run_fast_ytdlp_command = fail_with_mp4
-            with _patched_runtime(paths):
-                downloader._download_video_fast_bat_compatible(
-                    "fast-failure-with-mp4",
-                    root,
-                    root / "final.mp4",
-                    options,
-                    lambda _message: None,
-                    None,
-                    validation,
-                )
-
-        with TemporaryDirectory(prefix="fast_no_fallback_without_mp4_") as temp_dir:
-            root = Path(temp_dir)
-            paths = _runtime_paths(root, aria2=True)
-            validation = _aria2_validation(paths)
-            options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
-
-            def fail_without_mp4(command, *_args, **_kwargs):
-                calls.append(list(command))
-                raise _failure(command, YtdlpFailureKind.NETWORK, "connection reset by peer")
-
-            downloader._run_fast_ytdlp_command = fail_without_mp4
-            with _patched_runtime(paths):
-                try:
-                    downloader._download_video_fast_bat_compatible(
-                        "fast-failure-without-mp4",
-                        root,
-                        root / "final.mp4",
-                        options,
-                        lambda _message: None,
-                        None,
-                        validation,
-                    )
-                except YtdlpExecutionError:
-                    pass
-                else:
-                    raise AssertionError("Fast failure without MP4 did not propagate")
-    finally:
-        downloader._run_fast_ytdlp_command = old_run_fast
-        downloader._run_ffmpeg_command = old_ffmpeg
-        downloader._validate_premiere_safe_mp4_for_download = old_validate
-        downloader._atomic_promote_with_retry = old_promote
-        downloader._build_stable_video_ytdlp_command = old_build_stable
-
-    _assert(len(calls) == 3, f"Fast failure made unexpected commands: {len(calls)}")
-    _assert(any(_contains_aria2(command) for command in calls), "Fast failure did not run aria2 command")
-    for command in calls:
-        _assert(_option_value(command, "-N") != "1", "Fast failure generated or executed Stable -N 1")
-
-
-def _test_fast_does_not_start_lookahead() -> None:
-    with TemporaryDirectory(prefix="fast_no_lookahead_") as temp_dir:
-        root = Path(temp_dir)
-        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
-        options.cookies_enabled = True
-        state = downloader._YtdlpBatchState(cookie_bootstrap_media_mode=True)
-        attempt_state, prefetched = downloader._video_attempt_state_for_batch(
-            [_video("next")],
-            1,
-            "current",
-            options,
-            state,
-            lambda _message: None,
-            None,
+def _test_fast_uses_isolated_cookie_copy() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        paths = _runtime_paths(root)
+        canonical = root / "canonical-cookies.txt"
+        cookie_bytes = (
+            "# Netscape HTTP Cookie File\n"
+            ".youtube.com\tTRUE\t/\tTRUE\t2147483647\tSID\tsecret-cookie\n"
+        ).encode("utf-8")
+        canonical.write_bytes(cookie_bytes)
+        options = _options(
+            root,
+            DOWNLOAD_ENGINE_ARIA2_FAST,
+            cookies_enabled=True,
+            cookies_path=str(canonical),
         )
-        downloader._start_attempt_lookahead(attempt_state, lambda _message: None)
-    _assert(prefetched is None, "Fast consumed lookahead metadata")
-    _assert(attempt_state.lookahead_callback is None, "Fast created a lookahead callback")
-    _assert(state.prefetch is None, "Fast created a lookahead prefetch")
+        command = _fast_video_command(root, paths, options)
+
+        with downloader._prepared_cookie_attempt(command, options, _noop_log, use_cookies=True) as prepared:
+            temp_cookie_path = Path(prepared.temp_cookie_path)
+            _assert(_option_count(prepared.command, "--cookies") == 1, "Prepared command did not contain one cookies option")
+            _assert(temp_cookie_path != canonical, "Temporary cookie path matched canonical path")
+            _assert(temp_cookie_path.name == "cookies.txt", "Temporary cookie filename was not cookies.txt")
+            _assert("s9h_cookie_attempt" in temp_cookie_path.parent.name, "Temporary cookie directory name changed")
+            _assert(temp_cookie_path.exists(), "Temporary cookie copy did not exist inside context")
+            _assert(temp_cookie_path.read_bytes() == cookie_bytes, "Temporary cookie copy content differed")
+            _assert(canonical.read_bytes() == cookie_bytes, "Canonical cookie file was modified")
+            _assert("--downloader" in prepared.command, "Prepared Fast command lost aria2")
+            remembered_temp_path = temp_cookie_path
+
+        _assert(not remembered_temp_path.exists(), "Temporary cookie copy was not deleted after context")
+        _assert(canonical.read_bytes() == cookie_bytes, "Canonical cookie file changed after context")
 
 
-def _test_stable_still_starts_eligible_lookahead() -> None:
-    with TemporaryDirectory(prefix="stable_lookahead_") as temp_dir:
-        root = Path(temp_dir)
-        options = _options(root, DOWNLOAD_ENGINE_STABLE)
-        options.cookies_enabled = True
-        state = downloader._YtdlpBatchState(cookie_bootstrap_media_mode=True)
-        started: list[str] = []
-        old_find = downloader._find_cookie_media_lookahead_candidate
-        old_start = downloader._start_cookie_media_lookahead
-        try:
-            downloader._find_cookie_media_lookahead_candidate = lambda *_args, **_kwargs: (
-                _video("lookahead-next"),
-                "Lookahead Next",
-                root,
-            )
-            downloader._start_cookie_media_lookahead = lambda *_args, **_kwargs: started.append("started")
-            attempt_state, _prefetched = downloader._video_attempt_state_for_batch(
-                [_video("lookahead-next")],
+def _test_fast_uses_lookahead() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST, cookies_enabled=True, cookies_path=str(root / "cookies.txt"))
+        batch_state = downloader._YtdlpBatchState(cookie_bootstrap_media_mode=True)
+        current = SimpleNamespace(video_id="A", title="A", sanitized_filename_base="001 A")
+        nxt = SimpleNamespace(video_id="B", title="B", sanitized_filename_base="002 B")
+        started: list[tuple[str, str]] = []
+
+        def fake_find(videos, start_index, callback_options):
+            _assert(callback_options.download_engine == DOWNLOAD_ENGINE_ARIA2_FAST, "Lookahead lost Fast options")
+            return nxt, "002 B", root
+
+        def fake_start(batch, video_id, title, channel_dir, callback_options, log, cancel_controller):
+            started.append((callback_options.download_engine, video_id))
+
+        with _patched_attr(downloader, "_find_cookie_media_lookahead_candidate", fake_find), _patched_attr(
+            downloader, "_start_cookie_media_lookahead", fake_start
+        ):
+            state, prefetched = downloader._video_attempt_state_for_batch(
+                [current, nxt],
                 1,
-                "current",
+                "A",
                 options,
-                state,
-                lambda _message: None,
+                batch_state,
+                _noop_log,
                 None,
             )
-            downloader._start_attempt_lookahead(attempt_state, lambda _message: None)
-        finally:
-            downloader._find_cookie_media_lookahead_candidate = old_find
-            downloader._start_cookie_media_lookahead = old_start
-    _assert(started == ["started"], "Stable lookahead did not start when eligible")
+            _assert(prefetched is None, "Unexpected prefetched media before current video")
+            _assert(state.lookahead_callback is not None, "Fast did not create a lookahead callback")
+            downloader._start_attempt_lookahead(state, _noop_log)
+
+    _assert(started == [(DOWNLOAD_ENGINE_ARIA2_FAST, "B")], f"Fast lookahead did not start: {started}")
 
 
-def _test_runtime_logs() -> None:
-    with TemporaryDirectory(prefix="fast_runtime_logs_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        logs: list[str] = []
-        with _patched_runtime(paths), _patched_version("aria2 version 1.37.0"):
-            downloader._prepare_media_downloader_runtime(
-                _options(root, DOWNLOAD_ENGINE_ARIA2_FAST),
-                logs.append,
-                None,
-            )
-    joined = "\n".join(logs)
-    for required in (
-        "aria2c BAT-compatible fast mode",
-        "ios,web",
-        "connections=16",
-        "splits=16",
-        "jobs=16",
-        "piece=1M",
-        "libx264",
-        "preset=slow",
-        "crf=18",
-        "audio=aac",
-    ):
-        _assert(required in joined, f"Fast runtime logs missed {required}")
-    for forbidden in (
-        "connections=" + "8",
-        "fallback to " + "stable",
-        "retrying with " + "stable",
-    ):
-        _assert(forbidden not in joined.lower(), f"Fast runtime logs retained {forbidden}")
+def _test_fast_has_no_full_transcode() -> None:
+    command = _fast_video_command()
+    text = _joined(command)
+    for forbidden in ("libx264", "-crf", "-preset", "-c:v", "-c:a", "-progress", "pipe:1", "_FIXED"):
+        _assert(forbidden not in text, f"Fast video command contains transcode option: {forbidden}")
+    _assert(not hasattr(downloader, "_transcode_fast_video_like_bat"), "Fast transcode helper still exists")
+    _assert(not hasattr(downloader, "_run_ffmpeg_for_fast_video"), "Fast FFmpeg helper still exists")
 
-
-def _test_fast_log_secret_safety() -> None:
-    with TemporaryDirectory(prefix="fast_secret_logs_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        cookie_path = root / "secret-cookie-file.txt"
-        cookie_path.write_text("cookie_secret_value\n", encoding="utf-8")
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        paths = _runtime_paths(root)
         options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
-        options.cookies_enabled = True
-        options.cookies_path = str(cookie_path)
-        options.speed_limit = "1M"
-        logs: list[str] = []
-        with _patched_runtime(paths), _patched_version("aria2 version 1.37.0"):
-            downloader._prepare_media_downloader_runtime(options, logs.append, None)
+        ffmpeg_calls: list[list[str]] = []
 
-        validation = _aria2_validation(paths)
-        old_run_fast = downloader._run_fast_ytdlp_command
-        old_ffmpeg = downloader._run_ffmpeg_command
-        old_validate = downloader._validate_premiere_safe_mp4_for_download
-        old_promote = downloader._atomic_promote_with_retry
-        try:
-            api_key_name = "api" + "_key"
-            signature_key = "signature" + "="
-            auth_header_name = "author" + "ization"
-            token_secret = "token" + "=secret"
+        def fake_retry(command, options, log, cancel_controller=None, cookie_retry_state=None):
+            return None
 
-            def fail_after_mp4(command, *_args, **_kwargs):
-                _output_path(command, "mp4").write_bytes(b"source")
-                raise _failure(
-                    command,
-                    YtdlpFailureKind.NETWORK,
-                    (
-                        "signed=https://media.example/video.mp4?"
-                        f"{signature_key}secret&{api_key_name}=hidden "
-                        f"{auth_header_name}: bearer token"
-                    ),
-                )
+        def fake_select(staging_dir, pattern, suffix):
+            return root / "staged.mp4"
 
-            def fake_ffmpeg(command, *, operation, cancel_controller=None, progress_duration_seconds=None):
-                Path(command[-1]).write_bytes(b"fixed")
-                return ""
+        def fake_validate(path, log, delete_invalid, cancel_controller):
+            return None
 
-            def fake_promote(source, target, *_args, **_kwargs):
-                Path(target).write_bytes(Path(source).read_bytes())
+        def fake_promote(source, final, log, replace_existing=False, cancel_controller=None):
+            final.parent.mkdir(parents=True, exist_ok=True)
+            final.write_bytes(b"mp4")
 
-            downloader._run_fast_ytdlp_command = fail_after_mp4
-            downloader._run_ffmpeg_command = fake_ffmpeg
-            downloader._validate_premiere_safe_mp4_for_download = lambda *_args, **_kwargs: None
-            downloader._atomic_promote_with_retry = fake_promote
-            with _patched_runtime(paths):
-                downloader._download_video_fast_bat_compatible(
-                    "fast-secret-log",
-                    root,
-                    root / "final.mp4",
-                    options,
-                    logs.append,
-                    None,
-                    validation,
-                )
-        finally:
-            downloader._run_fast_ytdlp_command = old_run_fast
-            downloader._run_ffmpeg_command = old_ffmpeg
-            downloader._validate_premiere_safe_mp4_for_download = old_validate
-            downloader._atomic_promote_with_retry = old_promote
-    joined = "\n".join(logs)
-    _assert(logs.count(BAT_CONTINUATION_WARNING) == 1, "Secret-safety test did not log exact continuation warning")
-    for forbidden in (
-        str(cookie_path),
-        "secret-cookie-file",
-        "cookie_secret_value",
-        api_key_name,
-        signature_key,
-        auth_header_name,
-        token_secret,
-    ):
-        _assert(forbidden not in joined, f"Fast logs exposed {forbidden}")
+        def fake_ffmpeg(command, **kwargs):
+            ffmpeg_calls.append(list(command))
+            raise AssertionError("Fast production path invoked FFmpeg command directly")
 
-
-def _test_sanitized_fast_command_probe() -> None:
-    with TemporaryDirectory(prefix="fast_command_probe_") as temp_dir:
-        root = Path(temp_dir)
-        paths = _runtime_paths(root, aria2=True)
-        validation = _aria2_validation(paths)
-        with _patched_runtime(paths):
-            command = downloader._build_fast_video_ytdlp_command(
-                "probe-video",
+        with _patched_runtime(paths), _patched_attr(downloader, "_run_ytdlp_with_retries", fake_retry), _patched_attr(
+            downloader, "_select_staged_file", fake_select
+        ), _patched_attr(downloader, "_validate_premiere_safe_mp4_for_download", fake_validate), _patched_attr(
+            downloader, "_atomic_promote_with_retry", fake_promote
+        ), _patched_attr(
+            downloader, "_run_ffmpeg_command", fake_ffmpeg
+        ):
+            downloader._download_video(
+                VIDEO_ID,
+                "001 Title",
                 root,
-                _options(root, DOWNLOAD_ENGINE_ARIA2_FAST),
-                validation,
+                root / "fast.mp4",
+                options,
+                _noop_log,
+                aria2_validation=_aria2_validation(paths),
             )
-    sanitized = _sanitize_command_for_probe(command)
-    text = " ".join(sanitized)
-    print(f"[COMMAND PROBE] {text}")
-    _assert("--extractor-args youtube:player_client=ios,web" in text, "Sanitized probe missed extractor args")
-    _assert(f"-f {ARIA2_FAST_VIDEO_FORMAT}" in text, "Sanitized probe missed video format")
-    _assert("--merge-output-format mp4" in text, "Sanitized probe missed merge format")
-    _assert("--downloader <aria2c.exe>" in text, "Sanitized probe missed aria2 placeholder")
-    _assert(f"--downloader-args {ARIA2_FAST_DOWNLOADER_ARGS}" in text, "Sanitized probe missed aria2 args")
-    _assert("--ignore-errors" in text, "Sanitized probe missed --ignore-errors")
-    _assert("--cookies" not in text, "Sanitized probe exposed cookies")
+
+    _assert(not ffmpeg_calls, "Fast production path invoked FFmpeg directly")
 
 
-def _failure(
-    command: list[str],
-    kind: YtdlpFailureKind,
-    text: str,
-    *,
-    part: str = PART_VIDEO,
-) -> YtdlpExecutionError:
-    return YtdlpExecutionError(
-        1,
-        text,
-        [text],
-        combined_output=text,
-        stream_interrupted=kind in {YtdlpFailureKind.NETWORK, YtdlpFailureKind.NETWORK_TIMEOUT},
-        failure_kind=kind,
-        fatal_lines=[text],
-        stage=YTDLP_STAGE_DOWNLOAD,
-        part=part,
-        command=command,
-    )
+def _test_strict_format_failure_uses_existing_flow() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        paths = _runtime_paths(root)
+        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+        retry_calls: list[list[str]] = []
+        select_calls: list[object] = []
+
+        def fake_retry(command, options, log, cancel_controller=None, cookie_retry_state=None):
+            retry_calls.append(list(command))
+            raise YtdlpExecutionError(
+                1,
+                "Requested format is not available",
+                ["ERROR: Requested format is not available"],
+                failure_kind=YtdlpFailureKind.FORMAT_UNAVAILABLE,
+                stage=YTDLP_STAGE_DOWNLOAD,
+                part=PART_VIDEO,
+                command=command,
+            )
+
+        def fake_select(*args):
+            select_calls.append(args)
+            raise AssertionError("Strict format failure should not select staged files")
+
+        with _patched_runtime(paths), _patched_attr(downloader, "_run_ytdlp_with_retries", fake_retry), _patched_attr(
+            downloader, "_select_staged_file", fake_select
+        ):
+            try:
+                downloader._download_video(
+                    VIDEO_ID,
+                    "001 Title",
+                    root,
+                    root / "fast.mp4",
+                    options,
+                    _noop_log,
+                    aria2_validation=_aria2_validation(paths),
+                )
+            except YtdlpExecutionError as exc:
+                _assert(
+                    exc.failure_kind == YtdlpFailureKind.FORMAT_UNAVAILABLE,
+                    "Format-unavailable classification was not preserved",
+                )
+            else:
+                raise AssertionError("Format-unavailable error did not propagate")
+
+    _assert(len(retry_calls) == 1, f"Unexpected format retry count: {len(retry_calls)}")
+    command_text = _joined(retry_calls[0])
+    _assert(downloader.PREMIERE_SAFE_VIDEO_FORMAT in command_text, "Strict selector was not used")
+    _assert("bestvideo" not in command_text, "Strict failure retried with unrestricted bestvideo")
+    _assert("bestaudio" not in command_text, "Strict failure retried with unrestricted bestaudio")
+    _assert("libx264" not in command_text, "Strict failure triggered transcode fallback")
+    _assert(not select_calls, "Strict failure attempted staged file selection")
 
 
-def _video(video_id: str):
+def _test_runtime_logs_describe_engine_only_difference() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        paths = _runtime_paths(root)
+        logs: list[str] = []
+        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+        with _patched_runtime(paths), _patched_attr(
+            downloader,
+            "_get_command_version",
+            lambda *args, **kwargs: "aria2 version 1.37.0",
+        ):
+            validation = downloader._prepare_media_downloader_runtime(options, logs.append)
+
+    _assert(validation.available, "Fast runtime validation did not succeed")
+    text = "\n".join(logs)
+    for expected in (
+        "Download engine: aria2c accelerated media transfer",
+        "Fast pipeline: Stable-equivalent format selection, cookies, retries, merge, validation and promotion.",
+        "Fast format: MP4 H.264/AAC only, max 1080p.",
+        "aria2c profile: connections=16 splits=16 jobs=16 piece=1M",
+        "Fast post-processing: merge/remux only; no full video transcode.",
+    ):
+        _assert(expected in text, f"Fast runtime log missing: {expected}")
+    for forbidden in (
+        "BAT-compatible",
+        "ios,web",
+        "bestvideo+bestaudio",
+        "libx264",
+        "crf=18",
+        "Fast batch phase 1/2",
+        "Fast batch phase 2/2",
+        "cookies.txt",
+        "Authorization:",
+        "X-Goog",
+        "signature=",
+    ):
+        _assert(forbidden not in text, f"Fast runtime log exposed forbidden text: {forbidden}")
+
+
+def _test_stable_runtime_does_not_require_aria2() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        paths = _runtime_paths(root, aria2=False)
+        logs: list[str] = []
+        options = _options(root, DOWNLOAD_ENGINE_STABLE)
+        with _patched_runtime(paths):
+            validation = downloader._prepare_media_downloader_runtime(options, logs.append)
+
+    _assert(not validation.available, "Stable runtime unexpectedly required aria2")
+    _assert(any("stable yt-dlp internal" in line for line in logs), "Stable runtime log missing")
+
+
+def _fast_video_command(
+    root: Path | None = None,
+    paths=None,
+    options: DownloadOptions | None = None,
+) -> list[str]:
+    if root is None:
+        with TemporaryDirectory() as tmp:
+            return _fast_video_command(Path(tmp))
+    if paths is None:
+        paths = _runtime_paths(root)
+    if options is None:
+        options = _options(root, DOWNLOAD_ENGINE_ARIA2_FAST)
+    with _patched_runtime(paths):
+        return downloader._build_fast_video_ytdlp_command(
+            VIDEO_ID,
+            root,
+            options,
+            _aria2_validation(paths),
+        )
+
+
+def _runtime_paths(root: Path, *, aria2: bool = True):
+    bin_dir = root / "data" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    ytdlp = bin_dir / "yt-dlp.exe"
+    ffmpeg = bin_dir / "ffmpeg.exe"
+    ytdlp.write_text("yt-dlp", encoding="utf-8")
+    ffmpeg.write_text("ffmpeg", encoding="utf-8")
+    aria2_path = bin_dir / "aria2c.exe"
+    if aria2:
+        aria2_path.write_text("aria2", encoding="utf-8")
     return SimpleNamespace(
-        video_id=video_id,
-        title=video_id,
-        sanitized_filename_base=video_id,
-        thumbnail_url="",
-        status="",
+        root=root,
+        bin=bin_dir,
+        ytdlp=ytdlp,
+        ffmpeg=ffmpeg,
+        aria2=aria2_path,
     )
 
 
-def _options(root: Path, engine: str) -> DownloadOptions:
+def _aria2_validation(paths):
+    return downloader._Aria2RuntimeValidation(True, paths.aria2.exists(), paths.aria2)
+
+
+def _options(
+    root: Path,
+    engine: str,
+    *,
+    cookies_enabled: bool = False,
+    cookies_path: str = "",
+) -> DownloadOptions:
     return DownloadOptions(
-        base_folder=str(root),
+        base_folder=str(root / "downloads"),
         channel_id=CHANNEL_ID,
         channel_name=CHANNEL_NAME,
-        download_engine=engine,
+        cookies_enabled=cookies_enabled,
+        cookies_path=cookies_path,
         download_mode=MODE_VIDEO_THUMB,
+        download_engine=engine,
         file_start_number=1,
     )
 
 
-def _runtime_paths(root: Path, *, aria2: bool) -> dict[str, Path]:
-    paths = {
-        "yt-dlp.exe": root / "yt-dlp.exe",
-        "ffmpeg.exe": root / "ffmpeg.exe",
-        "deno.exe": root / "deno.exe",
-        "aria2c.exe": root / "aria2c.exe",
-    }
-    paths["yt-dlp.exe"].write_bytes(b"")
-    paths["ffmpeg.exe"].write_bytes(b"")
-    paths["deno.exe"].write_bytes(b"")
-    if aria2:
-        paths["aria2c.exe"].write_bytes(b"")
-    return paths
+@contextmanager
+def _patched_runtime(paths):
+    def fake_runtime_file(filename: str) -> Path:
+        if filename == "yt-dlp.exe":
+            return paths.ytdlp
+        if filename == "ffmpeg.exe":
+            return paths.ffmpeg
+        if filename == "aria2c.exe":
+            return paths.aria2
+        if filename == "deno.exe":
+            return paths.bin / "deno.exe"
+        return paths.root / filename
 
-
-def _aria2_validation(paths: dict[str, Path]) -> downloader._Aria2RuntimeValidation:
-    return downloader._Aria2RuntimeValidation(True, True, paths["aria2c.exe"])
+    with _patched_attr(downloader, "runtime_file", fake_runtime_file):
+        yield
 
 
 @contextmanager
-def _patched_runtime(paths: dict[str, Path]):
-    old_runtime_file = downloader.runtime_file
+def _patched_attr(target, name: str, value):
+    missing = object()
+    old_value = getattr(target, name, missing)
+    setattr(target, name, value)
     try:
-        downloader.runtime_file = lambda filename: paths.get(filename, Path(filename))
         yield
     finally:
-        downloader.runtime_file = old_runtime_file
+        if old_value is missing:
+            delattr(target, name)
+        else:
+            setattr(target, name, old_value)
 
 
-@contextmanager
-def _patched_version(version: str):
-    old_get_version = downloader._get_command_version
-    try:
-        downloader._get_command_version = lambda *_args, **_kwargs: version
-        yield
-    finally:
-        downloader._get_command_version = old_get_version
-
-
-def _output_path(command: list[str], extension: str) -> Path:
-    output_template = _option_value(command, "-o")
-    _assert(output_template, "command did not contain output template")
-    path = Path(output_template.replace("%(ext)s", extension))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
+def _remove_aria2_options(command: list[str]) -> list[str]:
+    result: list[str] = []
+    index = 0
+    while index < len(command):
+        value = command[index]
+        if value in {"--downloader", "--downloader-args"}:
+            index += 2
+            continue
+        result.append(value)
+        index += 1
+    return result
 
 
 def _option_value(command: list[str], option: str) -> str:
-    try:
-        index = command.index(option)
-    except ValueError:
-        return ""
-    if index + 1 >= len(command):
-        return ""
-    return command[index + 1]
-
-
-def _set_mtime_ns(path: Path, modified_ns: int) -> None:
-    os.utime(path, ns=(modified_ns, modified_ns))
-
-
-def _contains_aria2(command: list[str]) -> bool:
-    return any("aria2" in str(value).lower() for value in command)
-
-
-def _assert_stable_video_command(command: list[str]) -> None:
-    _assert(_option_value(command, "-N") == "1", "Stable command missed -N 1")
-    _assert(_option_value(command, "-f") == downloader.PREMIERE_SAFE_VIDEO_FORMAT, "Stable command missed Premiere-safe selector")
-    _assert("--http-chunk-size" in command, "Stable command lost chunk setting")
-    _assert("--downloader" not in command, "Stable command used external downloader")
-    _assert("--downloader-args" not in command, "Stable command used external downloader args")
-    _assert("--extractor-args" not in command, "Stable command used Fast extractor args")
-    _assert(not _contains_aria2(command), "Stable command contained aria2")
-
-
-def _sanitize_command_for_probe(command: list[str]) -> list[str]:
-    sanitized: list[str] = []
-    skip_next = False
     for index, value in enumerate(command):
-        if skip_next:
-            skip_next = False
-            continue
-        if value == "--cookies":
-            sanitized.extend(["--cookies", "<cookies>"])
-            skip_next = True
-            continue
-        if value == "--downloader":
-            sanitized.extend(["--downloader", "<aria2c.exe>"])
-            skip_next = True
-            continue
-        if value == "--ffmpeg-location":
-            sanitized.extend(["--ffmpeg-location", "<ffmpeg-bin>"])
-            skip_next = True
-            continue
-        if index == 0 and str(value).lower().endswith("yt-dlp.exe"):
-            sanitized.append("<yt-dlp.exe>")
-            continue
-        sanitized.append(str(value))
-    return sanitized
+        if value == option and index + 1 < len(command):
+            return str(command[index + 1])
+    return ""
+
+
+def _option_count(command: list[str], option: str) -> int:
+    return sum(1 for value in command if value == option)
+
+
+def _joined(command: list[str]) -> str:
+    return " ".join(str(value) for value in command)
+
+
+def _noop_log(_message: str) -> None:
+    return None
 
 
 def _assert(condition: bool, message: str) -> None:

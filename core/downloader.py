@@ -88,17 +88,7 @@ YTDLP_COOKIES_OPTION = "--cookies"
 DOWNLOAD_ENGINE_STABLE = "stable"
 DOWNLOAD_ENGINE_ARIA2_FAST = "aria2_fast"
 DEFAULT_DOWNLOAD_ENGINE = DOWNLOAD_ENGINE_STABLE
-ARIA2_FAST_EXTRACTOR_ARGS = "youtube:player_client=ios,web"
-ARIA2_FAST_VIDEO_FORMAT = (
-    "bestvideo[height<=1080]+bestaudio/"
-    "best[height<=1080]/best"
-)
-ARIA2_FAST_AUDIO_FORMAT = "bestaudio/best"
 ARIA2_FAST_DOWNLOADER_ARGS = "aria2c:-x 16 -s 16 -j 16 -k 1M"
-ARIA2_FAST_TRANSCODE_VIDEO_CODEC = "libx264"
-ARIA2_FAST_TRANSCODE_PRESET = "slow"
-ARIA2_FAST_TRANSCODE_CRF = "18"
-ARIA2_FAST_TRANSCODE_AUDIO_CODEC = "aac"
 ARIA2_VERSION_TIMEOUT_SECONDS = 3.0
 OUTPUT_NUMBER_MIN_WIDTH = 3
 _NUMBERED_OUTPUT_PREFIX_PATTERN = re.compile(r"^\d{3,}\s+")
@@ -431,22 +421,6 @@ class _Aria2RuntimeValidation:
     requested: bool
     available: bool
     path: Path
-
-
-@dataclass
-class _FastBatchVideoJob:
-    video: object
-    selected_index: int
-    assigned_number: int
-    stem: str
-    paths: OutputPaths
-    staging_dir: Path
-    source_mp4_path: Path | None = None
-    video_download_error: BaseException | None = None
-    thumbnail_completed: bool = False
-    conversion_completed: bool = False
-    audio_completed: bool = False
-    skipped: bool = False
 
 
 @dataclass
@@ -858,8 +832,6 @@ def _make_cookie_media_lookahead_callback(
     log,
     cancel_controller: DownloadController | None,
 ):
-    if _normalize_download_engine(options.download_engine) != DOWNLOAD_ENGINE_STABLE:
-        return None
     candidate = _find_cookie_media_lookahead_candidate(videos, next_start_index, options)
     if candidate is None:
         return None
@@ -889,8 +861,6 @@ def _start_cookie_media_lookahead(
     log,
     cancel_controller: DownloadController | None,
 ) -> None:
-    if _normalize_download_engine(options.download_engine) != DOWNLOAD_ENGINE_STABLE:
-        return
     if batch_state is None or not options.cookies_enabled or not video_id:
         return
     if _cancel_requested(cancel_controller):
@@ -1053,8 +1023,6 @@ def _video_attempt_state_for_batch(
     log,
     cancel_controller: DownloadController | None,
 ) -> tuple[_YtdlpAttemptState, _CookieMediaPrefetch | None]:
-    if _normalize_download_engine(options.download_engine) != DOWNLOAD_ENGINE_STABLE:
-        return _YtdlpAttemptState(), None
     prefetched = _take_cookie_media_lookahead(
         batch_state,
         video_id,
@@ -1164,507 +1132,6 @@ def _log_batch_summary(
         _emit_progress_event(progress_callback, ProgressEvent(kind="batch_complete"))
 
 
-def _handle_fast_batch_part_error(
-    exc: BaseException,
-    options: DownloadOptions,
-    video,
-    paths: OutputPaths,
-    part: str | None,
-    index: int,
-    video_total: int,
-    log,
-    status_callback,
-    progress_callback,
-    run_parts: tuple[str, ...] | None = None,
-) -> str:
-    _mark_part_error(options, video, paths, part)
-    final_status = _reconcile_current_item(
-        options,
-        video,
-        paths,
-        log,
-        status_callback,
-        run_parts=run_parts,
-    )
-    if isinstance(exc, YtdlpExecutionError):
-        _emit_ytdlp_error_progress(progress_callback, video, index, video_total, exc, options.cookies_enabled)
-        _log_friendly_ytdlp_error(log, exc, options)
-        if exc.missing_js_runtime and not _deno_runtime_path().exists() and (exc.bot_check or exc.http_403):
-            _log_missing_js_runtime_warning(log, exc.output_lines)
-    elif isinstance(exc, FFmpegExecutionError):
-        _emit_ffmpeg_error_progress(progress_callback, video, index, video_total, exc)
-        _log_friendly_ffmpeg_error(log, exc)
-    else:
-        technical = f"{type(exc).__name__}: {exc}" if not isinstance(exc, DownloadError) else str(exc)
-        if technical == OUTPUT_PATH_TOO_LONG_MESSAGE:
-            _emit_general_error_progress(progress_callback, video, index, video_total, "Path too long")
-            _log_friendly_general_error(log, "Path too long", [technical])
-        else:
-            _emit_general_error_progress(progress_callback, video, index, video_total, technical)
-        _log_friendly_general_error(log, technical, [technical])
-    return final_status
-
-
-def _download_fast_video_batch_two_phase(
-    videos: list,
-    options: DownloadOptions,
-    log,
-    status_callback,
-    cancel_controller: DownloadController | None,
-    progress_callback,
-    aria2_validation: _Aria2RuntimeValidation,
-) -> tuple[int, int, int, bool]:
-    downloaded_count = 0
-    failed_count = 0
-    skipped_count = 0
-    cancelled = False
-    mode_parts = required_parts(options.download_mode)
-    video_total = len(videos)
-    queued_jobs: list[_FastBatchVideoJob] = []
-    channel_dir = build_output_paths(options.base_folder, options.channel_name, "fast-batch").channel_dir
-
-    log("[INFO] Fast batch phase 1/2: downloading all source videos and thumbnails.")
-    _emit_progress(progress_callback, "Fast phase 1/2", message="Downloading sources")
-
-    with _fast_batch_staging_directory(channel_dir, log) as batch_staging_root:
-        for index, video in enumerate(videos, start=1):
-            if _cancel_requested(cancel_controller):
-                cancelled = True
-                break
-
-            assigned_number, stem, paths = _prepare_numbered_output_for_video(video, options, index - 1)
-            log(f"[INFO] Starting download: {index}/{video_total}")
-            log(f"[INFO] Assigned output number: {_format_output_number(assigned_number)}")
-            log(f"[INFO] Mode: {options.download_mode}")
-
-            try:
-                _validate_output_paths(paths, mode_parts)
-            except DownloadError as exc:
-                failed_count += 1
-                _handle_fast_batch_part_error(
-                    exc,
-                    options,
-                    video,
-                    paths,
-                    None,
-                    index,
-                    video_total,
-                    log,
-                    status_callback,
-                    progress_callback,
-                )
-                continue
-
-            missing_parts = _missing_parts_for_current_paths(options, video, paths, mode_parts)
-            if not missing_parts:
-                entry = get_video_entry(options.channel_id, video.video_id)
-                skipped_count += 1
-                log(f"[SKIP] {stem} already complete for current numbered paths")
-                _emit_progress(progress_callback, "Skipped", video, index, video_total)
-                video.status = get_effective_status(entry, options.download_mode)
-                status_callback(video)
-                continue
-
-            staging_dir = _create_fast_job_staging_directory(
-                batch_staging_root,
-                assigned_number,
-                str(video.video_id),
-                log,
-            )
-            job = _FastBatchVideoJob(
-                video=video,
-                selected_index=index - 1,
-                assigned_number=assigned_number,
-                stem=stem,
-                paths=paths,
-                staging_dir=staging_dir,
-            )
-            run_parts_current_run: list[str] = []
-            source_ready = False
-            item_skipped = False
-            item_failed = False
-            phase2_existing_video_audio = False
-
-            if PART_VIDEO in missing_parts:
-                _remember_run_part(run_parts_current_run, PART_VIDEO)
-                log(f"[INFO] Downloading {stem}.mp4")
-                log("[INFO] Fast mode: BAT-compatible yt-dlp + aria2 source download queued for later conversion.")
-                _emit_progress(
-                    progress_callback,
-                    "Fast phase 1/2",
-                    video,
-                    index,
-                    video_total,
-                    message=f"Downloading {stem}.mp4",
-                )
-                previous_progress = _set_progress_context(
-                    progress_callback,
-                    video,
-                    index,
-                    video_total,
-                    "Fast phase 1/2",
-                )
-                try:
-                    job.source_mp4_path = _download_fast_video_source(
-                        str(video.video_id),
-                        staging_dir,
-                        options,
-                        log,
-                        cancel_controller,
-                        aria2_validation,
-                    )
-                    source_ready = True
-                except DownloadCancelled:
-                    cancelled = True
-                    break
-                except SkipCurrentVideo:
-                    job.skipped = True
-                    item_skipped = True
-                    skipped_count += 1
-                    log(f"[SKIP] Skipped current video after user decision: {stem}")
-                    _emit_progress(progress_callback, "Skipped", video, index, video_total)
-                    _reconcile_current_item(
-                        options,
-                        video,
-                        paths,
-                        log,
-                        status_callback,
-                        run_parts=None,
-                    )
-                    continue
-                except (YtdlpExecutionError, FFmpegExecutionError, DownloadError, PermissionError, Exception) as exc:
-                    job.video_download_error = exc
-                    item_failed = True
-                    _handle_fast_batch_part_error(
-                        exc,
-                        options,
-                        video,
-                        paths,
-                        PART_VIDEO,
-                        index,
-                        video_total,
-                        log,
-                        status_callback,
-                        progress_callback,
-                        run_parts=tuple(run_parts_current_run) or None,
-                    )
-                finally:
-                    _restore_progress_context(previous_progress)
-            elif PART_AUDIO in missing_parts and _part_output_ready(paths, PART_VIDEO):
-                job.conversion_completed = True
-                phase2_existing_video_audio = True
-
-            if cancelled or _cancel_requested(cancel_controller):
-                cancelled = True
-                break
-
-            if PART_THUMB in missing_parts and not job.skipped:
-                _remember_run_part(run_parts_current_run, PART_THUMB)
-                log(f"[INFO] Downloading thumbnail {stem}.jpg")
-                _emit_progress(
-                    progress_callback,
-                    "Thumbnail",
-                    video,
-                    index,
-                    video_total,
-                    message=f"Downloading {stem}.jpg",
-                )
-                previous_progress = _set_progress_context(
-                    progress_callback,
-                    video,
-                    index,
-                    video_total,
-                    "Thumbnail",
-                )
-                try:
-                    _download_thumbnail(
-                        video,
-                        stem,
-                        staging_dir,
-                        paths.thumb_path,
-                        options,
-                        log,
-                        cancel_controller,
-                        _YtdlpAttemptState(),
-                    )
-                    update_video_part_state(
-                        options.channel_id,
-                        options.channel_name,
-                        options.base_folder,
-                        video,
-                        paths,
-                        PART_THUMB,
-                        STATUS_DOWNLOADED,
-                        options.download_mode,
-                    )
-                    job.thumbnail_completed = True
-                    entry = get_video_entry(options.channel_id, video.video_id)
-                    video.status = get_effective_status(entry, options.download_mode)
-                    status_callback(video)
-                    log(_part_success_message(PART_THUMB, stem))
-                    _emit_progress(progress_callback, "Thumbnail", video, index, video_total, message="Completed")
-                except DownloadCancelled:
-                    cancelled = True
-                    break
-                except SkipCurrentVideo:
-                    job.skipped = True
-                    item_skipped = True
-                    skipped_count += 1
-                    log(f"[SKIP] Skipped current video after user decision: {stem}")
-                    _emit_progress(progress_callback, "Skipped", video, index, video_total)
-                    _reconcile_current_item(
-                        options,
-                        video,
-                        paths,
-                        log,
-                        status_callback,
-                        run_parts=None,
-                    )
-                    continue
-                except (YtdlpExecutionError, FFmpegExecutionError, DownloadError, PermissionError, Exception) as exc:
-                    item_failed = True
-                    _handle_fast_batch_part_error(
-                        exc,
-                        options,
-                        video,
-                        paths,
-                        PART_THUMB,
-                        index,
-                        video_total,
-                        log,
-                        status_callback,
-                        progress_callback,
-                        run_parts=tuple(run_parts_current_run) or None,
-                    )
-                finally:
-                    _restore_progress_context(previous_progress)
-
-            if cancelled or _cancel_requested(cancel_controller):
-                cancelled = True
-                break
-
-            if item_skipped or job.skipped:
-                continue
-
-            if source_ready and job.source_mp4_path is not None:
-                queued_jobs.append(job)
-                continue
-
-            if phase2_existing_video_audio:
-                queued_jobs.append(job)
-                continue
-
-            if item_failed:
-                _reconcile_current_item(
-                    options,
-                    video,
-                    paths,
-                    log,
-                    status_callback,
-                    run_parts=tuple(run_parts_current_run) or None,
-                )
-                failed_count += 1
-            else:
-                final_status = _reconcile_current_item(
-                    options,
-                    video,
-                    paths,
-                    log,
-                    status_callback,
-                    run_parts=tuple(run_parts_current_run) or None,
-                )
-                if final_status == STATUS_DOWNLOADED:
-                    downloaded_count += 1
-                    log(f"[SUCCESS] Downloaded {_success_file_list(stem, options.download_mode)}")
-                else:
-                    failed_count += 1
-                    _emit_progress(
-                        progress_callback,
-                        "Error",
-                        video,
-                        index,
-                        video_total,
-                        message="Not fully downloaded",
-                        kind="error",
-                    )
-
-        if cancelled:
-            return downloaded_count, failed_count, skipped_count, True
-
-        _raise_if_cancelled(cancel_controller)
-        log("[INFO] Fast batch phase 2/2: converting downloaded source videos.")
-        _emit_progress(progress_callback, "Fast phase 2/2", message="Converting videos")
-
-        for job in queued_jobs:
-            if job.skipped:
-                continue
-
-            index = job.selected_index + 1
-            video = job.video
-            stem = job.stem
-            paths = job.paths
-            run_parts_current_run: list[str] = []
-            current_part = None
-
-            if _cancel_requested(cancel_controller):
-                cancelled = True
-                break
-
-            try:
-                if not job.conversion_completed:
-                    current_part = PART_VIDEO
-                    _remember_run_part(run_parts_current_run, PART_VIDEO)
-                    _emit_progress(
-                        progress_callback,
-                        "Fast phase 2/2",
-                        video,
-                        index,
-                        video_total,
-                        message=f"Converting {stem}.mp4",
-                    )
-                    previous_progress = _set_progress_context(
-                        progress_callback,
-                        video,
-                        index,
-                        video_total,
-                        "Fast phase 2/2",
-                    )
-                    try:
-                        if job.source_mp4_path is None:
-                            raise DownloadError("Fast source MP4 missing before conversion")
-                        _convert_and_promote_fast_video(
-                            job.source_mp4_path,
-                            job.staging_dir,
-                            paths.video_path,
-                            log,
-                            cancel_controller,
-                        )
-                    finally:
-                        _restore_progress_context(previous_progress)
-                    update_video_part_state(
-                        options.channel_id,
-                        options.channel_name,
-                        options.base_folder,
-                        video,
-                        paths,
-                        PART_VIDEO,
-                        STATUS_DOWNLOADED,
-                        options.download_mode,
-                    )
-                    job.conversion_completed = True
-                    entry = get_video_entry(options.channel_id, video.video_id)
-                    video.status = get_effective_status(entry, options.download_mode)
-                    status_callback(video)
-                    log(_part_success_message(PART_VIDEO, stem))
-                    _emit_progress(progress_callback, "Video", video, index, video_total, message="Completed")
-
-                if PART_AUDIO in mode_parts and not _part_output_ready(paths, PART_AUDIO):
-                    current_part = PART_AUDIO
-                    _remember_run_part(run_parts_current_run, PART_AUDIO)
-                    _emit_progress(
-                        progress_callback,
-                        "MP3",
-                        video,
-                        index,
-                        video_total,
-                        message=f"Extracting {stem}.mp3",
-                    )
-                    previous_progress = _set_progress_context(
-                        progress_callback,
-                        video,
-                        index,
-                        video_total,
-                        "MP3",
-                    )
-                    try:
-                        _extract_mp3_from_video(
-                            paths.video_path,
-                            job.staging_dir,
-                            paths.audio_path,
-                            log,
-                            cancel_controller,
-                        )
-                    finally:
-                        _restore_progress_context(previous_progress)
-                    update_video_part_state(
-                        options.channel_id,
-                        options.channel_name,
-                        options.base_folder,
-                        video,
-                        paths,
-                        PART_AUDIO,
-                        STATUS_DOWNLOADED,
-                        options.download_mode,
-                    )
-                    job.audio_completed = True
-                    entry = get_video_entry(options.channel_id, video.video_id)
-                    video.status = get_effective_status(entry, options.download_mode)
-                    status_callback(video)
-                    log(_part_success_message(PART_AUDIO, stem))
-                    _emit_progress(progress_callback, "MP3", video, index, video_total, message="Completed")
-
-                final_status = _reconcile_current_item(
-                    options,
-                    video,
-                    paths,
-                    log,
-                    status_callback,
-                    run_parts=tuple(run_parts_current_run) or None,
-                )
-                if final_status == STATUS_DOWNLOADED:
-                    downloaded_count += 1
-                    log(f"[SUCCESS] Downloaded {_success_file_list(stem, options.download_mode)}")
-                else:
-                    failed_count += 1
-                    _emit_progress(
-                        progress_callback,
-                        "Error",
-                        video,
-                        index,
-                        video_total,
-                        message="Not fully downloaded",
-                        kind="error",
-                    )
-            except DownloadCancelled:
-                cancelled = True
-                break
-            except SkipCurrentVideo:
-                skipped_count += 1
-                _reconcile_current_item(
-                    options,
-                    video,
-                    paths,
-                    log,
-                    status_callback,
-                    run_parts=tuple(run_parts_current_run) or None,
-                )
-                log(f"[SKIP] Skipped current video after user decision: {stem}")
-                _emit_progress(progress_callback, "Skipped", video, index, video_total)
-                continue
-            except (YtdlpExecutionError, FFmpegExecutionError, DownloadError, PermissionError, Exception) as exc:
-                _remember_run_part(run_parts_current_run, current_part)
-                final_status = _handle_fast_batch_part_error(
-                    exc,
-                    options,
-                    video,
-                    paths,
-                    current_part,
-                    index,
-                    video_total,
-                    log,
-                    status_callback,
-                    progress_callback,
-                    run_parts=tuple(run_parts_current_run) or None,
-                )
-                if final_status == STATUS_DOWNLOADED:
-                    downloaded_count += 1
-                    log(f"[SUCCESS] Downloaded {_success_file_list(stem, options.download_mode)}")
-                else:
-                    failed_count += 1
-
-    return downloaded_count, failed_count, skipped_count, cancelled
-
-
 def download_items(
     videos: list,
     options: DownloadOptions,
@@ -1690,25 +1157,14 @@ def download_items(
 
     if options.cookies_enabled:
         log("[INFO] Cookies enabled: yes")
-        if engine == DOWNLOAD_ENGINE_STABLE:
-            log("[INFO] yt-dlp will receive an isolated per-attempt cookies.txt copy.")
-        else:
-            log("[INFO] Fast mode will pass the selected cookies file directly to yt-dlp.")
+        log("[INFO] yt-dlp will receive an isolated per-attempt cookies.txt copy.")
+        if engine == DOWNLOAD_ENGINE_ARIA2_FAST:
+            log(
+                "[INFO] Fast mode uses the same cookie, retry, HTTP 403 fallback "
+                "and lookahead pipeline as Stable."
+            )
     if _deno_runtime_path().exists():
         log("[INFO] Deno runtime found. JavaScript challenge solving enabled.")
-
-    if engine == DOWNLOAD_ENGINE_ARIA2_FAST and PART_VIDEO in mode_parts:
-        downloaded_count, failed_count, skipped_count, cancelled = _download_fast_video_batch_two_phase(
-            videos,
-            options,
-            log,
-            status_callback,
-            cancel_controller,
-            progress_callback,
-            aria2_validation,
-        )
-        _log_batch_summary(downloaded_count, failed_count, skipped_count, cancelled, log, progress_callback)
-        return
 
     for index, video in enumerate(videos, start=1):
         if _cancel_requested(cancel_controller):
@@ -1742,10 +1198,12 @@ def download_items(
                     if part == PART_VIDEO:
                         _remember_run_part(run_parts_current_run, part)
                         log(f"[INFO] Downloading {stem}.mp4")
-                        if engine == DOWNLOAD_ENGINE_STABLE:
-                            log("[INFO] Premiere-safe mode: MP4 H.264/AAC only, max 1080p.")
-                        else:
-                            log("[INFO] Fast mode: BAT-compatible yt-dlp + aria2, then FFmpeg Premiere-safe conversion.")
+                        log("[INFO] Premiere-safe mode: MP4 H.264/AAC only, max 1080p.")
+                        if engine == DOWNLOAD_ENGINE_ARIA2_FAST:
+                            log(
+                                "[INFO] Fast mode: aria2c handles media transfer; format selection, "
+                                "cookies, retries, merge, validation and promotion match Stable."
+                            )
                         _emit_progress(progress_callback, "Video", video, index, video_total, message="Downloading...")
                         previous_progress = _set_progress_context(
                             progress_callback, video, index, video_total, "Video"
@@ -1782,10 +1240,12 @@ def download_items(
                                 current_part = PART_VIDEO
                                 _remember_run_part(run_parts_current_run, PART_VIDEO)
                                 log(f"[INFO] Local MP4 missing or invalid; downloading {stem}.mp4 for MP3 extraction.")
-                                if engine == DOWNLOAD_ENGINE_STABLE:
-                                    log("[INFO] Premiere-safe mode: MP4 H.264/AAC only, max 1080p.")
-                                else:
-                                    log("[INFO] Fast mode: BAT-compatible yt-dlp + aria2, then FFmpeg Premiere-safe conversion.")
+                                log("[INFO] Premiere-safe mode: MP4 H.264/AAC only, max 1080p.")
+                                if engine == DOWNLOAD_ENGINE_ARIA2_FAST:
+                                    log(
+                                        "[INFO] Fast mode: aria2c handles media transfer; format selection, "
+                                        "cookies, retries, merge, validation and promotion match Stable."
+                                    )
                                 _emit_progress(
                                     progress_callback, "Video", video, index, video_total, message="Downloading..."
                                 )
@@ -2145,45 +1605,11 @@ def _download_video(
     if final_path.exists() and _premiere_safe_mp4_ready_for_download(final_path, cancel_controller):
         return
 
-    engine = _normalize_download_engine(options.download_engine)
-    if engine == DOWNLOAD_ENGINE_ARIA2_FAST:
-        if aria2_validation is None:
-            raise DownloadError(_aria2_unavailable_message())
-        _download_video_fast_bat_compatible(
-            video_id,
-            temp_dir,
-            final_path,
-            options,
-            log,
-            cancel_controller,
-            aria2_validation,
-        )
-        return
-
-    _download_video_stable(
-        video_id,
-        temp_dir,
-        final_path,
-        options,
-        log,
-        cancel_controller,
-        cookie_retry_state,
-    )
-
-
-def _download_video_stable(
-    video_id: str,
-    temp_dir: Path,
-    final_path: Path,
-    options: DownloadOptions,
-    log,
-    cancel_controller: DownloadController | None,
-    cookie_retry_state: _YtdlpAttemptState | None,
-) -> None:
-    command = _build_stable_video_ytdlp_command(
+    command = _build_video_ytdlp_command(
         video_id,
         temp_dir,
         options,
+        aria2_validation=aria2_validation,
     )
     _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
     staged_mp4_path = _select_staged_file(temp_dir, "*.mp4", ".mp4")
@@ -2198,150 +1624,6 @@ def _download_video_stable(
     )
     if not _final_file_ready(final_path):
         raise DownloadError("video download failed")
-
-
-def _download_video_fast_bat_compatible(
-    video_id: str,
-    temp_dir: Path,
-    final_path: Path,
-    options: DownloadOptions,
-    log,
-    cancel_controller: DownloadController | None,
-    aria2_validation: _Aria2RuntimeValidation,
-) -> None:
-    source_mp4 = _download_fast_video_source(
-        video_id,
-        temp_dir,
-        options,
-        log,
-        cancel_controller,
-        aria2_validation,
-    )
-    _convert_and_promote_fast_video(source_mp4, temp_dir, final_path, log, cancel_controller)
-
-
-def _download_fast_video_source(
-    video_id: str,
-    staging_dir: Path,
-    options: DownloadOptions,
-    log,
-    cancel_controller: DownloadController | None,
-    aria2_validation: _Aria2RuntimeValidation,
-) -> Path:
-    command = _build_fast_video_ytdlp_command(
-        video_id,
-        staging_dir,
-        options,
-        aria2_validation=aria2_validation,
-    )
-
-    ytdlp_error: YtdlpExecutionError | None = None
-    try:
-        _run_fast_ytdlp_command(command, options, log, cancel_controller, part=PART_VIDEO)
-    except YtdlpExecutionError as exc:
-        ytdlp_error = exc
-
-    _raise_if_cancelled(cancel_controller)
-
-    source_mp4 = _select_fast_source_mp4(staging_dir, video_id)
-    if source_mp4 is None:
-        if ytdlp_error is not None:
-            raise ytdlp_error
-        raise DownloadError("Fast yt-dlp completed without creating a usable MP4")
-
-    if ytdlp_error is not None:
-        log(
-            "[WARNING] Fast yt-dlp reported an error, but a staged MP4 exists. "
-            "The source will be queued for BAT-compatible conversion."
-        )
-
-    return source_mp4
-
-
-def _convert_and_promote_fast_video(
-    source_mp4_path: Path,
-    staging_dir: Path,
-    final_path: Path,
-    log,
-    cancel_controller: DownloadController | None,
-) -> None:
-    _raise_if_cancelled(cancel_controller)
-    _emit_current_progress("Processing", message="Converting Fast download to Premiere-safe MP4")
-    fixed_mp4 = _transcode_fast_video_like_bat(source_mp4_path, staging_dir, log, cancel_controller)
-
-    _emit_current_progress("Validating MP4")
-    _validate_premiere_safe_mp4_for_download(fixed_mp4, log, True, cancel_controller)
-    _atomic_promote_with_retry(
-        fixed_mp4,
-        final_path,
-        log,
-        replace_existing=True,
-        cancel_controller=cancel_controller,
-    )
-    if not _final_file_ready(final_path):
-        raise DownloadError("Fast video conversion or promotion failed")
-
-    if source_mp4_path != fixed_mp4 and source_mp4_path.exists():
-        try:
-            source_mp4_path.unlink()
-        except OSError:
-            log("[WARNING] Could not remove the original Fast staging MP4.")
-
-
-def _select_fast_source_mp4(temp_dir: Path, video_id: str) -> Path | None:
-    expected_stem = _safe_temp_stem(video_id)
-    expected_path = temp_dir / f"{expected_stem}.mp4"
-
-    def usable(path: Path) -> bool:
-        try:
-            return (
-                path.is_file()
-                and path.suffix.lower() == ".mp4"
-                and not path.name.lower().endswith("_fixed.mp4")
-                and path.stat().st_size > 0
-            )
-        except OSError:
-            return False
-
-    if usable(expected_path):
-        return expected_path
-
-    candidates: list[Path] = []
-    try:
-        paths = list(temp_dir.glob("*.mp4"))
-    except OSError:
-        return None
-
-    for path in paths:
-        if usable(path):
-            candidates.append(path)
-
-    if not candidates:
-        return None
-
-    fragment_pattern = re.compile(r"\.f\d+\.mp4$", re.IGNORECASE)
-
-    def candidate_priority(path: Path) -> tuple[int, int, int, str]:
-        name = path.name
-        is_format_fragment = bool(fragment_pattern.search(name))
-        try:
-            stat = path.stat()
-        except OSError:
-            modified_ns = 0
-            size = 0
-        else:
-            modified_ns = stat.st_mtime_ns
-            size = stat.st_size
-
-        return (
-            1 if is_format_fragment else 0,
-            -modified_ns,
-            -size,
-            name.lower(),
-        )
-
-    candidates.sort(key=candidate_priority)
-    return candidates[0]
 
 
 def _build_stable_video_ytdlp_command(
@@ -2378,10 +1660,11 @@ def _build_fast_video_ytdlp_command(
     return _base_fast_ytdlp_command(
         options,
         aria2_validation,
-        ignore_errors=True,
     ) + [
+        "-N",
+        "1",
         "-f",
-        ARIA2_FAST_VIDEO_FORMAT,
+        PREMIERE_SAFE_VIDEO_FORMAT,
         "--merge-output-format",
         "mp4",
         "--no-write-info-json",
@@ -2424,24 +1707,13 @@ def _download_audio(
     cookie_retry_state: _YtdlpAttemptState | None = None,
     aria2_validation: _Aria2RuntimeValidation | None = None,
 ) -> None:
-    engine = _normalize_download_engine(options.download_engine)
-    if engine == DOWNLOAD_ENGINE_ARIA2_FAST:
-        if aria2_validation is None:
-            raise DownloadError(_aria2_unavailable_message())
-        command = _build_fast_audio_ytdlp_command(
-            video_id,
-            temp_dir,
-            options,
-            aria2_validation,
-        )
-        _run_fast_ytdlp_command(command, options, log, cancel_controller, part=PART_AUDIO)
-    else:
-        command = _build_stable_audio_ytdlp_command(
-            video_id,
-            temp_dir,
-            options,
-        )
-        _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
+    command = _build_audio_ytdlp_command(
+        video_id,
+        temp_dir,
+        options,
+        aria2_validation=aria2_validation,
+    )
+    _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
     _move_single_file(temp_dir, "*.mp3", final_path, log, cancel_controller=cancel_controller)
 
 
@@ -2480,10 +1752,9 @@ def _build_fast_audio_ytdlp_command(
     return _base_fast_ytdlp_command(
         options,
         aria2_validation,
-        ignore_errors=False,
     ) + [
-        "-f",
-        ARIA2_FAST_AUDIO_FORMAT,
+        "-N",
+        "1",
         "-x",
         "--audio-format",
         "mp3",
@@ -2556,65 +1827,11 @@ def _extract_mp3_from_video(
         raise DownloadError("audio extraction failed")
 
 
-def _transcode_fast_video_like_bat(
-    source_video_path: Path,
-    temp_dir: Path,
-    log,
-    cancel_controller: DownloadController | None = None,
-) -> Path:
-    if not source_video_path.exists():
-        raise DownloadError("Fast source MP4 missing before conversion")
-
-    fixed_path = temp_dir / f"{_safe_temp_stem(source_video_path.stem)}_FIXED.mp4"
-    duration_seconds = _probe_media_duration_seconds(source_video_path, cancel_controller)
-    command = [
-        str(runtime_file("ffmpeg.exe")),
-        "-y",
-        "-i",
-        str(source_video_path),
-        "-progress",
-        "pipe:1",
-        "-nostats",
-        "-c:v",
-        ARIA2_FAST_TRANSCODE_VIDEO_CODEC,
-        "-preset",
-        ARIA2_FAST_TRANSCODE_PRESET,
-        "-crf",
-        ARIA2_FAST_TRANSCODE_CRF,
-        "-c:a",
-        ARIA2_FAST_TRANSCODE_AUDIO_CODEC,
-        "-movflags",
-        "+faststart",
-        str(fixed_path),
-    ]
-
-    log("[INFO] Fast post-processing: libx264 preset=slow crf=18 audio=aac faststart=yes")
-    _run_ffmpeg_for_fast_video(command, duration_seconds, cancel_controller)
-
-    if not _final_file_ready(fixed_path):
-        raise DownloadError("Fast FFmpeg conversion failed")
-
-    return fixed_path
-
-
 def _run_ffmpeg_for_audio(command: list[str], cancel_controller: DownloadController | None = None) -> str:
     return _run_ffmpeg_command(
         command,
         operation="extract_mp3",
         cancel_controller=cancel_controller,
-    )
-
-
-def _run_ffmpeg_for_fast_video(
-    command: list[str],
-    duration_seconds: float | None,
-    cancel_controller: DownloadController | None = None,
-) -> str:
-    return _run_ffmpeg_command(
-        command,
-        operation="fast_video_transcode",
-        cancel_controller=cancel_controller,
-        progress_duration_seconds=duration_seconds,
     )
 
 
@@ -2760,7 +1977,7 @@ def _emit_ffmpeg_conversion_progress(
     state.percent_value = percent_value
     state.last_emit_monotonic = now
     _emit_current_progress(
-        "Fast phase 2/2",
+        "FFmpeg",
         kind="ffmpeg_progress",
         message="",
         percent=f"{state.percent_value}%",
@@ -2818,7 +2035,7 @@ def _run_ffmpeg_command(
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
     return_code = -1
-    progress_enabled = operation == "fast_video_transcode" or progress_duration_seconds is not None
+    progress_enabled = progress_duration_seconds is not None
     progress_state = (
         _FfmpegProgressState(progress_duration_seconds)
         if progress_enabled
@@ -3006,39 +2223,19 @@ def _base_ytdlp_command(options: DownloadOptions) -> list[str]:
 def _base_fast_ytdlp_command(
     options: DownloadOptions,
     aria2_validation: _Aria2RuntimeValidation,
-    *,
-    ignore_errors: bool = False,
 ) -> list[str]:
     if not aria2_validation.available:
         raise DownloadError(_aria2_unavailable_message())
 
-    command = [
-        str(runtime_file("yt-dlp.exe")),
-        "--no-playlist",
-        "--newline",
-        "--extractor-args",
-        ARIA2_FAST_EXTRACTOR_ARGS,
-        "--ffmpeg-location",
-        str(runtime_file("ffmpeg.exe").parent),
-        "--downloader",
-        str(aria2_validation.path),
-        "--downloader-args",
-        ARIA2_FAST_DOWNLOADER_ARGS,
-        "--no-warnings",
-    ]
-
-    if ignore_errors:
-        command.append("--ignore-errors")
-
-    if options.cookies_enabled:
-        command.extend([
-            YTDLP_COOKIES_OPTION,
-            effective_cookies_path(options),
-        ])
-
-    if options.speed_limit:
-        command.extend(["--limit-rate", options.speed_limit])
-
+    command = _base_ytdlp_command(options)
+    command.extend(
+        [
+            "--downloader",
+            str(aria2_validation.path),
+            "--downloader-args",
+            ARIA2_FAST_DOWNLOADER_ARGS,
+        ]
+    )
     return command
 
 
@@ -3308,11 +2505,11 @@ def _prepare_media_downloader_runtime(
         log("[ERROR] aria2c.exe is unavailable. Fast download cannot start.")
         raise DownloadError(message)
 
-    log("[INFO] Download engine: aria2c BAT-compatible fast mode")
-    log("[INFO] Fast extractor client: ios,web")
+    log("[INFO] Download engine: aria2c accelerated media transfer")
+    log("[INFO] Fast pipeline: Stable-equivalent format selection, cookies, retries, merge, validation and promotion.")
+    log("[INFO] Fast format: MP4 H.264/AAC only, max 1080p.")
     log("[INFO] aria2c profile: connections=16 splits=16 jobs=16 piece=1M")
-    log("[INFO] Fast format: bestvideo+bestaudio, max 1080p")
-    log("[INFO] Fast post-processing: libx264 preset=slow crf=18 audio=aac")
+    log("[INFO] Fast post-processing: merge/remux only; no full video transcode.")
     return _Aria2RuntimeValidation(True, True, aria2_path)
 
 
@@ -3934,27 +3131,6 @@ def _run_ytdlp_with_retries(
                     continue
 
             raise
-
-
-def _run_fast_ytdlp_command(
-    command: list[str],
-    options: DownloadOptions,
-    log,
-    cancel_controller: DownloadController | None = None,
-    *,
-    part: str,
-) -> None:
-    _raise_if_cancelled(cancel_controller)
-    log(_ytdlp_start_log_line(command, options, 1, part))
-
-    try:
-        _run_ytdlp(command, cancel_controller)
-    except YtdlpExecutionError as exc:
-        _attach_ytdlp_attempt_context(exc, part)
-        failure_kind = classify_ytdlp_failure_kind(exc, options)
-        exc.failure_kind = failure_kind
-        _log_ytdlp_attempt_failure(log, exc, failure_kind, 1)
-        raise
 
 
 def _should_start_in_cookie_bootstrap_batch_mode(
@@ -5830,31 +5006,6 @@ def _media_staging_directory(channel_dir: Path, video_id: str, log=None):
         yield staging_path
     finally:
         _cleanup_media_staging_directory(staging_path, channel_dir, log)
-
-
-@contextmanager
-def _fast_batch_staging_directory(channel_dir: Path, log):
-    channel_dir.mkdir(parents=True, exist_ok=True)
-    root = Path(tempfile.mkdtemp(prefix=".s9h-fast-batch-", dir=str(channel_dir)))
-    _mark_staging_directory_hidden(root, log)
-    try:
-        yield root
-    finally:
-        _cleanup_media_staging_directory(root, channel_dir, log)
-
-
-def _create_fast_job_staging_directory(
-    batch_staging_root: Path,
-    assigned_number: int,
-    video_id: str,
-    log,
-) -> Path:
-    number_text = _format_output_number(assigned_number)
-    safe_video_id = _safe_temp_stem(video_id)[:40]
-    job_dir = batch_staging_root / f"{number_text}-{safe_video_id}"
-    job_dir.mkdir(parents=True, exist_ok=False)
-    _mark_staging_directory_hidden(job_dir, log)
-    return job_dir
 
 
 def _hide_existing_staging_directories(channel_dir: Path, log=None) -> None:

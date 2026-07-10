@@ -92,19 +92,16 @@ Sources inspected:
 - The download frame includes a session-only `Download engine` readonly combobox with `Stable - yt-dlp internal` as the default and `Fast - aria2c experimental` as the optional fast mode.
 - `Stable - yt-dlp internal` maps to `DownloadOptions.download_engine == "stable"` and preserves the existing yt-dlp internal media downloader behavior.
 - `Fast - aria2c experimental` maps to `DownloadOptions.download_engine == "aria2_fast"` and resolves the optional runtime through `data/bin/aria2c.exe` via `runtime_file("aria2c.exe")`.
-- The selected engine is fixed for the entire batch. Stable batches stay on yt-dlp internal transfer with `-N 1`; Fast batches use the BAT-compatible aria2 pipeline.
-- Missing, invalid, or unstartable aria2 prevents a Fast batch from starting. Stable mode, application startup, and package preflight do not require aria2.
-- Fast failures do not automatically switch to Stable. The selector is not changed by errors; users can manually choose Stable for a later batch and retry.
-- Stable mode keeps the existing Premiere-safe yt-dlp pipeline: `PREMIERE_SAFE_VIDEO_FORMAT`, isolated per-attempt cookies, authenticated info-json/cookieless fallback, 10/30 cookie-media timing from `app.py`, one-video lookahead, validation, and atomic promotion.
-- Fast mode uses direct selected cookies through `effective_cookies_path(options)`, `youtube:player_client=ios,web`, `bestvideo[height<=1080]+bestaudio/best[height<=1080]/best`, and aria2 `-x 16 -s 16 -j 16 -k 1M`.
-- Fast mode does not enter the Stable info-json/cookieless/lookahead pipeline and does not use Stable `-N 1`, `--http-chunk-size`, or Premiere-safe format selection before download.
-- Fast video downloads include yt-dlp `--ignore-errors` to match the reference BAT video workflow. Fast direct-audio downloads remain strict and do not use `--ignore-errors`. When selecting a staged Fast video source, the application first prefers the exact merged `<video_id>.mp4` output, then another non-fragment MP4, and only then a `.f###.mp4` format fragment. Regardless of source selection, FFmpeg conversion, Premiere-safe validation, and atomic promotion remain mandatory.
-- Fast video batches run in two phases: phase 1 downloads all source videos and thumbnails in selected-list order, then phase 2 converts, validates, and promotes queued videos in the same order. A staged source MP4 does not count as downloaded; final video status updates only after FFmpeg conversion, Premiere-safe validation, and atomic promotion. Stable remains sequential.
-- Skip Current Video during Fast phase 1 stops all remaining work for that video. The item is counted only as skipped, is not queued for phase 2, and is never converted or promoted. Phase 2 also defensively ignores any job whose skipped flag is set.
-- Fast video output is post-processed before promotion with FFmpeg `libx264`, preset `slow`, CRF `18`, audio `aac`, and `+faststart`; only the converted MP4 is promoted.
-- During Fast phase 2, FFmpeg conversion streams machine-readable progress through `-progress pipe:1 -nostats`. The processing line displays only `<numbered filename>.mp4 | <percent> | speed <multiplier>`, for example `Đang xử lý: 001 Title.mp4 | 43% | speed 1.18x`.
-- The UI does not show FFmpeg frame count, timestamp, duration, ETA, bitrate, staging path, command line, or raw progress records. Updates are throttled in the downloader and delivered through the existing latest-event queue; reader threads never update Tkinter directly. If the duration probe fails, conversion still runs; progress remains at `0%` until completion emits `100%`.
-- Fast direct-audio mode uses the same direct-cookie, `ios,web`, and aria2 16/16/16/1M transport. Thumbnail download remains separate and does not inherit Fast media downloader arguments.
+- The selected engine is fixed for the entire batch. Both engines use the same sequential per-video loop and the same numbered output rules.
+- Missing, invalid, or unstartable aria2 prevents a selected Fast batch from starting. Stable mode, application startup, and package preflight do not require aria2.
+- Fast failures do not automatically change the selector. The user can manually choose Stable for a later batch and retry.
+- Fast engine parity contract: Stable and Fast use the same Premiere-safe format selector, codec requirements, maximum resolution, yt-dlp extraction behavior, isolated cookie-copy mechanism, HTTP 403 fallback, authenticated info-json fallback, retry handling, one-video lookahead, merge/remux, Premiere-safe validation, atomic promotion, SQLite state rules, and sequential item order.
+- The only intended engine difference is media transfer: Stable uses yt-dlp's internal media downloader, while Fast supplies aria2c through yt-dlp `--downloader` and `--downloader-args` media-transfer options.
+- Video commands for both engines use `PREMIERE_SAFE_VIDEO_FORMAT`, `-N 1`, `--merge-output-format mp4`, and the same no-info/description/thumbnail write controls. Fast adds only aria2c `-x 16 -s 16 -j 16 -k 1M`.
+- Fast metadata extraction, thumbnails, lookahead metadata, API calls, Cookie Bridge, SQLite, probing, validation, and MP3 extraction do not inherit aria2 media downloader options.
+- Cookies are inserted only through the isolated per-attempt `cookies.txt` copy prepared by `_prepared_cookie_attempt(...)`. Fast does not pass the selected canonical cookie file directly to yt-dlp.
+- Saved-media transfer from authenticated info-json retains Fast aria2 media-transfer options while removing cookies and the YouTube watch URL.
+- Fast does not perform a full video transcode. If no MP4 H.264/AAC format at 1080p or below exists, both engines fail strictly instead of downloading VP9/AV1 or transcoding unrestricted streams.
 
 ### File Start Number
 
@@ -428,7 +425,7 @@ Rows use `iid=str(video.display_order)` and values:
 - The download worker passes `progress_callback=self._enqueue_progress_event` into `download_items(...)`.
 - `_enqueue_progress_event()` writes to `progress_queue` with `put_latest_progress_event(...)`.
 - `_poll_progress_queue()` runs every 300 ms, drains the queue to the latest event, merges sticky percent/speed/fragment display fields, formats lines with `format_progress_event_lines(...)`, and writes both Tkinter variables.
-- FFmpeg conversion progress uses `ProgressEvent(kind="ffmpeg_progress", phase="Fast phase 2/2")`; its detail line uses the `speed` label instead of the yt-dlp speed label.
+- Generic FFmpeg progress events use `ProgressEvent(kind="ffmpeg_progress", phase="FFmpeg")`; their detail line uses the `speed` label instead of the yt-dlp speed label. The production Fast video path does not use full-transcode progress.
 - Sticky progress state resets for `batch_complete`, `stop_requested`, and `error` events.
 
 ### Log Text

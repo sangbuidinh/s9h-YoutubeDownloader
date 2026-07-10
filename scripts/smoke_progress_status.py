@@ -107,7 +107,7 @@ def _test_ffmpeg_progress_uses_speed_label() -> None:
     _current_line, detail_line = format_progress_event_lines(
         ProgressEvent(
             kind="ffmpeg_progress",
-            phase="Fast phase 2/2",
+            phase="FFmpeg",
             title="001 Title",
             percent="43%",
             speed="1.18x",
@@ -125,7 +125,7 @@ def _test_ffmpeg_progress_localizes_to_requested_line() -> None:
     _current_line, detail_line = window._localized_progress_lines(
         ProgressEvent(
             kind="ffmpeg_progress",
-            phase="Fast phase 2/2",
+            phase="FFmpeg",
             title="001 Title",
             percent="43%",
             speed="1.18x",

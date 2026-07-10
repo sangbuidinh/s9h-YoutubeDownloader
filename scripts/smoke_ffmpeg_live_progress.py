@@ -142,7 +142,7 @@ def _test_streamed_progress_events() -> None:
             video,
             1,
             2,
-            "Fast phase 2/2",
+            "FFmpeg",
         )
     )
 
@@ -183,7 +183,7 @@ def _test_streamed_progress_events() -> None:
     try:
         downloader._run_ffmpeg_command(
             command,
-            operation="fast_video_transcode",
+            operation="generic_ffmpeg_progress",
             progress_duration_seconds=100.0,
         )
     finally:
@@ -232,7 +232,7 @@ def _test_completion_reaches_100_percent() -> None:
             video,
             1,
             1,
-            "Fast phase 2/2",
+            "FFmpeg",
         )
     )
 
@@ -259,7 +259,7 @@ def _test_completion_reaches_100_percent() -> None:
     try:
         downloader._run_ffmpeg_command(
             command,
-            operation="fast_video_transcode",
+            operation="generic_ffmpeg_progress",
             progress_duration_seconds=100.0,
         )
     finally:
@@ -315,7 +315,7 @@ def _test_stderr_is_preserved_on_failure() -> None:
     try:
         downloader._run_ffmpeg_command(
             command,
-            operation="fast_video_transcode",
+            operation="generic_ffmpeg_progress",
             progress_duration_seconds=100.0,
         )
     except FFmpegExecutionError as exc:
@@ -375,7 +375,7 @@ def _test_streamed_runner_cancels_quickly() -> None:
             downloader._run_ffmpeg_command(
                 command,
                 operation=(
-                    "fast_video_transcode"
+                    "generic_ffmpeg_progress"
                 ),
                 cancel_controller=controller,
                 progress_duration_seconds=100.0,
