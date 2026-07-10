@@ -680,7 +680,13 @@ def _run_single_video_batch(root: Path, download_raises: bool) -> list:
         thumbnail_url="",
         status="",
     )
-    options = DownloadOptions(str(root), "channel", "Channel", download_mode=MODE_VIDEO_THUMB)
+    options = DownloadOptions(
+        str(root),
+        "channel",
+        "Channel",
+        download_mode=MODE_VIDEO_THUMB,
+        file_start_number=1,
+    )
     originals = {
         "validate_download_environment": downloader.validate_download_environment,
         "_call_runtime_tool_summary": downloader._call_runtime_tool_summary,
@@ -725,7 +731,13 @@ def _output_path(command: list[str]) -> Path:
 
 
 def _options(root: Path) -> DownloadOptions:
-    return DownloadOptions(str(root), "channel", "Channel", download_mode=MODE_VIDEO_THUMB)
+    return DownloadOptions(
+        str(root),
+        "channel",
+        "Channel",
+        download_mode=MODE_VIDEO_THUMB,
+        file_start_number=1,
+    )
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:

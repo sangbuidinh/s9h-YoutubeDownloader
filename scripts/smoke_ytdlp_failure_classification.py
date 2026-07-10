@@ -147,6 +147,7 @@ def main() -> int:
     _test_fatal_http_statuses()
     _test_stage_tracking()
     _test_sanitized_fatal_lines()
+    _test_aria2_unknown_contextual_reclassification()
     _test_unknown_failure()
 
     print("yt-dlp failure classification smoke passed")
@@ -892,6 +893,36 @@ def _test_sanitized_fatal_lines() -> None:
     _assert("<cookies-arg-redacted>" in joined, "cookies argument was not redacted")
     _assert("<cookie-redacted>" in joined, "cookie line was not redacted")
     _assert("access_token=***" in joined, "standalone access token was not redacted")
+
+
+def _test_aria2_unknown_contextual_reclassification() -> None:
+    line = "ERROR: aria2c exited with code 22"
+    command = [
+        "yt-dlp",
+        "--downloader",
+        r"D:\app\data\bin\aria2c.exe",
+        "--downloader-args",
+        downloader.ARIA2_FAST_DOWNLOADER_ARGS,
+        "https://www.youtube.com/watch?v=video123",
+    ]
+    exc = YtdlpExecutionError(
+        1,
+        "nonzero yt-dlp exit code",
+        [line],
+        combined_output=line,
+        failure_kind=YtdlpFailureKind.UNKNOWN,
+        fatal_lines=[line],
+        stage=downloader.YTDLP_STAGE_DOWNLOAD,
+        part=downloader.PART_VIDEO,
+        command=command,
+    )
+    _assert(exc.failure_kind == YtdlpFailureKind.UNKNOWN, "aria2 regression did not begin as UNKNOWN")
+    actual = classify_ytdlp_failure_kind(
+        exc,
+        DownloadOptions(".", "channel", "Channel", download_engine=downloader.DOWNLOAD_ENGINE_ARIA2_FAST),
+    )
+    _assert(actual == YtdlpFailureKind.HTTP_403, "stored UNKNOWN blocked aria2 contextual classification")
+    _assert(exc.http_status is None, "aria2 contextual classification faked HTTP status 403")
 
 
 def _test_unknown_failure() -> None:

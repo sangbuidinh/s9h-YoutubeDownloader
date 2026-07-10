@@ -171,7 +171,7 @@ def _test_failed_media_replacement_preserves_existing_files() -> None:
         old_validate = downloader._validate_premiere_safe_mp4_for_download
         old_promote = downloader._atomic_promote_with_retry
         try:
-            def write_staged_mp4(command, _options, _log, _cancel_controller=None, _cookie_retry_state=None):
+            def write_staged_mp4(command, _options, _log, _cancel_controller=None, _cookie_retry_state=None, **_kwargs):
                 _output_path(command, "mp4").write_bytes(b"NEW_VIDEO")
 
             downloader._run_ytdlp_with_retries = write_staged_mp4
@@ -206,7 +206,7 @@ def _test_failed_media_replacement_preserves_existing_files() -> None:
         old_ready_file = downloader._final_file_ready
         old_promote = downloader._atomic_promote_with_retry
         try:
-            def write_staged_mp3(command, _options, _log, _cancel_controller=None, _cookie_retry_state=None):
+            def write_staged_mp3(command, _options, _log, _cancel_controller=None, _cookie_retry_state=None, **_kwargs):
                 _output_path(command, "mp3").write_bytes(b"NEW_AUDIO")
 
             def final_ready(path):

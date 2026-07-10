@@ -25,7 +25,7 @@ FOLDER_B = "D:/B"
 def main() -> int:
     _configure_stdio()
     _test_downloaded_video_status_is_global()
-    _test_downloader_skip_is_video_level()
+    _test_downloader_redownloads_when_numbered_paths_are_missing()
     _test_manual_status_is_video_level()
     _test_redownload_clears_manual_override_globally()
     _test_v3_duplicate_folder_rows_migrate_to_one_video()
@@ -52,7 +52,7 @@ def _test_downloaded_video_status_is_global() -> None:
             _assert(folder_b_video.status == state_store.STATUS_DOWNLOADED, "different Save folder did not show downloaded")
 
 
-def _test_downloader_skip_is_video_level() -> None:
+def _test_downloader_redownloads_when_numbered_paths_are_missing() -> None:
     with _temp_runtime() as paths:
         with _patched_db_file(paths["db_path"]):
             _seed_downloaded(FOLDER_A)
@@ -68,10 +68,10 @@ def _test_downloader_skip_is_video_level() -> None:
                 )
 
             _assert(
-                "[SKIP] same-video marked as downloaded in SQLite state" in logs,
-                "download_items did not skip globally downloaded video",
+                "[SKIP] same-video marked as downloaded in SQLite state" not in logs,
+                "download_items skipped old state even though current numbered files were missing",
             )
-            _assert(calls == {"video": 0, "thumb": 0}, "download functions ran for skipped video")
+            _assert(calls == {"video": 1, "thumb": 1}, "download_items did not rebuild missing numbered files")
 
 
 def _test_manual_status_is_video_level() -> None:
@@ -342,6 +342,7 @@ def _patched_downloader_transfers(calls: dict[str, int]):
         _log,
         _cancel_controller=None,
         _cookie_retry_state=None,
+        _aria2_validation=None,
     ):
         calls["video"] += 1
         final_path.parent.mkdir(parents=True, exist_ok=True)
@@ -405,6 +406,7 @@ def _download_options(base_folder: str) -> downloader.DownloadOptions:
         channel_id=CHANNEL_ID,
         channel_name=CHANNEL_NAME,
         download_mode=MODE_VIDEO_THUMB,
+        file_start_number=1,
     )
 
 

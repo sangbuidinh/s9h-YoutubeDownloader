@@ -1,4 +1,5 @@
 import os
+import queue
 import re
 import hashlib
 import inspect
@@ -23,12 +24,26 @@ from core.download_modes import (
     required_parts,
 )
 from core.file_status import (
+    OutputPaths,
     STATUS_DOWNLOADED,
     STATUS_ERROR,
     build_output_paths,
     ensure_output_dirs,
 )
-from core.progress_status import ProgressEvent, parse_ytdlp_progress_line
+from core.progress_status import (
+    STAGE_MERGING,
+    STAGE_PREPARING,
+    STAGE_PROMOTING,
+    STAGE_RETRY_WAIT,
+    STAGE_VALIDATING,
+    TRANSFER_SOURCE_ARIA2,
+    TRANSFER_SOURCE_YTDLP,
+    ParsedTransferProgress,
+    ProgressEvent,
+    _is_aria2_progress_line,
+    parse_aria2_progress,
+    parse_ytdlp_progress_line,
+)
 from core.error_messages import (
     SHOW_TECHNICAL_WARNINGS,
     classify_general_error,
@@ -41,10 +56,12 @@ from core.error_messages import (
 from core.filename_utils import normalize_output_stem
 from core.runtime_paths import runtime_file
 from core.state_store import (
+    STATUS_NOT_DOWNLOADED,
     get_effective_status,
     get_video_entry,
     is_mode_complete,
     missing_parts_for_mode,
+    part_status_from_entry,
     reconcile_downloaded_item_state,
     update_video_part_state,
 )
@@ -59,6 +76,9 @@ MAX_FINAL_PATH_LENGTH = 240
 FFMPEG_OUTPUT_LINE_LIMIT = 20
 FFMPEG_OUTPUT_LINE_CHAR_LIMIT = 500
 FFMPEG_COMBINED_OUTPUT_LIMIT = 8192
+FFMPEG_PROGRESS_EMIT_INTERVAL_SECONDS = 0.3
+FFMPEG_PROGRESS_QUEUE_POLL_SECONDS = 0.1
+FFMPEG_PROGRESS_SPEED_UNKNOWN = "--"
 YTDLP_OUTPUT_TAIL_LIMIT = 200
 YTDLP_FATAL_LINE_LIMIT = 12
 YTDLP_STAGE_EXTRACT = "extract"
@@ -72,12 +92,27 @@ COOKIE_MEDIA_PROBE_INTERVAL_VIDEOS = 10
 _STANDALONE_SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)\b(?P<name>key|api_key|token|access_token)="
 )
+_ARIA2_HTTP_RESPONSE_EXIT_PATTERN = re.compile(
+    r"\baria2c(?:\.exe)?\s+exited\s+with\s+code\s+22\b",
+    flags=re.IGNORECASE,
+)
 OUTPUT_PATH_TOO_LONG_MESSAGE = (
     "Output path too long. Please choose a shorter save folder or shorten filename limit."
 )
 COOKIE_SOURCE_FILE = "file"
 COOKIE_SOURCE_BRIDGE = "bridge"
 YTDLP_COOKIES_OPTION = "--cookies"
+DOWNLOAD_ENGINE_STABLE = "stable"
+DOWNLOAD_ENGINE_ARIA2_FAST = "aria2_fast"
+DEFAULT_DOWNLOAD_ENGINE = DOWNLOAD_ENGINE_STABLE
+ARIA2_FAST_DOWNLOADER_ARGS = "aria2c:-x 16 -s 16 -j 16 -k 1M"
+# aria2 exit 22 means the HTTP response header was bad or unexpected.
+ARIA2_HTTP_RESPONSE_EXIT_CODE = 22
+ARIA2_VERSION_TIMEOUT_SECONDS = 3.0
+OUTPUT_NUMBER_MIN_WIDTH = 3
+_NUMBERED_OUTPUT_PREFIX_PATTERN = re.compile(r"^\d{3,}\s+")
+FILE_START_NUMBER_REQUIRED_MESSAGE = "Please enter a starting file number before downloading."
+FILE_START_NUMBER_INVALID_MESSAGE = "Starting file number must be a positive whole number."
 BRIDGE_COOKIE_FILE_MISSING_MESSAGE = (
     "Local Cookie Bridge cookie file not found. Open the bridge extension and click "
     "Export YouTube Cookies, then try again."
@@ -164,9 +199,124 @@ class _ProgressContext:
     video_total: int
     phase: str
     last_emit: float = 0.0
+    generation: int = 0
+    transfer_started: bool = False
+    last_aria2_percent: float | None = None
+    last_aria2_speed: str | None = None
+    last_aria2_emit: float | None = None
+
+
+@dataclass
+class _YtdlpAttemptTiming:
+    attempt_number: int
+    source: str
+    started_at: float
+    first_transfer_at: float | None = None
+    merge_started_at: float | None = None
+    finished_at: float | None = None
+    succeeded: bool = False
+    clock: object = field(default=time.perf_counter, repr=False, compare=False)
+
+    def mark_first_transfer(self) -> None:
+        if self.first_transfer_at is None:
+            self.first_transfer_at = float(self.clock())
+
+    def mark_merge_started(self) -> None:
+        if self.merge_started_at is None:
+            self.merge_started_at = float(self.clock())
+
+    def finish(self, succeeded: bool) -> None:
+        if self.finished_at is None:
+            self.finished_at = float(self.clock())
+            self.succeeded = bool(succeeded)
+
+    def stage_seconds(self) -> tuple[float, float, float]:
+        finished = self.finished_at if self.finished_at is not None else float(self.clock())
+        if self.first_transfer_at is None:
+            merge = (
+                max(0.0, finished - self.merge_started_at)
+                if self.merge_started_at is not None
+                else 0.0
+            )
+            return max(0.0, finished - self.started_at), 0.0, merge
+        merge_started = self.merge_started_at
+        transfer_finished = merge_started if merge_started is not None else finished
+        prepare = max(0.0, self.first_transfer_at - self.started_at)
+        transfer = max(0.0, transfer_finished - self.first_transfer_at)
+        merge = max(0.0, finished - merge_started) if merge_started is not None else 0.0
+        return prepare, transfer, merge
+
+
+@dataclass
+class _VideoDownloadTiming:
+    engine: str
+    logical_started_at: float
+    attempts: list[_YtdlpAttemptTiming] = field(default_factory=list)
+    retry_wait_seconds: float = 0.0
+    validation_seconds: float = 0.0
+    promotion_seconds: float = 0.0
+    logical_finished_at: float | None = None
+    clock: object = field(default=time.perf_counter, repr=False, compare=False)
+
+    def start_attempt(self, attempt_number: int, source: str) -> _YtdlpAttemptTiming:
+        attempt = _YtdlpAttemptTiming(
+            attempt_number=max(1, int(attempt_number)),
+            source=source if source in {TRANSFER_SOURCE_YTDLP, TRANSFER_SOURCE_ARIA2} else TRANSFER_SOURCE_YTDLP,
+            started_at=float(self.clock()),
+            clock=self.clock,
+        )
+        self.attempts.append(attempt)
+        return attempt
+
+    def add_retry_wait(self, seconds: int | float) -> None:
+        self.retry_wait_seconds += max(0.0, float(seconds))
+
+    def add_validation(self, started_at: float) -> None:
+        self.validation_seconds += max(0.0, float(self.clock()) - float(started_at))
+
+    def add_promotion(self, started_at: float) -> None:
+        self.promotion_seconds += max(0.0, float(self.clock()) - float(started_at))
+
+    def finish_logical_download(self) -> None:
+        if self.logical_finished_at is None:
+            self.logical_finished_at = float(self.clock())
+
+    def stage_totals(self) -> tuple[float, float, float]:
+        prepare = transfer = merge = 0.0
+        for attempt in self.attempts:
+            current_prepare, current_transfer, current_merge = attempt.stage_seconds()
+            prepare += current_prepare
+            transfer += current_transfer
+            merge += current_merge
+        return prepare, transfer, merge
+
+    def format_summary(self, result: str) -> str:
+        self.finish_logical_download()
+        prepare, transfer, merge = self.stage_totals()
+        finished = self.logical_finished_at if self.logical_finished_at is not None else float(self.clock())
+        total = max(0.0, finished - self.logical_started_at)
+        engine = self.engine if self.engine in {TRANSFER_SOURCE_YTDLP, TRANSFER_SOURCE_ARIA2} else TRANSFER_SOURCE_YTDLP
+        normalized_result = result if result in {"success", "failed", "cancelled"} else "failed"
+        return (
+            f"[PERF] engine={engine} part=video attempts={len(self.attempts)} "
+            f"prepare={prepare:.2f}s transfer={transfer:.2f}s merge={merge:.2f}s "
+            f"validate={self.validation_seconds:.2f}s promote={self.promotion_seconds:.2f}s "
+            f"retry_wait={self.retry_wait_seconds:.2f}s total={total:.2f}s result={normalized_result}"
+        )
+
+
+@dataclass
+class _FfmpegProgressState:
+    duration_seconds: float | None
+    out_time_seconds: float = 0.0
+    speed: str = FFMPEG_PROGRESS_SPEED_UNKNOWN
+    percent_value: int = 0
+    last_emit_monotonic: float = 0.0
 
 
 _PROGRESS_CONTEXT = threading.local()
+_VIDEO_DOWNLOAD_TIMING_CONTEXT = threading.local()
+_YTDLP_ATTEMPT_TIMING_CONTEXT = threading.local()
 
 
 class DownloadController:
@@ -306,10 +456,15 @@ class YtdlpExecutionError(DownloadError):
         http_status: int | None = None,
         stage: str = YTDLP_STAGE_UNKNOWN,
         part: str = YTDLP_PART_UNKNOWN,
+        command: list[str] | tuple[str, ...] | None = None,
     ):
         super().__init__(message)
         sanitized_output_lines = _sanitize_ytdlp_output_lines(output_lines)[-YTDLP_OUTPUT_TAIL_LIMIT:]
-        sanitized_fatal_lines = _sanitize_ytdlp_output_lines(fatal_lines or [])
+        sanitized_fatal_lines = [
+            line
+            for line in _sanitize_ytdlp_output_lines(fatal_lines or [])
+            if not _is_aria2_progress_line(line)
+        ]
         self.exit_code = int(exit_code)
         self.output_lines = sanitized_output_lines
         self.fatal_lines = tuple((sanitized_fatal_lines or _extract_ytdlp_fatal_lines(sanitized_output_lines))[-YTDLP_FATAL_LINE_LIMIT:])
@@ -327,6 +482,7 @@ class YtdlpExecutionError(DownloadError):
             missing_js_runtime or self.failure_kind == YtdlpFailureKind.TOOL_CONFIGURATION
         )
         self.stream_interrupted = stream_interrupted
+        self.command = tuple(str(value) for value in (command or ()))
 
 
 class FFmpegExecutionError(DownloadError):
@@ -364,6 +520,8 @@ class DownloadOptions:
     download_mode: str = MODE_VIDEO_THUMB
     cookie_source: str = COOKIE_SOURCE_FILE
     bridge_cookie_path: str = ""
+    download_engine: str = DEFAULT_DOWNLOAD_ENGINE
+    file_start_number: int | None = None
 
 
 @dataclass(frozen=True)
@@ -385,6 +543,13 @@ class _PreparedCookieAttempt:
     canonical_snapshot: _CookieFileSnapshot | None = None
     temp_cookie_path: str = ""
     cookies_used: bool = False
+
+
+@dataclass(frozen=True)
+class _Aria2RuntimeValidation:
+    requested: bool
+    available: bool
+    path: Path
 
 
 @dataclass
@@ -443,6 +608,8 @@ def _emit_progress(
     speed: str | None = None,
     eta: str | None = None,
     fragment: str | None = None,
+    source: str | None = None,
+    generation: int | None = None,
 ) -> None:
     _emit_progress_event(
         progress_callback,
@@ -457,6 +624,8 @@ def _emit_progress(
             speed=speed,
             eta=eta,
             fragment=fragment,
+            source=source,
+            generation=generation,
         ),
     )
 
@@ -484,16 +653,66 @@ def _current_progress_context() -> _ProgressContext | None:
     return getattr(_PROGRESS_CONTEXT, "current", None)
 
 
-def _emit_current_progress(phase: str | None = None, message: str = "", **kwargs) -> None:
+@contextmanager
+def _video_download_timing_scope(timing: _VideoDownloadTiming):
+    previous = getattr(_VIDEO_DOWNLOAD_TIMING_CONTEXT, "current", None)
+    _VIDEO_DOWNLOAD_TIMING_CONTEXT.current = timing
+    try:
+        yield timing
+    finally:
+        _VIDEO_DOWNLOAD_TIMING_CONTEXT.current = previous
+
+
+def _current_video_download_timing() -> _VideoDownloadTiming | None:
+    return getattr(_VIDEO_DOWNLOAD_TIMING_CONTEXT, "current", None)
+
+
+@contextmanager
+def _ytdlp_attempt_timing_scope(timing: _YtdlpAttemptTiming | None):
+    previous = getattr(_YTDLP_ATTEMPT_TIMING_CONTEXT, "current", None)
+    _YTDLP_ATTEMPT_TIMING_CONTEXT.current = timing
+    try:
+        yield timing
+    finally:
+        _YTDLP_ATTEMPT_TIMING_CONTEXT.current = previous
+
+
+def _current_ytdlp_attempt_timing() -> _YtdlpAttemptTiming | None:
+    return getattr(_YTDLP_ATTEMPT_TIMING_CONTEXT, "current", None)
+
+
+def _transfer_source_for_command(command: list[str] | tuple[str, ...]) -> str:
+    return TRANSFER_SOURCE_ARIA2 if _command_uses_aria2(command) else TRANSFER_SOURCE_YTDLP
+
+
+def _start_progress_attempt(source: str) -> int | None:
     context = _current_progress_context()
     if context is None:
+        return None
+    context.generation = int(getattr(context, "generation", 0)) + 1
+    context.transfer_started = False
+    context.last_emit = 0.0
+    context.last_aria2_percent = None
+    context.last_aria2_speed = None
+    context.last_aria2_emit = None
+    _emit_current_progress(
+        message=STAGE_PREPARING,
+        source=source,
+        generation=context.generation,
+    )
+    return context.generation
+
+
+def _emit_current_progress(phase: str | None = None, message: str = "", **kwargs) -> None:
+    context = _current_progress_context()
+    if context is None or getattr(context, "callback", None) is None:
         return
     _emit_progress(
         context.callback,
-        phase or context.phase,
-        context.video,
-        context.video_index,
-        context.video_total,
+        phase or getattr(context, "phase", "Status"),
+        getattr(context, "video", None),
+        getattr(context, "video_index", None),
+        getattr(context, "video_total", None),
         message=message,
         **kwargs,
     )
@@ -613,7 +832,34 @@ def validate_speed_limit(value: str) -> str | None:
     raise ValueError("Invalid speed limit")
 
 
+def validate_file_start_number(value: object) -> int:
+    if isinstance(value, bool):
+        raise DownloadError(FILE_START_NUMBER_INVALID_MESSAGE)
+
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            raise DownloadError(FILE_START_NUMBER_REQUIRED_MESSAGE)
+        if not re.fullmatch(r"\d+", text):
+            raise DownloadError(FILE_START_NUMBER_INVALID_MESSAGE)
+        try:
+            number = int(text)
+        except ValueError as exc:
+            raise DownloadError(FILE_START_NUMBER_INVALID_MESSAGE) from exc
+    else:
+        raise DownloadError(
+            FILE_START_NUMBER_REQUIRED_MESSAGE if value is None else FILE_START_NUMBER_INVALID_MESSAGE
+        )
+
+    if number < 1:
+        raise DownloadError(FILE_START_NUMBER_INVALID_MESSAGE)
+    return number
+
+
 def validate_download_environment(options: DownloadOptions) -> None:
+    options.file_start_number = validate_file_start_number(options.file_start_number)
     base_folder = Path(options.base_folder)
     ytdlp_path = runtime_file("yt-dlp.exe")
     ffmpeg_path = runtime_file("ffmpeg.exe")
@@ -624,6 +870,12 @@ def validate_download_environment(options: DownloadOptions) -> None:
     if not ffmpeg_path.exists():
         raise DownloadError("ffmpeg.exe missing")
     effective_cookies_path(options)
+
+
+def _normalize_download_engine(value: object) -> str:
+    if value == DOWNLOAD_ENGINE_ARIA2_FAST:
+        return DOWNLOAD_ENGINE_ARIA2_FAST
+    return DOWNLOAD_ENGINE_STABLE
 
 
 def effective_cookies_path(options: DownloadOptions) -> str:
@@ -647,6 +899,75 @@ def effective_cookies_path(options: DownloadOptions) -> str:
     except (OSError, ValueError) as exc:
         raise DownloadError(error_message) from exc
     return str(path)
+
+
+def _format_output_number(number: int) -> str:
+    validated = validate_file_start_number(number)
+    return f"{validated:0{OUTPUT_NUMBER_MIN_WIDTH}d}"
+
+
+def _assigned_output_number(start_number: int, selected_index: int) -> int:
+    if selected_index < 0:
+        raise ValueError("selected_index must be non-negative")
+    return validate_file_start_number(start_number) + selected_index
+
+
+def _build_numbered_output_stem(raw_title: object, assigned_number: int) -> str:
+    number_text = _format_output_number(assigned_number)
+    title_text = str(raw_title or "").strip()
+    combined = f"{number_text} {title_text}"
+    stem = normalize_output_stem(combined)
+    required_prefix = f"{number_text} "
+
+    if not stem.startswith(required_prefix):
+        normalized_title = normalize_output_stem(title_text)
+        stem = normalize_output_stem(f"{required_prefix}{normalized_title}")
+
+    if not stem.startswith(required_prefix):
+        raise DownloadError("Could not create numbered output filename")
+
+    return stem
+
+
+def _strip_existing_output_number_prefixes(value: object) -> str:
+    text = str(value or "").strip()
+
+    while text:
+        stripped = _NUMBERED_OUTPUT_PREFIX_PATTERN.sub("", text, count=1).strip()
+        if stripped == text:
+            break
+        text = stripped
+
+    return text
+
+
+def _numbering_source_title(video) -> str:
+    original_title = str(getattr(video, "title", "") or "").strip()
+    if original_title:
+        return original_title
+
+    fallback_title = str(getattr(video, "sanitized_filename_base", "") or "").strip()
+    fallback_title = _strip_existing_output_number_prefixes(fallback_title)
+    if fallback_title:
+        return fallback_title
+
+    return "video"
+
+
+def _prepare_numbered_output_for_video(
+    video,
+    options: DownloadOptions,
+    selected_index: int,
+) -> tuple[int, str, OutputPaths]:
+    assigned_number = _assigned_output_number(
+        validate_file_start_number(options.file_start_number),
+        selected_index,
+    )
+    raw_title = _numbering_source_title(video)
+    stem = _build_numbered_output_stem(raw_title, assigned_number)
+    video.sanitized_filename_base = stem
+    paths = build_output_paths(options.base_folder, options.channel_name, stem)
+    return assigned_number, stem, paths
 
 
 def _normalized_cookie_option_path(value: object) -> str:
@@ -765,7 +1086,11 @@ def _start_cookie_media_lookahead(
             if _cancel_requested(cancel_controller):
                 raise DownloadCancelled("download cancelled/interrupted")
             log(f"[COOKIE LOOKAHEAD] Preparing authenticated metadata for next video: {title}")
-            command = _build_video_ytdlp_command(video_id, staging_dir, options)
+            command = _build_stable_video_ytdlp_command(
+                video_id,
+                staging_dir,
+                options,
+            )
             info_json_path = _extract_authenticated_infojson_path(
                 command,
                 options,
@@ -906,6 +1231,90 @@ def _video_attempt_state_for_batch(
     )
 
 
+def _part_output_ready(paths: OutputPaths, part: str) -> bool:
+    if part == PART_VIDEO:
+        return _final_file_ready(paths.video_path)
+    if part == PART_AUDIO:
+        return _final_file_ready(paths.audio_path)
+    if part == PART_THUMB:
+        return _final_file_ready(paths.thumb_path)
+    return False
+
+
+def _missing_parts_for_current_paths(
+    options: DownloadOptions,
+    video,
+    paths: OutputPaths,
+    mode_parts: tuple[str, ...],
+) -> tuple[str, ...]:
+    entry = get_video_entry(options.channel_id, video.video_id)
+    missing: list[str] = []
+    for part in mode_parts:
+        ready = _part_output_ready(paths, part)
+        current_status = part_status_from_entry(entry, part)
+        if ready:
+            if current_status != STATUS_DOWNLOADED:
+                try:
+                    update_video_part_state(
+                        options.channel_id,
+                        options.channel_name,
+                        options.base_folder,
+                        video,
+                        paths,
+                        part,
+                        STATUS_DOWNLOADED,
+                        options.download_mode,
+                    )
+                except OSError:
+                    pass
+            continue
+
+        if current_status == STATUS_DOWNLOADED:
+            try:
+                update_video_part_state(
+                    options.channel_id,
+                    options.channel_name,
+                    options.base_folder,
+                    video,
+                    paths,
+                    part,
+                    STATUS_NOT_DOWNLOADED,
+                    options.download_mode,
+                )
+            except OSError:
+                pass
+        missing.append(part)
+
+    return tuple(missing)
+
+
+def _log_batch_summary(
+    downloaded_count: int,
+    failed_count: int,
+    skipped_count: int,
+    cancelled: bool,
+    log,
+    progress_callback,
+) -> None:
+    if downloaded_count > 0:
+        log(f"[SUCCESS] Downloaded: {downloaded_count}")
+    elif failed_count > 0 or skipped_count > 0:
+        log("[WARNING] Batch finished with 0 successful downloads.")
+    else:
+        log("[INFO] Downloaded: 0")
+
+    if failed_count > 0:
+        log(f"[ERROR] Failed: {failed_count}")
+
+    if skipped_count > 0:
+        log(f"[SKIP] Skipped: {skipped_count}")
+
+    if cancelled:
+        _emit_progress_event(progress_callback, ProgressEvent(kind="stop_requested"))
+    else:
+        _emit_progress_event(progress_callback, ProgressEvent(kind="batch_complete"))
+
+
 def download_items(
     videos: list,
     options: DownloadOptions,
@@ -914,9 +1323,12 @@ def download_items(
     cancel_controller: DownloadController | None = None,
     progress_callback=None,
 ) -> None:
+    options.download_engine = _normalize_download_engine(options.download_engine)
     validate_download_environment(options)
     ensure_output_dirs(options.base_folder, options.channel_name, options.download_mode)
     _call_runtime_tool_summary(options, log, cancel_controller)
+    aria2_validation = _prepare_media_downloader_runtime(options, log, cancel_controller)
+    engine = _normalize_download_engine(options.download_engine)
     downloaded_count = 0
     failed_count = 0
     skipped_count = 0
@@ -924,10 +1336,16 @@ def download_items(
     video_total = len(videos)
     cancelled = False
     ytdlp_batch_state = _YtdlpBatchState()
+    log(f"[INFO] File numbering start: {options.file_start_number}")
 
     if options.cookies_enabled:
         log("[INFO] Cookies enabled: yes")
         log("[INFO] yt-dlp will receive an isolated per-attempt cookies.txt copy.")
+        if engine == DOWNLOAD_ENGINE_ARIA2_FAST:
+            log(
+                "[INFO] Fast mode uses the same cookie, retry, HTTP 403 fallback "
+                "and lookahead pipeline as Stable."
+            )
     if _deno_runtime_path().exists():
         log("[INFO] Deno runtime found. JavaScript challenge solving enabled.")
 
@@ -936,33 +1354,20 @@ def download_items(
             cancelled = True
             break
 
-        raw_stem = getattr(video, "sanitized_filename_base", "") or getattr(video, "title", "")
-        stem = normalize_output_stem(raw_stem)
-        video.sanitized_filename_base = stem
-        paths = build_output_paths(
-            options.base_folder,
-            options.channel_name,
-            stem,
-        )
+        assigned_number, stem, paths = _prepare_numbered_output_for_video(video, options, index - 1)
         current_part = None
         run_parts_current_run: list[str] = []
 
         log(f"[INFO] Starting download: {index}/{len(videos)}")
+        log(f"[INFO] Assigned output number: {_format_output_number(assigned_number)}")
         log(f"[INFO] Mode: {options.download_mode}")
         try:
             _validate_output_paths(paths, mode_parts)
 
-            entry = get_video_entry(options.channel_id, video.video_id)
-            if is_mode_complete(entry, options.download_mode):
-                log(f"[SKIP] {stem} marked as downloaded in SQLite state")
-                _emit_progress(progress_callback, "Skipped", video, index, video_total)
-                skipped_count += 1
-                video.status = get_effective_status(entry, options.download_mode)
-                status_callback(video)
-                continue
-
-            missing_parts = missing_parts_for_mode(entry, options.download_mode)
+            missing_parts = _missing_parts_for_current_paths(options, video, paths, mode_parts)
             if not missing_parts:
+                entry = get_video_entry(options.channel_id, video.video_id)
+                log(f"[SKIP] {stem} already complete for current numbered paths")
                 _emit_progress(progress_callback, "Skipped", video, index, video_total)
                 skipped_count += 1
                 video.status = get_effective_status(entry, options.download_mode)
@@ -977,7 +1382,12 @@ def download_items(
                         _remember_run_part(run_parts_current_run, part)
                         log(f"[INFO] Downloading {stem}.mp4")
                         log("[INFO] Premiere-safe mode: MP4 H.264/AAC only, max 1080p.")
-                        _emit_progress(progress_callback, "Video", video, index, video_total, message="Downloading...")
+                        if engine == DOWNLOAD_ENGINE_ARIA2_FAST:
+                            log(
+                                "[INFO] Fast mode: aria2c handles media transfer; format selection, "
+                                "cookies, retries, merge, validation and promotion match Stable."
+                            )
+                        _emit_progress(progress_callback, "Video", video, index, video_total, message=STAGE_PREPARING)
                         previous_progress = _set_progress_context(
                             progress_callback, video, index, video_total, "Video"
                         )
@@ -1000,6 +1410,7 @@ def download_items(
                                 log,
                                 cancel_controller,
                                 video_attempt_state,
+                                aria2_validation,
                             )
                         finally:
                             _cleanup_cookie_media_prefetch(prefetched_media, log)
@@ -1013,8 +1424,13 @@ def download_items(
                                 _remember_run_part(run_parts_current_run, PART_VIDEO)
                                 log(f"[INFO] Local MP4 missing or invalid; downloading {stem}.mp4 for MP3 extraction.")
                                 log("[INFO] Premiere-safe mode: MP4 H.264/AAC only, max 1080p.")
+                                if engine == DOWNLOAD_ENGINE_ARIA2_FAST:
+                                    log(
+                                        "[INFO] Fast mode: aria2c handles media transfer; format selection, "
+                                        "cookies, retries, merge, validation and promotion match Stable."
+                                    )
                                 _emit_progress(
-                                    progress_callback, "Video", video, index, video_total, message="Downloading..."
+                                    progress_callback, "Video", video, index, video_total, message=STAGE_PREPARING
                                 )
                                 previous_progress = _set_progress_context(
                                     progress_callback, video, index, video_total, "Video"
@@ -1038,6 +1454,7 @@ def download_items(
                                         log,
                                         cancel_controller,
                                         video_attempt_state,
+                                        aria2_validation,
                                     )
                                 finally:
                                     _cleanup_cookie_media_prefetch(prefetched_media, log)
@@ -1095,6 +1512,7 @@ def download_items(
                                     log,
                                     cancel_controller,
                                     _YtdlpAttemptState(),
+                                    aria2_validation,
                                 )
                             finally:
                                 _restore_progress_context(previous_progress)
@@ -1299,20 +1717,7 @@ def download_items(
 
     _shutdown_cookie_media_lookahead(ytdlp_batch_state, log)
 
-    if downloaded_count > 0:
-        log(f"[SUCCESS] Downloaded: {downloaded_count}")
-    elif failed_count > 0 or skipped_count > 0:
-        log("[WARNING] Batch finished with 0 successful downloads.")
-    else:
-        log("[INFO] Downloaded: 0")
-    if failed_count > 0:
-        log(f"[ERROR] Failed: {failed_count}")
-    if skipped_count > 0:
-        log(f"[SKIP] Skipped: {skipped_count}")
-    if cancelled:
-        _emit_progress_event(progress_callback, ProgressEvent(kind="stop_requested"))
-    else:
-        _emit_progress_event(progress_callback, ProgressEvent(kind="batch_complete"))
+    _log_batch_summary(downloaded_count, failed_count, skipped_count, cancelled, log, progress_callback)
 
 
 def _reconcile_current_item(
@@ -1378,26 +1783,71 @@ def _download_video(
     log,
     cancel_controller: DownloadController | None = None,
     cookie_retry_state: _YtdlpAttemptState | None = None,
+    aria2_validation: _Aria2RuntimeValidation | None = None,
 ) -> None:
     if final_path.exists() and _premiere_safe_mp4_ready_for_download(final_path, cancel_controller):
         return
-    command = _build_video_ytdlp_command(video_id, temp_dir, options)
-    _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
-    staged_mp4_path = _select_staged_file(temp_dir, "*.mp4", ".mp4")
-    _emit_current_progress("Validating MP4")
-    _validate_premiere_safe_mp4_for_download(staged_mp4_path, log, True, cancel_controller)
-    _atomic_promote_with_retry(
-        staged_mp4_path,
-        final_path,
-        log,
-        replace_existing=True,
-        cancel_controller=cancel_controller,
+
+    command = _build_video_ytdlp_command(
+        video_id,
+        temp_dir,
+        options,
+        aria2_validation=aria2_validation,
     )
-    if not _final_file_ready(final_path):
-        raise DownloadError("video download failed")
+    timing = _VideoDownloadTiming(
+        engine=_transfer_source_for_command(command),
+        logical_started_at=time.perf_counter(),
+    )
+    result = "failed"
+    try:
+        with _video_download_timing_scope(timing):
+            _emit_current_progress(message=STAGE_PREPARING, source=timing.engine)
+            _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
+            staged_mp4_path = _select_staged_file(temp_dir, "*.mp4", ".mp4")
+
+            context = _current_progress_context()
+            _emit_current_progress(
+                "Validating MP4",
+                message=STAGE_VALIDATING,
+                generation=getattr(context, "generation", None) if context is not None else None,
+            )
+            validation_started = time.perf_counter()
+            try:
+                _validate_premiere_safe_mp4_for_download(staged_mp4_path, log, True, cancel_controller)
+            finally:
+                timing.add_validation(validation_started)
+
+            context = _current_progress_context()
+            _emit_current_progress(
+                "Video",
+                message=STAGE_PROMOTING,
+                generation=getattr(context, "generation", None) if context is not None else None,
+            )
+            promotion_started = time.perf_counter()
+            try:
+                _atomic_promote_with_retry(
+                    staged_mp4_path,
+                    final_path,
+                    log,
+                    replace_existing=True,
+                    cancel_controller=cancel_controller,
+                )
+            finally:
+                timing.add_promotion(promotion_started)
+            if not _final_file_ready(final_path):
+                raise DownloadError("video download failed")
+            result = "success"
+    except DownloadCancelled:
+        result = "cancelled"
+        raise
+    finally:
+        try:
+            log(timing.format_summary(result))
+        except Exception:
+            pass
 
 
-def _build_video_ytdlp_command(
+def _build_stable_video_ytdlp_command(
     video_id: str,
     temp_dir: Path,
     options: DownloadOptions,
@@ -1405,6 +1855,8 @@ def _build_video_ytdlp_command(
     url = f"https://www.youtube.com/watch?v={video_id}"
     output_template = str(temp_dir / f"{_safe_temp_stem(video_id)}.%(ext)s")
     return _base_ytdlp_command(options) + [
+        "-N",
+        "1",
         "-f",
         PREMIERE_SAFE_VIDEO_FORMAT,
         "--merge-output-format",
@@ -1418,6 +1870,53 @@ def _build_video_ytdlp_command(
     ]
 
 
+def _build_fast_video_ytdlp_command(
+    video_id: str,
+    temp_dir: Path,
+    options: DownloadOptions,
+    aria2_validation: _Aria2RuntimeValidation,
+) -> list[str]:
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    output_template = str(temp_dir / f"{_safe_temp_stem(video_id)}.%(ext)s")
+    return _base_fast_ytdlp_command(
+        options,
+        aria2_validation,
+    ) + [
+        "-N",
+        "1",
+        "-f",
+        PREMIERE_SAFE_VIDEO_FORMAT,
+        "--merge-output-format",
+        "mp4",
+        "--no-write-info-json",
+        "--no-write-description",
+        "--no-write-thumbnail",
+        "-o",
+        output_template,
+        url,
+    ]
+
+
+def _build_video_ytdlp_command(
+    video_id: str,
+    temp_dir: Path,
+    options: DownloadOptions,
+    *,
+    aria2_validation: _Aria2RuntimeValidation | None = None,
+) -> list[str]:
+    engine = _normalize_download_engine(options.download_engine)
+    if engine == DOWNLOAD_ENGINE_ARIA2_FAST:
+        if aria2_validation is None:
+            raise DownloadError(_aria2_unavailable_message())
+        return _build_fast_video_ytdlp_command(
+            video_id,
+            temp_dir,
+            options,
+            aria2_validation,
+        )
+    return _build_stable_video_ytdlp_command(video_id, temp_dir, options)
+
+
 def _download_audio(
     video_id: str,
     stem: str,
@@ -1427,10 +1926,28 @@ def _download_audio(
     log,
     cancel_controller: DownloadController | None = None,
     cookie_retry_state: _YtdlpAttemptState | None = None,
+    aria2_validation: _Aria2RuntimeValidation | None = None,
 ) -> None:
+    command = _build_audio_ytdlp_command(
+        video_id,
+        temp_dir,
+        options,
+        aria2_validation=aria2_validation,
+    )
+    _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
+    _move_single_file(temp_dir, "*.mp3", final_path, log, cancel_controller=cancel_controller)
+
+
+def _build_stable_audio_ytdlp_command(
+    video_id: str,
+    temp_dir: Path,
+    options: DownloadOptions,
+) -> list[str]:
     url = f"https://www.youtube.com/watch?v={video_id}"
     output_template = str(temp_dir / f"{_safe_temp_stem(video_id)}.%(ext)s")
-    command = _base_ytdlp_command(options) + [
+    return _base_ytdlp_command(options) + [
+        "-N",
+        "1",
         "-x",
         "--audio-format",
         "mp3",
@@ -1443,8 +1960,58 @@ def _download_audio(
         output_template,
         url,
     ]
-    _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
-    _move_single_file(temp_dir, "*.mp3", final_path, log, cancel_controller=cancel_controller)
+
+
+def _build_fast_audio_ytdlp_command(
+    video_id: str,
+    temp_dir: Path,
+    options: DownloadOptions,
+    aria2_validation: _Aria2RuntimeValidation,
+) -> list[str]:
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    output_template = str(temp_dir / f"{_safe_temp_stem(video_id)}.%(ext)s")
+    return _base_fast_ytdlp_command(
+        options,
+        aria2_validation,
+    ) + [
+        "-N",
+        "1",
+        "-x",
+        "--audio-format",
+        "mp3",
+        "--audio-quality",
+        "0",
+        "--no-write-info-json",
+        "--no-write-description",
+        "--no-write-thumbnail",
+        "-o",
+        output_template,
+        url,
+    ]
+
+
+def _build_audio_ytdlp_command(
+    video_id: str,
+    temp_dir: Path,
+    options: DownloadOptions,
+    *,
+    aria2_validation: _Aria2RuntimeValidation | None = None,
+) -> list[str]:
+    engine = _normalize_download_engine(options.download_engine)
+    if engine == DOWNLOAD_ENGINE_ARIA2_FAST:
+        if aria2_validation is None:
+            raise DownloadError(_aria2_unavailable_message())
+        return _build_fast_audio_ytdlp_command(
+            video_id,
+            temp_dir,
+            options,
+            aria2_validation,
+        )
+    return _build_stable_audio_ytdlp_command(
+        video_id,
+        temp_dir,
+        options,
+    )
 
 
 def _extract_mp3_from_video(
@@ -1482,10 +2049,219 @@ def _extract_mp3_from_video(
 
 
 def _run_ffmpeg_for_audio(command: list[str], cancel_controller: DownloadController | None = None) -> str:
+    return _run_ffmpeg_command(
+        command,
+        operation="extract_mp3",
+        cancel_controller=cancel_controller,
+    )
+
+
+def _parse_media_timestamp_seconds(value: object) -> float | None:
+    text = str(value or "").strip()
+    if not text or text.upper() == "N/A":
+        return None
+    try:
+        if re.fullmatch(r"\d+(?:\.\d+)?", text):
+            seconds = float(text)
+            return seconds if seconds >= 0 else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+    match = re.fullmatch(r"(?P<hours>\d+):(?P<minutes>\d{1,2}):(?P<seconds>\d{1,2}(?:\.\d+)?)", text)
+    if match is None:
+        return None
+    try:
+        hours = int(match.group("hours"))
+        minutes = int(match.group("minutes"))
+        seconds = float(match.group("seconds"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if minutes >= 60 or seconds >= 60:
+        return None
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def _probe_media_duration_seconds(
+    path: Path,
+    cancel_controller: DownloadController | None = None,
+) -> float | None:
+    try:
+        if not Path(path).exists():
+            return None
+    except OSError:
+        return None
+
+    ffmpeg_path = runtime_file("ffmpeg.exe")
+    ffprobe_path = ffmpeg_path.with_name("ffprobe.exe")
+    commands: list[list[str]] = []
+    if ffprobe_path.exists():
+        commands.append(
+            [
+                str(ffprobe_path),
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ]
+        )
+    commands.append([str(ffmpeg_path), "-hide_banner", "-i", str(path)])
+
+    for command in commands:
+        try:
+            output = _run_probe_command(command, cancel_controller)
+        except DownloadCancelled:
+            raise
+        except Exception:
+            continue
+
+        for line in str(output or "").splitlines():
+            seconds = _parse_media_timestamp_seconds(line)
+            if seconds is not None and seconds > 0:
+                return seconds
+
+        match = re.search(r"(?i)\bDuration:\s*([^,\s]+)", output or "")
+        if match is not None:
+            seconds = _parse_media_timestamp_seconds(match.group(1))
+            if seconds is not None and seconds > 0:
+                return seconds
+
+    return None
+
+
+def _parse_ffmpeg_progress_line(line: str) -> tuple[str, str] | None:
+    text = str(line or "").strip()
+    if not text or "=" not in text:
+        return None
+    key, value = text.split("=", 1)
+    key = key.strip()
+    if not key:
+        return None
+    return key, value.strip()
+
+
+def _ffmpeg_out_time_seconds(key: str, value: str) -> float | None:
+    normalized_key = str(key or "").strip().lower()
+    if normalized_key in {"out_time_us", "out_time_ms"}:
+        try:
+            seconds = float(str(value or "").strip()) / 1_000_000.0
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return seconds if seconds >= 0 else None
+    if normalized_key == "out_time":
+        return _parse_media_timestamp_seconds(value)
+    return None
+
+
+def _normalize_ffmpeg_speed(value: str | None) -> str:
+    text = _sanitize_subprocess_output_line(value or "")
+    if not text or text.upper() == "N/A":
+        return FFMPEG_PROGRESS_SPEED_UNKNOWN
+    return _bound_subprocess_output_line(text)
+
+
+def _ffmpeg_progress_percent(
+    out_time_seconds: float,
+    duration_seconds: float | None,
+    completed: bool = False,
+) -> int:
+    if completed:
+        return 100
+    try:
+        duration = float(duration_seconds) if duration_seconds is not None else 0.0
+        out_time = max(0.0, float(out_time_seconds))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    if duration <= 0:
+        return 0
+    return max(0, min(99, int((out_time / duration) * 100)))
+
+
+def _emit_ffmpeg_conversion_progress(
+    state: _FfmpegProgressState,
+    completed: bool = False,
+    force: bool = False,
+) -> None:
+    now = time.monotonic()
+    if not force and now - state.last_emit_monotonic < FFMPEG_PROGRESS_EMIT_INTERVAL_SECONDS:
+        return
+
+    percent_value = _ffmpeg_progress_percent(
+        state.out_time_seconds,
+        state.duration_seconds,
+        completed=completed,
+    )
+    if not completed:
+        percent_value = max(state.percent_value, percent_value)
+    state.percent_value = percent_value
+    state.last_emit_monotonic = now
+    _emit_current_progress(
+        "FFmpeg",
+        kind="ffmpeg_progress",
+        message="",
+        percent=f"{state.percent_value}%",
+        speed=state.speed,
+        eta=None,
+        fragment=None,
+    )
+
+
+def _consume_ffmpeg_progress_line(line: str, state: _FfmpegProgressState) -> bool:
+    parsed = _parse_ffmpeg_progress_line(line)
+    if parsed is None:
+        return False
+
+    key, value = parsed
+    normalized_key = key.strip().lower()
+    out_time_seconds = _ffmpeg_out_time_seconds(normalized_key, value)
+    if out_time_seconds is not None:
+        state.out_time_seconds = out_time_seconds
+        return True
+
+    if normalized_key == "speed":
+        state.speed = _normalize_ffmpeg_speed(value)
+        return True
+
+    if normalized_key == "progress":
+        normalized_value = value.strip().lower()
+        if normalized_value == "end":
+            _emit_ffmpeg_conversion_progress(state, completed=True, force=True)
+        elif normalized_value == "continue":
+            _emit_ffmpeg_conversion_progress(state)
+        return True
+
+    return True
+
+
+def _read_process_stream(stream, stream_name: str, output_queue: queue.Queue) -> None:
+    try:
+        if stream is not None:
+            for raw_line in stream:
+                output_queue.put((stream_name, str(raw_line).rstrip("\r\n")))
+    finally:
+        output_queue.put((stream_name, None))
+
+
+def _run_ffmpeg_command(
+    command: list[str],
+    *,
+    operation: str,
+    cancel_controller: DownloadController | None = None,
+    progress_duration_seconds: float | None = None,
+) -> str:
     creationflags = _subprocess_creationflags()
     process = None
-    stdout = ""
-    stderr = ""
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+    return_code = -1
+    progress_enabled = progress_duration_seconds is not None
+    progress_state = (
+        _FfmpegProgressState(progress_duration_seconds)
+        if progress_enabled
+        else None
+    )
     try:
         process = subprocess.Popen(
             command,
@@ -1498,20 +2274,54 @@ def _run_ffmpeg_for_audio(command: list[str], cancel_controller: DownloadControl
         )
         if cancel_controller is not None:
             cancel_controller.set_current_process(process)
-        while True:
+
+        output_queue: queue.Queue = queue.Queue()
+        stream_count = 0
+        for stream_name, stream in (
+            ("stdout", getattr(process, "stdout", None)),
+            ("stderr", getattr(process, "stderr", None)),
+        ):
+            if stream is None:
+                continue
+            stream_count += 1
+            threading.Thread(
+                target=_read_process_stream,
+                args=(stream, stream_name, output_queue),
+                daemon=True,
+            ).start()
+
+        while stream_count > 0:
             if _cancel_requested(cancel_controller):
                 _terminate_process_tree(process)
                 raise DownloadCancelled("download cancelled/interrupted")
             try:
-                stdout, stderr = process.communicate(timeout=0.25)
-                break
-            except subprocess.TimeoutExpired:
+                stream_name, line = output_queue.get(timeout=FFMPEG_PROGRESS_QUEUE_POLL_SECONDS)
+            except queue.Empty:
                 continue
+            if line is None:
+                stream_count -= 1
+                continue
+            if stream_name == "stdout":
+                if progress_state is not None and _consume_ffmpeg_progress_line(line, progress_state):
+                    continue
+                _append_limited(stdout_lines, line, YTDLP_OUTPUT_TAIL_LIMIT)
+            else:
+                _append_limited(stderr_lines, line, YTDLP_OUTPUT_TAIL_LIMIT)
+
+        while True:
+            if _cancel_requested(cancel_controller):
+                _terminate_process_tree(process)
+                raise DownloadCancelled("download cancelled/interrupted")
+            return_code = _wait_for_process_exit(process, FFMPEG_PROGRESS_QUEUE_POLL_SECONDS)
+            if return_code is not None:
+                break
     except FileNotFoundError:
         raise DownloadError("ffmpeg.exe missing")
     except OSError as exc:
         reason = _sanitize_subprocess_output_line(str(exc)) or type(exc).__name__
-        raise DownloadError(f"ffmpeg process creation failed during extract_mp3: {type(exc).__name__}: {reason}") from exc
+        raise DownloadError(
+            f"ffmpeg process creation failed during {operation}: {type(exc).__name__}: {reason}"
+        ) from exc
     except KeyboardInterrupt:
         _terminate_process_tree(process)
         raise DownloadCancelled("download cancelled/interrupted")
@@ -1521,24 +2331,27 @@ def _run_ffmpeg_for_audio(command: list[str], cancel_controller: DownloadControl
 
     if _cancel_requested(cancel_controller):
         raise DownloadCancelled("download cancelled/interrupted")
-    if process.returncode == 0:
+    stdout = "\n".join(stdout_lines)
+    stderr = "\n".join(stderr_lines)
+    if return_code == 0:
+        if progress_state is not None:
+            _emit_ffmpeg_conversion_progress(progress_state, completed=True, force=True)
         return _bounded_sanitized_subprocess_output(stdout, stderr)
 
     output_lines = _ffmpeg_output_lines(stdout, stderr)
     combined_output = _bounded_sanitized_subprocess_output(stdout, stderr)
-    return_code = process.returncode if process.returncode is not None else -1
     initial = FFmpegExecutionError(
-        operation="extract_mp3",
+        operation=operation,
         exit_code=return_code,
-        message="ffmpeg extract_mp3 failed",
+        message=f"ffmpeg {operation} failed",
         output_lines=output_lines,
         combined_output=combined_output,
     )
     failure_kind = classify_ffmpeg_failure_kind(initial)
     raise FFmpegExecutionError(
-        operation="extract_mp3",
+        operation=operation,
         exit_code=return_code,
-        message=f"ffmpeg extract_mp3 failed: {failure_kind.value}",
+        message=f"ffmpeg {operation} failed: {failure_kind.value}",
         output_lines=output_lines,
         combined_output=combined_output,
     )
@@ -1613,8 +2426,6 @@ def _base_ytdlp_command(options: DownloadOptions) -> list[str]:
         "60",
         "--http-chunk-size",
         "1M",
-        "-N",
-        "1",
         "--ffmpeg-location",
         str(runtime_file("ffmpeg.exe").parent),
     ]
@@ -1627,6 +2438,25 @@ def _base_ytdlp_command(options: DownloadOptions) -> list[str]:
         ])
     if options.speed_limit:
         command.extend(["--limit-rate", options.speed_limit])
+    return command
+
+
+def _base_fast_ytdlp_command(
+    options: DownloadOptions,
+    aria2_validation: _Aria2RuntimeValidation,
+) -> list[str]:
+    if not aria2_validation.available:
+        raise DownloadError(_aria2_unavailable_message())
+
+    command = _base_ytdlp_command(options)
+    command.extend(
+        [
+            "--downloader",
+            str(aria2_validation.path),
+            "--downloader-args",
+            ARIA2_FAST_DOWNLOADER_ARGS,
+        ]
+    )
     return command
 
 
@@ -1856,6 +2686,52 @@ def _extract_video_height(line: str) -> int | None:
 
 def _deno_runtime_path() -> Path:
     return runtime_file("deno.exe")
+
+
+def _aria2_runtime_path() -> Path:
+    return runtime_file("aria2c.exe")
+
+
+def _aria2_unavailable_message() -> str:
+    return (
+        "aria2c.exe is unavailable. Fast download cannot start. "
+        "Expected runtime path: data\\bin\\aria2c.exe"
+    )
+
+
+def _prepare_media_downloader_runtime(
+    options: DownloadOptions,
+    log,
+    cancel_controller: DownloadController | None = None,
+) -> _Aria2RuntimeValidation:
+    engine = _normalize_download_engine(options.download_engine)
+    aria2_path = _aria2_runtime_path()
+    if engine != DOWNLOAD_ENGINE_ARIA2_FAST:
+        log("[INFO] Download engine: stable yt-dlp internal")
+        return _Aria2RuntimeValidation(False, False, aria2_path)
+
+    if not aria2_path.exists() or not aria2_path.is_file():
+        message = _aria2_unavailable_message()
+        log("[ERROR] aria2c.exe is unavailable. Fast download cannot start.")
+        raise DownloadError(message)
+
+    _raise_if_cancelled(cancel_controller)
+    version = _get_command_version(
+        [str(aria2_path), "--version"],
+        cancel_controller=cancel_controller,
+        timeout_seconds=ARIA2_VERSION_TIMEOUT_SECONDS,
+    )
+    if not version:
+        message = _aria2_unavailable_message()
+        log("[ERROR] aria2c.exe is unavailable. Fast download cannot start.")
+        raise DownloadError(message)
+
+    log("[INFO] Download engine: aria2c accelerated media transfer")
+    log("[INFO] Fast pipeline: Stable-equivalent format selection, cookies, retries, merge, validation and promotion.")
+    log("[INFO] Fast format: MP4 H.264/AAC only, max 1080p.")
+    log("[INFO] aria2c profile: connections=16 splits=16 jobs=16 piece=1M")
+    log("[INFO] Fast post-processing: merge/remux only; no full video transcode.")
+    return _Aria2RuntimeValidation(True, True, aria2_path)
 
 
 def _call_runtime_tool_summary(
@@ -2189,6 +3065,22 @@ def _prepared_cookie_attempt(
     raise DownloadError("Cookie file changed while preparing isolated copy. Try again after export finishes.")
 
 
+def _wait_for_ytdlp_retry(
+    seconds: int | float,
+    cancel_controller: DownloadController | None,
+) -> None:
+    timing = _current_video_download_timing()
+    if timing is not None:
+        timing.add_retry_wait(seconds)
+    if float(seconds) > 0:
+        context = _current_progress_context()
+        _emit_current_progress(
+            message=STAGE_RETRY_WAIT,
+            generation=getattr(context, "generation", None) if context is not None else None,
+        )
+    _sleep_with_cancel(seconds, cancel_controller)
+
+
 def _run_ytdlp_with_retries(
     command: list[str],
     options: DownloadOptions,
@@ -2305,7 +3197,7 @@ def _run_ytdlp_with_retries(
                     f"{remaining_delay} seconds before the media transfer ({delay_kind}; "
                     f"metadata age target: {settle_delay} seconds)."
                 )
-                _sleep_with_cancel(remaining_delay, cancel_controller)
+                _wait_for_ytdlp_retry(remaining_delay, cancel_controller)
             elif settle_delay:
                 log(
                     "[COOKIE LOOKAHEAD] Metadata already reached the learned age; "
@@ -2328,7 +3220,25 @@ def _run_ytdlp_with_retries(
                 attempt_number += 1
                 attempt_part = _current_ytdlp_part()
                 log(_ytdlp_start_log_line(prepared_attempt.command, options, attempt_number, attempt_part))
-                stderr = _run_ytdlp(prepared_attempt.command, cancel_controller)
+                video_timing = _current_video_download_timing()
+                attempt_timing = (
+                    video_timing.start_attempt(
+                        attempt_number,
+                        _transfer_source_for_command(prepared_attempt.command),
+                    )
+                    if video_timing is not None
+                    else None
+                )
+                with _ytdlp_attempt_timing_scope(attempt_timing):
+                    try:
+                        stderr = _run_ytdlp(prepared_attempt.command, cancel_controller)
+                    except BaseException:
+                        if attempt_timing is not None:
+                            attempt_timing.finish(False)
+                        raise
+                    else:
+                        if attempt_timing is not None:
+                            attempt_timing.finish(True)
             if (
                 SHOW_TECHNICAL_WARNINGS
                 and stderr
@@ -2350,10 +3260,14 @@ def _run_ytdlp_with_retries(
                 )
             return
         except YtdlpExecutionError as exc:
+            if not exc.command and attempt_info is not None:
+                exc.command = tuple(str(value) for value in attempt_info.command)
             _attach_ytdlp_attempt_context(exc, attempt_part)
             failure_kind = classify_ytdlp_failure_kind(exc, options)
             exc.failure_kind = failure_kind
             _log_ytdlp_attempt_failure(log, exc, failure_kind, attempt_number)
+            if _is_aria2_http_response_media_failure(exc):
+                log("[YT-DLP CLASS DETAIL] aria2_http_response_exit_22")
 
             if _should_use_authenticated_infojson_fallback(
                 exc,
@@ -2364,11 +3278,19 @@ def _run_ytdlp_with_retries(
             ):
                 attempt_state.cookieless_fallback_used = True
                 attempt_state.authenticated_infojson_fallback_used = True
-                log(
-                    "[COOKIE FALLBACK] Cookie-authenticated media request returned HTTP 403. "
-                    "Extracting authenticated metadata, then downloading the saved media URLs "
-                    "without cookies."
-                )
+                if _is_aria2_http_response_media_failure(exc):
+                    log(
+                        "[COOKIE FALLBACK] aria2 media transfer failed because the HTTP "
+                        "response header was bad or unexpected (exit code 22). "
+                        "Extracting authenticated metadata, then downloading the saved media "
+                        "URLs without cookies through aria2c."
+                    )
+                else:
+                    log(
+                        "[COOKIE FALLBACK] Cookie-authenticated media request returned HTTP 403. "
+                        "Extracting authenticated metadata, then downloading the saved media URLs "
+                        "without cookies."
+                    )
                 attempt_number += 1
                 try:
                     current_command = _prepare_authenticated_infojson_download_command(
@@ -2395,14 +3317,16 @@ def _run_ytdlp_with_retries(
                 _start_attempt_lookahead(attempt_state, log)
                 continue
 
-            cookieless_saved_media_403 = _is_cookieless_saved_media_http_403(
-                exc,
-                failure_kind,
-                attempt_info,
-                attempt_state,
-                current_command,
+            cookieless_saved_media_access_failure = (
+                _is_cookieless_saved_media_access_failure(
+                    exc,
+                    failure_kind,
+                    attempt_info,
+                    attempt_state,
+                    current_command,
+                )
             )
-            if cookieless_saved_media_403:
+            if cookieless_saved_media_access_failure:
                 current_age = _cookie_media_age_seconds(
                     cookie_media_metadata_ready_monotonic,
                     cookie_media_waited_seconds,
@@ -2418,32 +3342,53 @@ def _run_ytdlp_with_retries(
                         )
                         _record_cookie_media_probe_failure(attempt_state.batch_state)
                         cookie_media_probe_active = False
-                        log(
-                            "[COOKIE BATCH MODE] Short delay probe still received HTTP 403. "
-                            f"Returning toward the learned {learned_delay}-second delay."
-                        )
+                        if _is_aria2_http_response_media_failure(exc):
+                            log(
+                                "[COOKIE BATCH MODE] Short delay probe still received aria2 "
+                                "HTTP response exit code 22. Returning toward the learned "
+                                f"{learned_delay}-second delay."
+                            )
+                        else:
+                            log(
+                                "[COOKIE BATCH MODE] Short delay probe still received HTTP 403. "
+                                f"Returning toward the learned {learned_delay}-second delay."
+                            )
                     cookie_media_waited_seconds = retry_target
-                    log(
-                        "[WARNING] HTTP 403 during cookieless media transfer. "
-                        f"Retrying in {delay} seconds "
-                        f"(metadata age target: {retry_target} seconds)."
-                    )
-                    _sleep_with_cancel(delay, cancel_controller)
+                    if _is_aria2_http_response_media_failure(exc):
+                        log(
+                            "[WARNING] aria2 HTTP response failure during cookieless media "
+                            f"transfer (exit code 22). Retrying in {delay} seconds "
+                            f"(metadata age target: {retry_target} seconds)."
+                        )
+                    else:
+                        log(
+                            "[WARNING] HTTP 403 during cookieless media transfer. "
+                            f"Retrying in {delay} seconds "
+                            f"(metadata age target: {retry_target} seconds)."
+                        )
+                    _wait_for_ytdlp_retry(delay, cancel_controller)
                     continue
 
             if (
-                not cookieless_saved_media_403
+                not cookieless_saved_media_access_failure
                 and failure_kind == YtdlpFailureKind.HTTP_403
                 and not attempt_state.verified_retry_used
                 and http_403_retries < len(http_403_delays)
             ):
                 delay = http_403_delays[http_403_retries]
                 http_403_retries += 1
-                log(
-                    f"[WARNING] HTTP 403 during {exc.part}/{exc.stage}. "
-                    f"Retrying in {delay} seconds (retry {http_403_retries}/2)."
-                )
-                _sleep_with_cancel(delay, cancel_controller)
+                if _is_aria2_http_response_media_failure(exc):
+                    log(
+                        "[WARNING] aria2 HTTP response failure during "
+                        f"{exc.part}/{exc.stage} (exit code 22). "
+                        f"Retrying in {delay} seconds (retry {http_403_retries}/2)."
+                    )
+                else:
+                    log(
+                        f"[WARNING] HTTP 403 during {exc.part}/{exc.stage}. "
+                        f"Retrying in {delay} seconds (retry {http_403_retries}/2)."
+                    )
+                _wait_for_ytdlp_retry(delay, cancel_controller)
                 continue
 
             if (
@@ -2590,7 +3535,7 @@ def _next_cookie_media_retry_target(waited_seconds: int) -> int | None:
     return None
 
 
-def _is_cookieless_saved_media_http_403(
+def _is_cookieless_saved_media_access_failure(
     exc: YtdlpExecutionError,
     failure_kind: YtdlpFailureKind,
     attempt_info: _PreparedCookieAttempt | None,
@@ -2598,13 +3543,11 @@ def _is_cookieless_saved_media_http_403(
     command: list[str],
 ) -> bool:
     return bool(
-        failure_kind == YtdlpFailureKind.HTTP_403
-        and exc.part == PART_VIDEO
+        _is_video_media_access_failure(exc, failure_kind)
         and attempt_state.authenticated_infojson_fallback_used
         and attempt_info is not None
         and not attempt_info.cookies_used
         and "--load-info-json" in command
-        and _is_video_data_http_403(exc)
     )
 
 
@@ -2659,9 +3602,21 @@ def _should_use_authenticated_infojson_fallback(
         and attempt_info is not None
         and attempt_info.cookies_used
         and not attempt_state.authenticated_infojson_fallback_used
-        and failure_kind == YtdlpFailureKind.HTTP_403
-        and exc.part == PART_VIDEO
-        and _is_video_data_http_403(exc)
+        and _is_video_media_access_failure(exc, failure_kind)
+    )
+
+
+def _is_video_media_access_failure(
+    exc: YtdlpExecutionError,
+    failure_kind: YtdlpFailureKind,
+) -> bool:
+    if exc.part != PART_VIDEO:
+        return False
+    if failure_kind != YtdlpFailureKind.HTTP_403:
+        return False
+    return bool(
+        _is_video_data_http_403(exc)
+        or _is_aria2_http_response_media_failure(exc)
     )
 
 
@@ -2755,7 +3710,7 @@ def _build_authenticated_infojson_extract_command(
     bootstrap_template: str,
 ) -> list[str]:
     prepared = _remove_command_flags(
-        _strip_cookie_options(list(command)),
+        _strip_media_downloader_options(_strip_cookie_options(list(command))),
         {
             "--no-write-info-json",
             "--write-info-json",
@@ -2804,9 +3759,44 @@ def _select_authenticated_infojson(bootstrap_dir: Path) -> Path:
     return matches[0]
 
 
+def _contains_aria2_http_response_exit_error(text: object) -> bool:
+    return bool(_ARIA2_HTTP_RESPONSE_EXIT_PATTERN.search(str(text or "")))
+
+
+def _ytdlp_error_evidence_text(exc: YtdlpExecutionError) -> str:
+    fatal_text = "\n".join(exc.fatal_lines or exc.output_lines)
+    if fatal_text.strip():
+        return fatal_text
+    if exc.combined_output.strip():
+        return exc.combined_output
+    return "\n".join([str(exc), *exc.output_lines])
+
+
+def _is_aria2_http_response_media_failure(exc: YtdlpExecutionError) -> bool:
+    if exc.part != PART_VIDEO:
+        return False
+    if not _command_uses_aria2(exc.command):
+        return False
+    return _contains_aria2_http_response_exit_error(
+        _ytdlp_error_evidence_text(exc)
+    )
+
+
+def _media_access_failure_description(exc: YtdlpExecutionError) -> str:
+    if _is_aria2_http_response_media_failure(exc):
+        return (
+            "aria2 HTTP response failure "
+            "(exit code 22: bad or unexpected HTTP response header)"
+        )
+    return "HTTP 403"
+
+
 def classify_ytdlp_failure_kind(exc: YtdlpExecutionError, options: DownloadOptions) -> YtdlpFailureKind:
-    if exc.failure_kind is not None:
+    if exc.failure_kind is not None and exc.failure_kind != YtdlpFailureKind.UNKNOWN:
         return exc.failure_kind
+
+    if _is_aria2_http_response_media_failure(exc):
+        return YtdlpFailureKind.HTTP_403
 
     fatal_text = "\n".join(exc.fatal_lines or exc.output_lines)
     if fatal_text:
@@ -3165,6 +4155,19 @@ def _command_uses_cookies(command: list[str]) -> bool:
         for value in command
     )
 
+
+def _command_uses_aria2(
+    command: list[str] | tuple[str, ...] | None,
+) -> bool:
+    if not command:
+        return False
+    downloader_value = _command_option_value(list(command), "--downloader")
+    if not downloader_value:
+        return False
+    downloader_name = Path(str(downloader_value)).name.lower()
+    return downloader_name in {"aria2c", "aria2c.exe"}
+
+
 def _command_option_value(command: list[str], option: str) -> str:
     for index, value in enumerate(command):
         if value == option and index + 1 < len(command):
@@ -3229,6 +4232,10 @@ def _is_ytdlp_postprocess_line(lower_line: str) -> bool:
 
 def _run_ytdlp(command: list[str], cancel_controller: DownloadController | None = None) -> str:
     creationflags = _subprocess_creationflags()
+    transfer_source = _transfer_source_for_command(command)
+    uses_aria2 = transfer_source == TRANSFER_SOURCE_ARIA2
+    _start_progress_attempt(transfer_source)
+    attempt_timing = _current_ytdlp_attempt_timing()
     process = None
     output_tail: list[str] = []
     meaningful_lines: list[str] = []
@@ -3251,18 +4258,28 @@ def _run_ytdlp(command: list[str], cancel_controller: DownloadController | None 
             _terminate_process_tree(process)
             raise DownloadCancelled("download cancelled/interrupted")
         if process.stdout is not None:
-            for line in process.stdout:
+            for raw_line in process.stdout:
                 if _cancel_requested(cancel_controller):
                     _terminate_process_tree(process)
                     raise DownloadCancelled("download cancelled/interrupted")
-                line = line.rstrip("\r\n")
+                line = raw_line.rstrip("\r\n")
                 sanitized = _sanitize_ytdlp_output_line(line)
                 if sanitized:
                     _append_limited(output_tail, sanitized, YTDLP_OUTPUT_TAIL_LIMIT)
                 if _is_meaningful_ytdlp_line(sanitized):
                     _append_limited(meaningful_lines, sanitized, 50)
                 stage = _ytdlp_stage_after_line(stage, sanitized)
-                _emit_ytdlp_progress_from_line(sanitized)
+                aria2_progress = parse_aria2_progress(raw_line) if uses_aria2 else None
+                if aria2_progress is not None:
+                    if attempt_timing is not None:
+                        attempt_timing.mark_first_transfer()
+                    _emit_aria2_progress(aria2_progress)
+                else:
+                    transfer_seen = _emit_ytdlp_progress_from_line(sanitized, transfer_source)
+                    if transfer_seen and attempt_timing is not None:
+                        attempt_timing.mark_first_transfer()
+                if sanitized.lower().startswith("[merger]") and attempt_timing is not None:
+                    attempt_timing.mark_merge_started()
                 if _cancel_requested(cancel_controller):
                     _terminate_process_tree(process)
                     raise DownloadCancelled("download cancelled/interrupted")
@@ -3321,6 +4338,7 @@ def _run_ytdlp(command: list[str], cancel_controller: DownloadController | None 
             http_status=http_status,
             stage=stage,
             part=_current_ytdlp_part(),
+            command=command,
         )
 
     return output
@@ -3350,7 +4368,7 @@ def _extract_ytdlp_fatal_lines(output_lines: list[str] | tuple[str, ...]) -> lis
     lines = [
         line
         for line in _sanitize_ytdlp_output_lines(output_lines)[-YTDLP_OUTPUT_TAIL_LIMIT:]
-        if _is_meaningful_ytdlp_line(line)
+        if _is_meaningful_ytdlp_line(line) and not _is_aria2_progress_line(line)
     ]
     if not lines:
         return []
@@ -3374,27 +4392,80 @@ def _is_ytdlp_fatal_marker_line(line: str) -> bool:
     )
 
 
-def _emit_ytdlp_progress_from_line(line: str) -> None:
+def _emit_aria2_progress(progress: ParsedTransferProgress) -> None:
     context = _current_progress_context()
     if context is None:
         return
+    now = time.monotonic()
+    elapsed = now - context.last_aria2_emit if context.last_aria2_emit is not None else 0.0
+    percent = progress.percent
+    percent_changed = (
+        context.last_aria2_percent is None
+        or percent is None
+        or abs(percent - context.last_aria2_percent) + 1e-9 >= 0.1
+    )
+    speed_changed = progress.speed_text != context.last_aria2_speed
+    should_emit = bool(
+        context.last_aria2_emit is None
+        or percent_changed
+        or (speed_changed and elapsed >= 0.25)
+        or elapsed >= 0.5
+        or (percent is not None and percent >= 100.0)
+    )
+    context.transfer_started = True
+    if not should_emit:
+        return
+
+    context.last_aria2_percent = percent
+    context.last_aria2_speed = progress.speed_text
+    context.last_aria2_emit = now
+    context.last_emit = now
+    _emit_progress(
+        context.callback,
+        context.phase,
+        context.video,
+        context.video_index,
+        context.video_total,
+        percent=f"{percent:.1f}%" if percent is not None else None,
+        speed=progress.speed_text,
+        source=TRANSFER_SOURCE_ARIA2,
+        generation=context.generation,
+    )
+
+
+def _is_complete_progress_percent(percent: object) -> bool:
+    try:
+        return float(str(percent or "").strip().removesuffix("%")) >= 100.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _emit_ytdlp_progress_from_line(line: str, source: str = TRANSFER_SOURCE_YTDLP) -> bool:
+    context = _current_progress_context()
     parsed = parse_ytdlp_progress_line(line)
     if not parsed:
-        return
+        return False
+    is_transfer = bool(parsed.get("percent") or parsed.get("fragment"))
+    if context is None:
+        return is_transfer
 
     now = time.monotonic()
     message = parsed.get("message") or ""
     percent = parsed.get("percent")
-    force = percent == "100%" or message in {
+    if source == TRANSFER_SOURCE_ARIA2 and message == STAGE_PREPARING and context.transfer_started:
+        return is_transfer
+    force = _is_complete_progress_percent(percent) or message in {
         "Already downloaded",
         "Extracting audio",
-        "Merging formats",
+        STAGE_MERGING,
         "Post-processing",
-        "Preparing download",
+        STAGE_PREPARING,
     }
     if not force and now - context.last_emit < 0.3:
-        return
+        return is_transfer
     context.last_emit = now
+    if is_transfer:
+        context.transfer_started = True
     _emit_progress(
         context.callback,
         context.phase,
@@ -3406,7 +4477,10 @@ def _emit_ytdlp_progress_from_line(line: str) -> None:
         speed=parsed.get("speed"),
         eta=parsed.get("eta"),
         fragment=parsed.get("fragment"),
+        source=source,
+        generation=context.generation,
     )
+    return is_transfer
 
 
 def _coerce_ytdlp_failure_kind(kind: YtdlpFailureKind | str | None) -> YtdlpFailureKind | None:
@@ -3810,6 +4884,36 @@ def _contains_stream_interrupted_output(text: str) -> bool:
 
 def _remove_command_flags(command: list[str], flags: set[str]) -> list[str]:
     return [value for value in command if value not in flags]
+
+
+def _remove_command_options(command: list[str], options: set[str]) -> list[str]:
+    prepared: list[str] = []
+    index = 0
+    while index < len(command):
+        value = str(command[index])
+        if value in options:
+            index += 2
+            continue
+        if any(value.startswith(f"{option}=") for option in options):
+            index += 1
+            continue
+        prepared.append(command[index])
+        index += 1
+    return prepared
+
+
+def _strip_media_downloader_options(command: list[str]) -> list[str]:
+    return _remove_command_options(
+        command,
+        {
+            "-N",
+            "--concurrent-fragments",
+            "--downloader",
+            "--external-downloader",
+            "--downloader-args",
+            "--external-downloader-args",
+        },
+    )
 
 
 def _strip_url_arguments(command: list[str]) -> list[str]:
@@ -4232,6 +5336,8 @@ def _is_meaningful_ytdlp_line(line: str) -> bool:
     if not line:
         return False
     if line.strip().upper() == "ERROR:":
+        return False
+    if _is_aria2_progress_line(line):
         return False
     lower = line.lower()
     if lower.startswith("[download]") and "%" in lower and "eta" in lower:

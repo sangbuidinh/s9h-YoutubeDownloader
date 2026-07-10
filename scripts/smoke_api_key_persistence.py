@@ -420,6 +420,7 @@ def _instantiate_window_for_api_key_state(state: app_settings.ApiKeyPersistenceS
         for method_name in (
             "_apply_window_icon",
             "_build_ui",
+            "_fit_initial_window_to_content",
             "_log_api_key_persistence_startup_status",
             "_update_channel_input_display",
             "_update_cookies_state",

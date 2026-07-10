@@ -9,6 +9,13 @@ Sources inspected:
 - `core/app_settings.py`, limited to protected API-key persistence, cookie source, manual cookie path, and bridge cookie path settings
 - `core/download_modes.py`
 
+## Startup Window Sizing
+
+- The root window remains hidden while the production widgets are built and measured, then is shown with the fitted geometry to avoid a startup-size flash.
+- Startup width prefers `1440` pixels but is capped to the current Tk screen/maximum width.
+- Startup height is the greater of `700` pixels and the real requested widget height plus 8 pixels, capped to the current Tk screen/maximum height.
+- When the display can fit the requested content, the minimum window height is raised to that requested height so the download action row cannot be resized below the visible client area.
+
 ## A. State Variables
 
 ### Tkinter Variables
@@ -24,7 +31,9 @@ Sources inspected:
 | `bridge_cookie_path_var` | `tk.StringVar(value=load_bridge_cookie_path())` | Local Cookie Bridge `youtube_cookies.txt` path. Fresh default is empty; the old development `D:\...` path is compatibility-only and used only when `bridge_cookie_path` is absent and the real legacy file exists. |
 | `cookie_status_var` | `tk.StringVar()` | Inline status for the active cookie source/path: `Missing` or `Found | N bytes | modified YYYY-MM-DD HH:MM:SS`. |
 | `speed_limit_var` | `tk.StringVar()` | Download limit input. Validated by `validate_speed_limit()`; empty or zero means no limit. |
+| `file_start_number_var` | `tk.StringVar(value="")` | Required session-only start number for output filenames. Blank by default on each launch, positive integer only, not persisted. Downloads are blocked until a valid value is entered. |
 | `download_mode_var` | `tk.StringVar(value=MODE_VIDEO_THUMB)` | Current download mode. Values come from `DOWNLOAD_MODES`: `Video + Thumb`, `Audio MP3 + Thumb`, `Video + Audio MP3 + Thumb`. |
+| `download_engine_var` | `tk.StringVar(value="Stable - yt-dlp internal")` | Session-only download engine selector. Values map to downloader engines `stable` and `aria2_fast`; unknown labels fall back to stable. The selected value is captured for the batch and is locked while downloads run. |
 | `hide_below_enabled_var` | `tk.BooleanVar(value=True)` | Session-only lower duration filter checkbox. Defaults to enabled on every startup. |
 | `hide_below_minutes_var` | `tk.StringVar(value="3")` | Session-only lower duration threshold entry. Zero through four ASCII digits only; empty while editing resets to `3` on focus loss or Fetch/Load More validation. |
 | `hide_above_enabled_var` | `tk.BooleanVar(value=True)` | Session-only upper duration filter checkbox. Defaults to enabled on every startup. |
@@ -84,6 +93,45 @@ Sources inspected:
 | Download mode combobox | `Video + Thumb`, `Audio MP3 + Thumb`, `Video + Audio MP3 + Thumb` | `<<ComboboxSelected>> -> self._on_download_mode_changed()` |
 | Download selected | Dynamic `Tải (N) video đã chọn` | `command=self.start_download`; text set by `_update_download_button_text()` |
 | Stop | `Dừng tải` | `command=self.stop_download` |
+
+### Download Engine Selector
+
+- The download frame includes a session-only `Download engine` readonly combobox with `Stable - yt-dlp internal` as the default and `Fast - aria2c experimental` as the optional fast mode.
+- `Stable - yt-dlp internal` maps to `DownloadOptions.download_engine == "stable"` and preserves the existing yt-dlp internal media downloader behavior.
+- `Fast - aria2c experimental` maps to `DownloadOptions.download_engine == "aria2_fast"` and resolves the optional runtime through `data/bin/aria2c.exe` via `runtime_file("aria2c.exe")`.
+- The selected engine is fixed for the entire batch. Both engines use the same sequential per-video loop and the same numbered output rules.
+- Missing, invalid, or unstartable aria2 prevents a selected Fast batch from starting. Stable mode, application startup, and package preflight do not require aria2.
+- Fast failures do not automatically change the selector. The user can manually choose Stable for a later batch and retry.
+- Fast engine parity contract: Stable and Fast use the same Premiere-safe format selector, codec requirements, maximum resolution, yt-dlp extraction behavior, isolated cookie-copy mechanism, HTTP 403 fallback, authenticated info-json fallback, retry handling, one-video lookahead, merge/remux, Premiere-safe validation, atomic promotion, SQLite state rules, and sequential item order.
+- The only intended engine difference is media transfer: Stable uses yt-dlp's internal media downloader, while Fast supplies aria2c through yt-dlp `--downloader` and `--downloader-args` media-transfer options.
+- Video commands for both engines use `PREMIERE_SAFE_VIDEO_FORMAT`, `-N 1`, `--merge-output-format mp4`, and the same no-info/description/thumbnail write controls. Fast adds only aria2c `-x 16 -s 16 -j 16 -k 1M`.
+- Fast metadata extraction, thumbnails, lookahead metadata, API calls, Cookie Bridge, SQLite, probing, validation, and MP3 extraction do not inherit aria2 media downloader options.
+- Cookies are inserted only through the isolated per-attempt `cookies.txt` copy prepared by `_prepared_cookie_attempt(...)`. Fast does not pass the selected canonical cookie file directly to yt-dlp.
+- Saved-media transfer from authenticated info-json retains Fast aria2 media-transfer options while removing cookies and the YouTube watch URL.
+- Fast does not perform a full video transcode. If no MP4 H.264/AAC format at 1080p or below exists, both engines fail strictly instead of downloading VP9/AV1 or transcoding unrestricted streams.
+
+### aria2 HTTP-response exit handling
+
+Fast media transfer may surface `ERROR: aria2c exited with code 22`. aria2 code 22 means the HTTP response header was bad or unexpected; it does not prove an HTTP 403 status.
+
+For a Fast video media command, this failure is routed into the existing HTTP media-access recovery workflow:
+
+1. The initial media attempt uses an isolated cookie copy.
+2. Code 22 triggers authenticated info-json extraction.
+3. Metadata extraction does not use aria2.
+4. Saved media URLs are downloaded cookieless through aria2.
+5. Repeated code 22 during saved-media transfer follows the existing metadata-age retry targets and one-video lookahead.
+6. Media transfer never automatically switches to Stable.
+
+The internal `HTTP_403` failure kind is reused as a compatibility class for retry routing, while technical logs retain the distinct `aria2_http_response_exit_22` detail.
+
+### File Start Number
+
+- The download frame includes a required `File start number` entry. It is blank by default, accepts only a positive integer at batch validation, and is locked while a batch is running.
+- The value is session-only and is not written to app settings, SQLite, channel records, the registry, or environment variables.
+- Output stems use minimum three-digit formatting: `001 Title`, `009 Title`, `051 Title`, `999 Title`, and `1000 Title`. Video, audio, and thumbnail outputs for the same item share the same numbered stem.
+- Numbered output stems are rebuilt from the video's canonical title for every batch. A numbered stem from a previous run must never be used as the next batch's source title, so prefixes cannot accumulate.
+- Number assignment is fixed by original selected-list order. Skipped, failed, unavailable, cancelled, and partially complete items still consume their assigned number; later items are not renumbered based on success count.
 
 Manual status context menu commands:
 
@@ -399,7 +447,34 @@ Rows use `iid=str(video.display_order)` and values:
 - The download worker passes `progress_callback=self._enqueue_progress_event` into `download_items(...)`.
 - `_enqueue_progress_event()` writes to `progress_queue` with `put_latest_progress_event(...)`.
 - `_poll_progress_queue()` runs every 300 ms, drains the queue to the latest event, merges sticky percent/speed/fragment display fields, formats lines with `format_progress_event_lines(...)`, and writes both Tkinter variables.
-- Sticky progress state resets for `batch_complete`, `stop_requested`, and `error` events.
+- Generic FFmpeg progress events use `ProgressEvent(kind="ffmpeg_progress", phase="FFmpeg")`; their detail line uses the `speed` label instead of the yt-dlp speed label. The production Fast video path does not use full-transcode progress.
+- Sticky progress state resets for `batch_complete`, `stop_requested`, and `error` events. Video order and attempt generation guards prevent a stale attempt or prior-video event from replacing newer status.
+
+### Transfer progress parity
+
+- Stable parses yt-dlp progress and retains the existing detail format, for example `3.6% | yt-dlp 47.72MiB/s`.
+- Fast parses aria2 terminal status emitted through yt-dlp's external-downloader process, for example `97.0% | aria2c 36MiB/s`.
+- The actual command determines the transfer source. Authenticated metadata-only extraction does not claim aria2 progress; saved-media Fast transfer retains aria2.
+- The first line retains the numbered filename. The second line moves through `Đang chuẩn bị tải...`, live transfer, `Đang ghép video và âm thanh...` when a merger actually runs, `Đang kiểm tra file MP4...`, and `Đang hoàn tất file...`.
+- ETA is not displayed. aria2 connection count is retained only in parsed diagnostic data and is not shown in the normal two-line UI.
+- aria2 refreshes are throttled before enqueueing; cancellation checks and subprocess reads are not throttled.
+
+### aria2 progress-line handling
+
+- ANSI/control characters and carriage-return snapshots are normalized before aria2 status parsing. When one read contains multiple complete snapshots, the final snapshot is used.
+- Pure aria2 progress snapshots such as `[#abc ...]` are excluded from concise yt-dlp fatal-error evidence.
+- `aria2c exited with code 22` remains fatal evidence, retains the `aria2_http_response_exit_22` detail, and follows the existing compatibility classification and fallback behavior.
+- Private bounded subprocess output may retain progress snapshots for diagnosis; raw subprocess lines and signed media URLs are never sent to the UI.
+
+### Download-stage timing
+
+- One sanitized `[PERF]` summary is logged for each logical video download result: success, final failure, or cancellation.
+- `engine` is `yt-dlp` or `aria2c` from the actual initial media command; `part` is `video`; `attempts` counts media subprocess attempts.
+- `prepare` measures attempt start to first transfer progress, or the complete attempt when no transfer progress appears.
+- `transfer` measures first transfer progress to merger start, or process finish when no merger runs. `merge` is nonzero only when a real `[Merger]` stage occurs.
+- `validate` and `promote` measure the existing Premiere-safe validation and atomic promotion calls. `retry_wait` sums existing video retry delays without changing them.
+- `total` is logical wall duration and may exceed or differ from the sum of stages because process startup, cleanup, staging, retry control, and filesystem gaps are diagnostic overhead.
+- PERF lines contain no title, output path, cookie path/value, URL, header, authorization value, or API key. Timing is diagnostic only and does not change downloader behavior.
 
 ### Log Text
 
@@ -461,7 +536,7 @@ Recommended groups:
 
 Non-negotiable reuse list for any production UI refactor:
 
-- Variables: `api_key_var`, `channel_var`, `save_folder_var`, `cookies_enabled_var`, `cookies_path_var`, `cookie_source_var`, `bridge_cookie_path_var`, `cookie_status_var`, `speed_limit_var`, `download_mode_var`, `hide_below_enabled_var`, `hide_below_minutes_var`, `hide_above_enabled_var`, `hide_above_minutes_var`, `filter_var`, `search_var`, `search_status_var`, `progress_current_var`, `progress_detail_var`
+- Variables: `api_key_var`, `channel_var`, `save_folder_var`, `cookies_enabled_var`, `cookies_path_var`, `cookie_source_var`, `bridge_cookie_path_var`, `cookie_status_var`, `speed_limit_var`, `download_mode_var`, `download_engine_var`, `hide_below_enabled_var`, `hide_below_minutes_var`, `hide_above_enabled_var`, `hide_above_minutes_var`, `filter_var`, `search_var`, `search_status_var`, `progress_current_var`, `progress_detail_var`
 - Runtime collections/flags: `videos`, `channel_info`, `selected_orders`, `visible_orders`, `next_page_token`, `fetching`, `loading_more`, `downloading`, `download_controller`, `download_stop_requested`, `exit_after_download_stop`, `close_requested`, `cancel_download`
 - Handlers: `start_fetch`, `start_load_more`, `open_select_by_date_dialog`, `choose_save_folder`, `_update_cookies_state`, `choose_cookies_file`, `_on_cookie_source_changed`, `choose_bridge_cookie_file`, `check_bridge_cookie_file`, `_on_download_mode_changed`, `start_download`, `stop_download`
 - Table handlers: `_on_tree_click`, `_on_tree_double_click`, `_on_tree_right_click`, `_on_tree_space`, `_open_status_editor`, `_save_manual_status`, `_apply_manual_status_to_selected`, `_clear_manual_status_for_selected`

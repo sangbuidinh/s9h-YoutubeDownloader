@@ -85,6 +85,7 @@ def main() -> int:
     print("  data/bin/yt-dlp.exe")
     print("  data/bin/ffmpeg.exe")
     print("  data/bin/deno.exe if needed")
+    print("  data/bin/aria2c.exe if using the optional experimental fast engine")
     print("  data/api key.txt if used")
     print("  user-selected cookies files if used")
     return 0

@@ -90,7 +90,6 @@ def _test_base_command_flags() -> None:
         "--file-access-retries": "10",
         "--socket-timeout": "60",
         "--http-chunk-size": "1M",
-        "-N": "1",
         "--limit-rate": "2M",
     }
     for option, value in expected_options.items():
@@ -334,6 +333,7 @@ def _test_video_audio_mode_extracts_from_local_mp4() -> None:
                     _log,
                     _cancel_controller=None,
                     _cookie_retry_state=None,
+                    _aria2_validation=None,
                 ):
                     calls.append("video")
                     final_path.parent.mkdir(parents=True, exist_ok=True)
@@ -361,6 +361,7 @@ def _test_video_audio_mode_extracts_from_local_mp4() -> None:
                         channel_id=CHANNEL_ID,
                         channel_name=CHANNEL_NAME,
                         download_mode=MODE_VIDEO_AUDIO_THUMB,
+                        file_start_number=1,
                     ),
                     lambda _message: None,
                     lambda _video: None,
@@ -411,6 +412,7 @@ def _test_video_failure_preserves_existing_thumb() -> None:
                         channel_id=CHANNEL_ID,
                         channel_name=CHANNEL_NAME,
                         download_mode=MODE_VIDEO_THUMB,
+                        file_start_number=1,
                     ),
                     lambda _message: None,
                     lambda _video: None,
@@ -469,6 +471,7 @@ def _test_video_failure_preserves_existing_audio_and_thumb_in_combined_mode() ->
                         channel_id=CHANNEL_ID,
                         channel_name=CHANNEL_NAME,
                         download_mode=MODE_VIDEO_AUDIO_THUMB,
+                        file_start_number=1,
                     ),
                     lambda _message: None,
                     lambda _video: None,
@@ -530,6 +533,7 @@ def _test_audio_failure_does_not_remove_thumb_or_video() -> None:
                         channel_id=CHANNEL_ID,
                         channel_name=CHANNEL_NAME,
                         download_mode=MODE_VIDEO_AUDIO_THUMB,
+                        file_start_number=1,
                     ),
                     lambda _message: None,
                     lambda _video: None,
@@ -573,6 +577,7 @@ def _test_thumbnail_failure_does_not_remove_video_or_audio() -> None:
                         channel_id=CHANNEL_ID,
                         channel_name=CHANNEL_NAME,
                         download_mode=MODE_VIDEO_AUDIO_THUMB,
+                        file_start_number=1,
                     ),
                     lambda _message: None,
                     lambda _video: None,
@@ -619,7 +624,7 @@ def _test_staged_mp4_validation_precedes_promotion() -> None:
         calls = []
         validations = []
 
-        def run_ytdlp(command, _options, _log, _cancel_controller=None, _cookie_retry_state=None):
+        def run_ytdlp(command, _options, _log, _cancel_controller=None, _cookie_retry_state=None, **_kwargs):
             calls.append("download")
             _output_path(command).write_bytes(b"new mp4")
 
@@ -672,7 +677,7 @@ def _test_invalid_staged_mp4_preserves_existing_final() -> None:
         promoted = []
         validated = []
 
-        def run_ytdlp(command, _options, _log, _cancel_controller=None, _cookie_retry_state=None):
+        def run_ytdlp(command, _options, _log, _cancel_controller=None, _cookie_retry_state=None, **_kwargs):
             _output_path(command).write_bytes(b"bad mp4")
 
         def validate(path, _log, _delete_invalid, _cancel_controller):

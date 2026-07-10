@@ -3,6 +3,48 @@ import re
 from dataclasses import dataclass
 
 
+TRANSFER_SOURCE_YTDLP = "yt-dlp"
+TRANSFER_SOURCE_ARIA2 = "aria2c"
+STAGE_PREPARING = "Đang chuẩn bị tải..."
+STAGE_MERGING = "Đang ghép video và âm thanh..."
+STAGE_VALIDATING = "Đang kiểm tra file MP4..."
+STAGE_PROMOTING = "Đang hoàn tất file..."
+STAGE_RETRY_WAIT = "Đang chờ thử lại..."
+
+_ANSI_ESCAPE_PATTERN = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+_ARIA2_PROGRESS_PATTERN = re.compile(
+    r"""
+    \[
+    \#
+    (?P<gid>[0-9a-fA-F]+)
+    \s+
+    (?P<downloaded>[^\s/\]]+)
+    /
+    (?P<total>[^\s\(\]]+)
+    \(
+    (?P<percent>\d+(?:\.\d+)?)
+    %
+    \)
+    (?:\s+CN:(?P<connections>\d+))?
+    (?:\s+DL:(?P<speed>[^\s\]]+))?
+    (?:\s+ETA:(?P<eta>[^\s\]]+))?
+    \]
+    """,
+    flags=re.IGNORECASE | re.VERBOSE,
+)
+
+
+@dataclass(frozen=True)
+class ParsedTransferProgress:
+    source: str
+    percent: float | None
+    speed_text: str | None
+    downloaded_text: str | None = None
+    total_text: str | None = None
+    connection_count: int | None = None
+    eta_text: str | None = None
+
+
 @dataclass(frozen=True)
 class ProgressEvent:
     kind: str = "phase"
@@ -15,6 +57,8 @@ class ProgressEvent:
     speed: str | None = None
     eta: str | None = None
     fragment: str | None = None
+    source: str | None = None
+    generation: int | None = None
 
 
 def put_latest_progress_event(progress_queue: queue.Queue, event: ProgressEvent) -> None:
@@ -41,8 +85,66 @@ def put_latest_progress_event(progress_queue: queue.Queue, event: ProgressEvent)
         pass
 
 
+def _strip_terminal_control(raw_text: object) -> str:
+    try:
+        text = str(raw_text or "")
+    except Exception:
+        return ""
+    text = _ANSI_ESCAPE_PATTERN.sub("", text)
+    text = text.replace("\x00", "").replace("\r", "\n")
+    return text.strip()
+
+
+def _normalize_aria2_speed_text(raw_speed: str | None) -> str | None:
+    if raw_speed is None:
+        return None
+    value = raw_speed.strip()
+    if not value or value in {"--", "0"}:
+        return None
+    if value.lower().endswith("/s"):
+        return value
+    return f"{value}/s"
+
+
+def parse_aria2_progress(raw_line: object) -> ParsedTransferProgress | None:
+    text = _strip_terminal_control(raw_line)
+    matches = list(_ARIA2_PROGRESS_PATTERN.finditer(text))
+    if not matches:
+        return None
+
+    match = matches[-1]
+    try:
+        percent = float(match.group("percent"))
+    except (TypeError, ValueError):
+        return None
+    percent = max(0.0, min(percent, 100.0))
+
+    connection_text = match.group("connections")
+    try:
+        connection_count = int(connection_text) if connection_text else None
+    except (TypeError, ValueError):
+        connection_count = None
+
+    return ParsedTransferProgress(
+        source=TRANSFER_SOURCE_ARIA2,
+        percent=percent,
+        speed_text=_normalize_aria2_speed_text(match.group("speed")),
+        downloaded_text=match.group("downloaded"),
+        total_text=match.group("total"),
+        connection_count=connection_count,
+        eta_text=match.group("eta"),
+    )
+
+
+def _is_aria2_progress_line(text: object) -> bool:
+    normalized = _strip_terminal_control(text)
+    if not normalized or _ARIA2_PROGRESS_PATTERN.search(normalized) is None:
+        return False
+    return not _ARIA2_PROGRESS_PATTERN.sub("", normalized).strip()
+
+
 def parse_ytdlp_progress_line(line: str) -> dict | None:
-    text = (line or "").strip()
+    text = _strip_terminal_control(line)
     if not text:
         return None
 
@@ -71,13 +173,13 @@ def parse_ytdlp_progress_line(line: str) -> dict | None:
             return result
 
         if lower.startswith("[download] destination:"):
-            return {"phase": "download", "message": "Preparing download"}
+            return {"phase": "download", "message": STAGE_PREPARING}
         if "has already been downloaded" in lower:
             return {"phase": "download", "message": "Already downloaded"}
         return None
 
     if lower.startswith("[merger]"):
-        return {"phase": "merge", "message": "Merging formats"}
+        return {"phase": "merge", "message": STAGE_MERGING}
     if lower.startswith("[extractaudio]"):
         return {"phase": "audio", "message": "Extracting audio"}
     if lower.startswith("[ffmpeg]"):
@@ -124,6 +226,8 @@ def _detail_text(event: ProgressEvent, phase: str) -> str:
     message = _compact_text(event.message, 72)
     if event.kind == "error" and message:
         return message
+    if event.kind == "ffmpeg_progress":
+        return _ffmpeg_progress_detail_text(event)
     if _is_priority_progress_message(message):
         return message
 
@@ -134,7 +238,7 @@ def _detail_text(event: ProgressEvent, phase: str) -> str:
     if message:
         return message
     if (event.phase or "").lower() == "validating mp4":
-        return "Validating MP4"
+        return STAGE_VALIDATING
     if phase in ("Video", "MP3"):
         return "Downloading..."
     if phase == "Thumbnail":
@@ -151,17 +255,45 @@ def _progress_detail_parts(event: ProgressEvent) -> list[str]:
     if event.fragment and not event.percent:
         parts.append(f"Fragment {_compact_text(event.fragment, 24)}")
     if event.speed:
-        parts.append(f"yt-dlp {_compact_text(event.speed, 32)}")
+        source = _compact_text(event.source, 16) or TRANSFER_SOURCE_YTDLP
+        parts.append(f"{source} {_compact_text(event.speed, 32)}")
+    elif event.source == TRANSFER_SOURCE_ARIA2:
+        parts.append(TRANSFER_SOURCE_ARIA2)
     if event.fragment and event.percent:
         parts.append(f"Fragment {_compact_text(event.fragment, 24)}")
     return parts
 
 
+def _ffmpeg_progress_detail_text(event: ProgressEvent) -> str:
+    parts = []
+    filename = _ffmpeg_progress_filename(event)
+    if filename:
+        parts.append(filename)
+    if event.percent:
+        parts.append(_compact_text(event.percent, 24))
+    if event.speed:
+        parts.append(f"speed {_compact_text(event.speed, 32)}")
+    return " | ".join(parts) if parts else "-"
+
+
+def _ffmpeg_progress_filename(event: ProgressEvent) -> str:
+    title = _compact_text(event.title, 90)
+    if not title:
+        return ""
+    filename = _safe_display_filename(title)
+    if not filename.lower().endswith(".mp4"):
+        filename = f"{filename}.mp4"
+    return _compact_text(filename, 96)
+
+
 def _is_priority_progress_message(message: str) -> bool:
     return message in {
-        "Preparing download",
+        STAGE_PREPARING,
         "Downloading...",
-        "Merging formats",
+        STAGE_MERGING,
+        STAGE_VALIDATING,
+        STAGE_PROMOTING,
+        STAGE_RETRY_WAIT,
         "Post-processing",
         "Extracting audio from MP4",
         "Validating MP4",

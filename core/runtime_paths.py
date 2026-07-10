@@ -4,7 +4,7 @@ from pathlib import Path
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 LEGACY_RUNTIME_DIR = Path(r"D:\Youtube Downloader")
-RUNTIME_BIN_FILENAMES = {"yt-dlp.exe", "ffmpeg.exe", "deno.exe"}
+RUNTIME_BIN_FILENAMES = {"yt-dlp.exe", "ffmpeg.exe", "deno.exe", "aria2c.exe"}
 
 
 def is_frozen() -> bool:

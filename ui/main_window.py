@@ -14,11 +14,14 @@ from core.downloader import (
     BatchDecision,
     COOKIE_SOURCE_BRIDGE,
     COOKIE_SOURCE_FILE,
+    DOWNLOAD_ENGINE_ARIA2_FAST,
+    DOWNLOAD_ENGINE_STABLE,
     DownloadController,
     DownloadError,
     DownloadOptions,
     SystemicBlockContext,
     validate_download_environment,
+    validate_file_start_number,
     validate_speed_limit,
     download_items,
 )
@@ -94,6 +97,40 @@ COOKIE_SOURCE_LABELS = {
     COOKIE_SOURCE_BRIDGE: "Local Cookie Bridge",
 }
 COOKIE_SOURCE_VALUES_BY_LABEL = {label: value for value, label in COOKIE_SOURCE_LABELS.items()}
+DOWNLOAD_ENGINE_LABELS = {
+    DOWNLOAD_ENGINE_STABLE: "Stable - yt-dlp internal",
+    DOWNLOAD_ENGINE_ARIA2_FAST: "Fast - aria2c experimental",
+}
+DOWNLOAD_ENGINE_VALUES_BY_LABEL = {label: value for value, label in DOWNLOAD_ENGINE_LABELS.items()}
+PREFERRED_INITIAL_WINDOW_WIDTH = 1440
+PREFERRED_INITIAL_WINDOW_HEIGHT = 700
+MINIMUM_WINDOW_WIDTH = 1000
+MINIMUM_WINDOW_HEIGHT = 640
+INITIAL_WINDOW_CONTENT_PADDING = 8
+
+
+def _initial_window_size(
+    requested_height: int,
+    screen_width: int,
+    screen_height: int,
+    maximum_width: int,
+    maximum_height: int,
+) -> tuple[int, int]:
+    available_width = max(
+        1,
+        min(max(1, int(screen_width)), max(1, int(maximum_width))),
+    )
+    available_height = max(
+        1,
+        min(max(1, int(screen_height)), max(1, int(maximum_height))),
+    )
+    target_width = min(PREFERRED_INITIAL_WINDOW_WIDTH, available_width)
+    content_height = max(
+        PREFERRED_INITIAL_WINDOW_HEIGHT,
+        max(1, int(requested_height)) + INITIAL_WINDOW_CONTENT_PADDING,
+    )
+    target_height = min(content_height, available_height)
+    return target_width, target_height
 
 
 @dataclass(frozen=True)
@@ -131,8 +168,7 @@ class YouTubeDownloaderWindow:
         self.root.title("YouTube Downloaderbs")
         self._app_icon_image: tk.PhotoImage | None = None
         self._apply_window_icon()
-        self.root.geometry("1440x700")
-        self.root.minsize(1000, 640)
+        self.root.minsize(MINIMUM_WINDOW_WIDTH, MINIMUM_WINDOW_HEIGHT)
 
         self.events: queue.Queue = queue.Queue()
         self.progress_queue: queue.Queue = queue.Queue(maxsize=1)
@@ -184,7 +220,9 @@ class YouTubeDownloaderWindow:
         self.bridge_cookie_path_var = tk.StringVar(value=load_bridge_cookie_path())
         self.cookie_status_var = tk.StringVar()
         self.speed_limit_var = tk.StringVar()
+        self.file_start_number_var = tk.StringVar(value="")
         self.download_mode_var = tk.StringVar(value=MODE_VIDEO_THUMB)
+        self.download_engine_var = tk.StringVar(value=DOWNLOAD_ENGINE_LABELS[DOWNLOAD_ENGINE_STABLE])
         self.hide_below_enabled_var = tk.BooleanVar(value=True)
         self.hide_below_minutes_var = tk.StringVar(value=str(DEFAULT_HIDE_BELOW_MINUTES))
         self.hide_above_enabled_var = tk.BooleanVar(value=True)
@@ -194,7 +232,7 @@ class YouTubeDownloaderWindow:
         self.search_status_var = tk.StringVar()
         self.progress_current_var = tk.StringVar(value="Đang tải: Sẵn sàng")
         self.progress_detail_var = tk.StringVar(value="Đang xử lý: -")
-        self._reset_progress_sticky()
+        self._reset_progress_sticky(reset_order=True)
         self.search_match_orders: list[int] = []
         self.current_search_match_index = -1
         self.tree_column_drag: dict | None = None
@@ -203,6 +241,7 @@ class YouTubeDownloaderWindow:
         self.tree_column_fit_in_progress = False
 
         self._build_ui()
+        self._fit_initial_window_to_content()
         self._log_api_key_persistence_startup_status()
         self.channel_var.trace_add("write", lambda *_args: self._update_channel_input_display())
         self.search_var.trace_add("write", lambda *_args: self._on_search_text_changed())
@@ -790,8 +829,30 @@ class YouTubeDownloaderWindow:
         self.speed_limit_entry.grid(row=0, column=0, sticky="w")
         ttk.Label(speed_frame, text="MB/s").grid(row=0, column=1, sticky="w", padx=(6, 0))
 
+        ttk.Label(download_frame, text="File start number").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=2)
+        file_number_validate = (self.root.register(self._validate_file_start_number_input), "%P")
+        self.file_start_number_entry = ttk.Entry(
+            download_frame,
+            textvariable=self.file_start_number_var,
+            width=10,
+            validate="key",
+            validatecommand=file_number_validate,
+        )
+        self.file_start_number_entry.grid(row=2, column=1, sticky="w", pady=2)
+
+        ttk.Label(download_frame, text="Download engine").grid(row=3, column=0, sticky="w", padx=(0, 8), pady=2)
+        self.download_engine_box = ttk.Combobox(
+            download_frame,
+            textvariable=self.download_engine_var,
+            values=tuple(DOWNLOAD_ENGINE_LABELS.values()),
+            state="readonly",
+            width=30,
+        )
+        self.download_engine_box.grid(row=3, column=1, columnspan=2, sticky="ew", pady=2)
+        self._block_combobox_mousewheel(self.download_engine_box)
+
         download_actions = ttk.Frame(download_frame)
-        download_actions.grid(row=2, column=0, columnspan=3, sticky="e", pady=(8, 0))
+        download_actions.grid(row=4, column=0, columnspan=3, sticky="e", pady=(8, 0))
         self.download_button = ttk.Button(download_actions, command=self.start_download, style="Primary.TButton")
         self.download_button.grid(row=0, column=0, sticky="e")
         self.stop_button = ttk.Button(
@@ -848,6 +909,27 @@ class YouTubeDownloaderWindow:
         log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
         log_scroll.grid(row=0, column=1, sticky="ns")
         self.log_text.configure(yscrollcommand=log_scroll.set)
+
+    def _fit_initial_window_to_content(self) -> None:
+        self.root.update_idletasks()
+        requested_height = self.root.winfo_reqheight()
+        maximum_width, maximum_height = self.root.maxsize()
+        target_width, target_height = _initial_window_size(
+            requested_height,
+            self.root.winfo_screenwidth(),
+            self.root.winfo_screenheight(),
+            maximum_width,
+            maximum_height,
+        )
+        minimum_height = min(
+            target_height,
+            max(MINIMUM_WINDOW_HEIGHT, requested_height),
+        )
+        self.root.minsize(
+            min(MINIMUM_WINDOW_WIDTH, target_width),
+            minimum_height,
+        )
+        self.root.geometry(f"{target_width}x{target_height}")
 
     def _log_api_key_persistence_startup_status(self) -> None:
         status = getattr(self, "_api_key_persistence_status", "")
@@ -1115,6 +1197,9 @@ class YouTubeDownloaderWindow:
     def _current_cookie_source(self) -> str:
         return COOKIE_SOURCE_VALUES_BY_LABEL.get(self.cookie_source_var.get(), COOKIE_SOURCE_FILE)
 
+    def _current_download_engine(self) -> str:
+        return DOWNLOAD_ENGINE_VALUES_BY_LABEL.get(self.download_engine_var.get(), DOWNLOAD_ENGINE_STABLE)
+
     def _on_cookie_source_changed(self) -> None:
         save_cookie_source(self._current_cookie_source())
         self._update_cookies_state()
@@ -1184,6 +1269,9 @@ class YouTubeDownloaderWindow:
 
     def _on_duration_filter_text_changed(self, *_args) -> None:
         self._apply_live_duration_filter_if_valid()
+
+    def _validate_file_start_number_input(self, proposed: str) -> bool:
+        return proposed == "" or proposed.isdigit()
 
     def open_select_by_date_dialog(self) -> None:
         if self.downloading:
@@ -1353,6 +1441,13 @@ class YouTubeDownloaderWindow:
             self._show_error_dialog(friendly)
             return
 
+        try:
+            file_start_number = validate_file_start_number(self.file_start_number_var.get())
+        except DownloadError as exc:
+            self._show_error_dialog(str(exc), title="Starting file number required")
+            self.file_start_number_entry.focus_set()
+            return
+
         options = DownloadOptions(
             base_folder=self.save_folder_var.get().strip(),
             channel_id=self.channel_info.channel_id,
@@ -1363,6 +1458,8 @@ class YouTubeDownloaderWindow:
             download_mode=self.download_mode_var.get(),
             cookie_source=self._current_cookie_source(),
             bridge_cookie_path=self.bridge_cookie_path_var.get().strip(),
+            download_engine=self._current_download_engine(),
+            file_start_number=file_start_number,
         )
         if not save_cookie_preferences(
             options.cookie_source,
@@ -1395,7 +1492,7 @@ class YouTubeDownloaderWindow:
             systemic_block_callback=lambda context: self.events.put(("systemic_download_block", context))
         )
         self._clear_progress_queue()
-        self._reset_progress_sticky()
+        self._reset_progress_sticky(reset_order=True)
         self.progress_current_var.set("Đang tải: Sẵn sàng")
         self.progress_detail_var.set("Đang xử lý: -")
         self._set_download_controls_locked(True)
@@ -2440,6 +2537,8 @@ class YouTubeDownloaderWindow:
         self._configure_widget_state("select_by_date_button", download_state)
         self._configure_widget_state("cookies_check", download_state)
         self._configure_widget_state("speed_limit_entry", download_state)
+        self._configure_widget_state("file_start_number_entry", download_state)
+        self._configure_widget_state("download_engine_box", download_combo_state)
         self._configure_widget_state("filter_box", download_combo_state)
         self._update_cookies_state()
         self._update_more_button_state()
@@ -2724,18 +2823,69 @@ class YouTubeDownloaderWindow:
             return "Đang xử lý:" + line[len("Processing:") :]
         return line
 
-    def _reset_progress_sticky(self) -> None:
+    def _reset_progress_sticky(self, *, reset_order: bool = False) -> None:
         self._progress_display_key = None
         self._progress_sticky_percent = None
         self._progress_sticky_speed = None
         self._progress_sticky_fragment = None
+        self._progress_sticky_source = None
+        if reset_order or not hasattr(self, "_progress_latest_item_key"):
+            self._progress_latest_item_key = None
+            self._progress_latest_generation = None
+            self._progress_last_display_event = None
+            self._progress_terminal_guard = False
 
     def _merge_progress_event_for_display(self, event: ProgressEvent) -> ProgressEvent:
-        if event.kind in {"batch_complete", "stop_requested", "error"}:
+        item_key = (event.video_total, event.video_index, event.title)
+        terminal = event.kind in {"batch_complete", "stop_requested", "error"}
+        if terminal:
             self._reset_progress_sticky()
+            if event.video_index is not None:
+                if self._progress_latest_item_key != item_key:
+                    self._progress_latest_generation = None
+                self._progress_latest_item_key = item_key
+            if event.generation is not None:
+                self._progress_latest_generation = event.generation
+            self._progress_terminal_guard = True
+            self._progress_last_display_event = event
             return event
 
-        key = (event.video_index, event.video_total, event.phase, event.title)
+        latest_item = self._progress_latest_item_key
+        if (
+            latest_item is not None
+            and event.video_index is not None
+            and latest_item[1] is not None
+            and event.video_total == latest_item[0]
+            and event.video_index < latest_item[1]
+        ):
+            return self._progress_last_display_event or event
+
+        same_item = latest_item == item_key
+        if same_item and event.generation is not None and self._progress_latest_generation is not None:
+            if event.generation < self._progress_latest_generation:
+                return self._progress_last_display_event or event
+
+        newer_generation = bool(
+            same_item
+            and event.generation is not None
+            and (
+                self._progress_latest_generation is None
+                or event.generation > self._progress_latest_generation
+            )
+        )
+        new_item = latest_item != item_key
+        if self._progress_terminal_guard and not (new_item or newer_generation):
+            return self._progress_last_display_event or event
+        if new_item or newer_generation:
+            self._reset_progress_sticky()
+            self._progress_terminal_guard = False
+            self._progress_latest_item_key = item_key
+            if new_item:
+                self._progress_latest_generation = None
+        if event.generation is not None:
+            self._progress_latest_generation = event.generation
+
+        key = (event.video_index, event.video_total, event.phase, event.title, event.generation)
         if key != self._progress_display_key:
             self._reset_progress_sticky()
             self._progress_display_key = key
@@ -2746,8 +2896,10 @@ class YouTubeDownloaderWindow:
             self._progress_sticky_speed = event.speed
         if event.fragment:
             self._progress_sticky_fragment = event.fragment
+        if event.source:
+            self._progress_sticky_source = event.source
 
-        return ProgressEvent(
+        display_event = ProgressEvent(
             kind=event.kind,
             phase=event.phase,
             message=event.message,
@@ -2758,7 +2910,11 @@ class YouTubeDownloaderWindow:
             speed=event.speed or self._progress_sticky_speed,
             eta=None,
             fragment=event.fragment or self._progress_sticky_fragment,
+            source=event.source or self._progress_sticky_source,
+            generation=event.generation,
         )
+        self._progress_last_display_event = display_event
+        return display_event
 
     def _append_log(self, message: str) -> None:
         safe_message = sanitize_log_text(message)
@@ -3049,5 +3205,7 @@ class YouTubeDownloaderWindow:
 
 def main() -> None:
     root = tk.Tk()
+    root.withdraw()
     YouTubeDownloaderWindow(root)
+    root.deiconify()
     root.mainloop()
