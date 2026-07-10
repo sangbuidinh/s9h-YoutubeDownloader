@@ -9,6 +9,13 @@ Sources inspected:
 - `core/app_settings.py`, limited to protected API-key persistence, cookie source, manual cookie path, and bridge cookie path settings
 - `core/download_modes.py`
 
+## Startup Window Sizing
+
+- The root window remains hidden while the production widgets are built and measured, then is shown with the fitted geometry to avoid a startup-size flash.
+- Startup width prefers `1440` pixels but is capped to the current Tk screen/maximum width.
+- Startup height is the greater of `700` pixels and the real requested widget height plus 8 pixels, capped to the current Tk screen/maximum height.
+- When the display can fit the requested content, the minimum window height is raised to that requested height so the download action row cannot be resized below the visible client area.
+
 ## A. State Variables
 
 ### Tkinter Variables

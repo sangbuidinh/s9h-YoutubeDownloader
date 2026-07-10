@@ -102,6 +102,35 @@ DOWNLOAD_ENGINE_LABELS = {
     DOWNLOAD_ENGINE_ARIA2_FAST: "Fast - aria2c experimental",
 }
 DOWNLOAD_ENGINE_VALUES_BY_LABEL = {label: value for value, label in DOWNLOAD_ENGINE_LABELS.items()}
+PREFERRED_INITIAL_WINDOW_WIDTH = 1440
+PREFERRED_INITIAL_WINDOW_HEIGHT = 700
+MINIMUM_WINDOW_WIDTH = 1000
+MINIMUM_WINDOW_HEIGHT = 640
+INITIAL_WINDOW_CONTENT_PADDING = 8
+
+
+def _initial_window_size(
+    requested_height: int,
+    screen_width: int,
+    screen_height: int,
+    maximum_width: int,
+    maximum_height: int,
+) -> tuple[int, int]:
+    available_width = max(
+        1,
+        min(max(1, int(screen_width)), max(1, int(maximum_width))),
+    )
+    available_height = max(
+        1,
+        min(max(1, int(screen_height)), max(1, int(maximum_height))),
+    )
+    target_width = min(PREFERRED_INITIAL_WINDOW_WIDTH, available_width)
+    content_height = max(
+        PREFERRED_INITIAL_WINDOW_HEIGHT,
+        max(1, int(requested_height)) + INITIAL_WINDOW_CONTENT_PADDING,
+    )
+    target_height = min(content_height, available_height)
+    return target_width, target_height
 
 
 @dataclass(frozen=True)
@@ -139,8 +168,7 @@ class YouTubeDownloaderWindow:
         self.root.title("YouTube Downloaderbs")
         self._app_icon_image: tk.PhotoImage | None = None
         self._apply_window_icon()
-        self.root.geometry("1440x700")
-        self.root.minsize(1000, 640)
+        self.root.minsize(MINIMUM_WINDOW_WIDTH, MINIMUM_WINDOW_HEIGHT)
 
         self.events: queue.Queue = queue.Queue()
         self.progress_queue: queue.Queue = queue.Queue(maxsize=1)
@@ -213,6 +241,7 @@ class YouTubeDownloaderWindow:
         self.tree_column_fit_in_progress = False
 
         self._build_ui()
+        self._fit_initial_window_to_content()
         self._log_api_key_persistence_startup_status()
         self.channel_var.trace_add("write", lambda *_args: self._update_channel_input_display())
         self.search_var.trace_add("write", lambda *_args: self._on_search_text_changed())
@@ -880,6 +909,27 @@ class YouTubeDownloaderWindow:
         log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
         log_scroll.grid(row=0, column=1, sticky="ns")
         self.log_text.configure(yscrollcommand=log_scroll.set)
+
+    def _fit_initial_window_to_content(self) -> None:
+        self.root.update_idletasks()
+        requested_height = self.root.winfo_reqheight()
+        maximum_width, maximum_height = self.root.maxsize()
+        target_width, target_height = _initial_window_size(
+            requested_height,
+            self.root.winfo_screenwidth(),
+            self.root.winfo_screenheight(),
+            maximum_width,
+            maximum_height,
+        )
+        minimum_height = min(
+            target_height,
+            max(MINIMUM_WINDOW_HEIGHT, requested_height),
+        )
+        self.root.minsize(
+            min(MINIMUM_WINDOW_WIDTH, target_width),
+            minimum_height,
+        )
+        self.root.geometry(f"{target_width}x{target_height}")
 
     def _log_api_key_persistence_startup_status(self) -> None:
         status = getattr(self, "_api_key_persistence_status", "")
@@ -3098,5 +3148,7 @@ class YouTubeDownloaderWindow:
 
 def main() -> None:
     root = tk.Tk()
+    root.withdraw()
     YouTubeDownloaderWindow(root)
+    root.deiconify()
     root.mainloop()
