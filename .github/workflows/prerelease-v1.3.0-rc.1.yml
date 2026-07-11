@@ -23,24 +23,72 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ("${{ github.ref }}" -ne "refs/tags/v1.3.0-rc.1") {
-            throw "This workflow must be dispatched from tag v1.3.0-rc.1"
+          $ErrorActionPreference = "Stop"
+
+          if ("${{ github.event_name }}" -ne "workflow_dispatch") {
+            throw "This workflow only supports workflow_dispatch"
           }
-          if ((git cat-file -t v1.3.0-rc.1) -ne "tag") {
-            throw "v1.3.0-rc.1 must be an annotated tag"
+
+          $tag = "v1.3.0-rc.1"
+          $expectedTagCommit = "e2e93f3cf9beb1d4a8df2954017f6662e28878e4"
+
+          $tagType = (git cat-file -t $tag).Trim()
+          if ($tagType -ne "tag") {
+            throw "$tag must be an annotated tag"
           }
+
           $headCommit = (git rev-parse HEAD).Trim()
-          $tagCommit = (git rev-list -n 1 v1.3.0-rc.1).Trim()
+          $tagCommit = (git rev-list -n 1 $tag).Trim()
           if ($headCommit -ne $tagCommit) {
-            throw "Checked-out commit does not match v1.3.0-rc.1"
+            throw "Checked-out commit does not match $tag"
           }
-          gh release view v1.3.0-rc.1 --repo "${{ github.repository }}" *> $null
-          if ($LASTEXITCODE -eq 0) {
-            throw "GitHub release v1.3.0-rc.1 already exists"
+
+          if ($tagCommit -ne $expectedTagCommit) {
+            throw (
+              "$tag points to unexpected commit. " +
+              "Expected $expectedTagCommit, received $tagCommit"
+            )
           }
-          if ($LASTEXITCODE -ne 1) {
-            throw "Could not verify GitHub release absence"
+
+          $previousNativePreference = $PSNativeCommandUseErrorActionPreference
+          try {
+            $PSNativeCommandUseErrorActionPreference = $false
+            $releaseViewOutput = @(
+              & gh release view $tag `
+                --repo "${{ github.repository }}" `
+                2>&1
+            )
+            $releaseViewExitCode = $LASTEXITCODE
           }
+          finally {
+            $PSNativeCommandUseErrorActionPreference = $previousNativePreference
+          }
+
+          if ($releaseViewExitCode -eq 0) {
+            throw "GitHub release $tag already exists"
+          }
+
+          if ($releaseViewExitCode -ne 1) {
+            throw (
+              "Could not verify GitHub release absence. " +
+              "gh exit code: $releaseViewExitCode"
+            )
+          }
+
+          $releaseViewText = ($releaseViewOutput | Out-String).Trim()
+          $expectedMissingReleaseText = (
+            $releaseViewText -match
+            "(?i)(release\s+not\s+found|not\s+found|HTTP\s+404)"
+          )
+
+          if (-not $expectedMissingReleaseText) {
+            throw (
+              "gh returned exit code 1, but the response did not confirm " +
+              "that the release is absent"
+            )
+          }
+
+          Write-Host "Confirmed: GitHub release $tag does not exist."
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
