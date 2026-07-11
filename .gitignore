@@ -46,6 +46,7 @@ data/bin/deno.exe
 # Build / package
 build/
 dist/
+release/
 *.spec
 *.zip
 *.7z
