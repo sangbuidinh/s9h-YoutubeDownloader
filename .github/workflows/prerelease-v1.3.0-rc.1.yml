@@ -89,6 +89,8 @@ jobs:
           }
 
           Write-Host "Confirmed: GitHub release $tag does not exist."
+          $global:LASTEXITCODE = 0
+          exit 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
