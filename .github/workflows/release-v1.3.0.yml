@@ -1,0 +1,203 @@
+name: Release v1.3.0
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-v1.3.0
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v1.3.0
+          fetch-depth: 0
+      - name: Verify annotated tag and release absence
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if ("${{ github.event_name }}" -ne "workflow_dispatch") {
+            throw "This workflow only supports workflow_dispatch"
+          }
+
+          $tag = "v1.3.0"
+
+          $tagType = (git cat-file -t $tag).Trim()
+          if ($tagType -ne "tag") {
+            throw "$tag must be an annotated tag"
+          }
+
+          $headCommit = (git rev-parse HEAD).Trim()
+          $tagCommit = (git rev-list -n 1 $tag).Trim()
+          if ($headCommit -ne $tagCommit) {
+            throw "Checked-out commit does not match $tag"
+          }
+
+          $version = (Get-Content -LiteralPath "VERSION" -Raw).Trim()
+          if ($version -ne "1.3.0") {
+            throw "VERSION at $tag must be 1.3.0"
+          }
+
+          git fetch origin main:refs/remotes/origin/main --no-tags
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not fetch origin/main for tag ancestry verification"
+          }
+
+          git merge-base --is-ancestor $tagCommit origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw "$tag commit is not an ancestor of origin/main"
+          }
+
+          $previousNativePreference = $PSNativeCommandUseErrorActionPreference
+          try {
+            $PSNativeCommandUseErrorActionPreference = $false
+            $releaseViewOutput = @(
+              & gh release view $tag `
+                --repo "${{ github.repository }}" `
+                2>&1
+            )
+            $releaseViewExitCode = $LASTEXITCODE
+          }
+          finally {
+            $PSNativeCommandUseErrorActionPreference = $previousNativePreference
+          }
+
+          if ($releaseViewExitCode -eq 0) {
+            throw "GitHub release $tag already exists"
+          }
+
+          if ($releaseViewExitCode -ne 1) {
+            throw (
+              "Could not verify GitHub release absence. " +
+              "gh exit code: $releaseViewExitCode"
+            )
+          }
+
+          $releaseViewText = ($releaseViewOutput | Out-String).Trim()
+          $expectedMissingReleaseText = (
+            $releaseViewText -match
+            "(?i)(release\s+not\s+found|not\s+found|HTTP\s+404)"
+          )
+
+          if (-not $expectedMissingReleaseText) {
+            throw (
+              "gh returned exit code 1, but the response did not confirm " +
+              "that the release is absent"
+            )
+          }
+
+          Write-Host "Confirmed: GitHub release $tag does not exist."
+          $global:LASTEXITCODE = 0
+          exit 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Configure canonical Windows temp path
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          $requestedTemp = Join-Path `
+            $env:USERPROFILE `
+            "s9h-actions-temp\$env:GITHUB_RUN_ID"
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path $requestedTemp |
+            Out-Null
+
+          $resolvedOutput = @(
+            & python -c `
+              "from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=False))" `
+              $requestedTemp
+          )
+          $resolveExitCode = $LASTEXITCODE
+
+          if ($resolveExitCode -ne 0) {
+            throw "Could not resolve the canonical Windows temporary directory"
+          }
+
+          $resolvedTemp = $resolvedOutput | Select-Object -Last 1
+          if ([string]::IsNullOrWhiteSpace([string]$resolvedTemp)) {
+            throw "Python returned an empty canonical temporary path"
+          }
+
+          $resolvedTemp = ([string]$resolvedTemp).Trim()
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path $resolvedTemp |
+            Out-Null
+
+          $env:TEMP = $resolvedTemp
+          $env:TMP = $resolvedTemp
+          $env:TMPDIR = $resolvedTemp
+
+          "TEMP=$resolvedTemp" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TMP=$resolvedTemp" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TMPDIR=$resolvedTemp" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          @'
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
+          with TemporaryDirectory() as temp_dir:
+              raw_path = Path(temp_dir) / "data" / "download_state.sqlite3"
+              canonical_path = raw_path.resolve(strict=False)
+
+              print(f"temporary-path-canonical={raw_path == canonical_path}")
+              if raw_path != canonical_path:
+                  print(f"raw={raw_path}")
+                  print(f"canonical={canonical_path}")
+                  raise SystemExit("Configured temporary path is still not canonical")
+          '@ | python -
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Canonical temporary-path probe failed"
+          }
+
+          python scripts\smoke_sqlite_startup_state.py
+          if ($LASTEXITCODE -ne 0) {
+            throw "SQLite startup smoke still fails with the canonical temporary root"
+          }
+
+          Write-Host "Canonical Windows temporary root validated successfully."
+          $global:LASTEXITCODE = 0
+          exit 0
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pip pyinstaller
+      - name: Build and validate checksum-pinned assets
+        shell: pwsh
+        run: .\scripts\build_release_v1_3_0.ps1 -PreparePinnedRuntime
+      - name: Keep downloadable workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Youtube-Downloaderbs-v1.3.0
+          path: release/assets/*
+          if-no-files-found: error
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.3.0
+          name: Youtube Downloaderbs v1.3.0
+          prerelease: false
+          draft: false
+          body_path: release/RELEASE_NOTES.md
+          fail_on_unmatched_files: true
+          files: |
+            release/assets/Youtube.Downloaderbs.exe
+            release/assets/Youtube-Downloaderbs-v1.3.0.zip
