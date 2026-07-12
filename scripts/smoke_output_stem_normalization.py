@@ -13,7 +13,13 @@ from core import db_store, state_store
 from core.download_modes import MODE_VIDEO_THUMB, PART_THUMB, PART_VIDEO
 from core.downloader import DownloadOptions, download_items
 from core.file_status import build_output_paths
-from core.filename_utils import normalize_output_stem, strip_known_media_suffixes
+from core.filename_utils import (
+    MAX_FILENAME_BASE_LENGTH,
+    assign_unique_title_bases,
+    normalize_output_stem,
+    sanitize_video_filename_base,
+    strip_known_media_suffixes,
+)
 
 
 CHANNEL_ID = "channel"
@@ -25,6 +31,8 @@ def main() -> int:
     _configure_stdio()
     real_runtime_before = _snapshot_real_runtime_files()
     _test_normalization_examples()
+    _test_filename_sanitization_hardening()
+    _test_case_insensitive_filename_collisions()
     _test_build_output_paths_are_extensionless()
     _test_sqlite_sanitized_filename_base_is_extensionless()
     _test_manual_status_redownload_uses_extensionless_stem()
@@ -49,6 +57,51 @@ def _test_normalization_examples() -> None:
     for value, expected in cases.items():
         _assert(strip_known_media_suffixes(value) == expected, f"strip failed for {value!r}")
         _assert(normalize_output_stem(value) == expected, f"normalize failed for {value!r}")
+
+
+def _test_filename_sanitization_hardening() -> None:
+    cases = {
+        "line\nbreak": "line_break",
+        "tab\tvalue": "tab_value",
+        "nul\x00value": "nul_value",
+        "unit\x1fseparator": "unit_separator",
+        "delete\x7fvalue": "delete_value",
+        'bad\\/:*?"<>|name': "bad_________name",
+        "CON": "CON_",
+        "trailing. ": "trailing",
+        "\x00\x1f\x7f": "___",
+    }
+    for value, expected in cases.items():
+        actual = sanitize_video_filename_base(value)
+        _assert(actual == expected, f"sanitize failed for {value!r}: {actual!r}")
+        _assert_filename_characters_are_safe(actual)
+
+    long_value = "A" * (MAX_FILENAME_BASE_LENGTH + 25)
+    trimmed = sanitize_video_filename_base(long_value)
+    _assert(len(trimmed) == MAX_FILENAME_BASE_LENGTH, "sanitized filename exceeded max length")
+    _assert(trimmed == "A" * MAX_FILENAME_BASE_LENGTH, "max-length trimming changed valid characters")
+    _assert_filename_characters_are_safe(trimmed)
+
+
+def _test_case_insensitive_filename_collisions() -> None:
+    videos = [
+        SimpleNamespace(title="Example"),
+        SimpleNamespace(title="example"),
+        SimpleNamespace(title="EXAMPLE"),
+    ]
+    assign_unique_title_bases(videos)
+    actual = [video.sanitized_filename_base for video in videos]
+    _assert(actual == ["Example", "example (2)", "EXAMPLE (3)"], f"collision suffixes were wrong: {actual}")
+    _assert(len({value.casefold() for value in actual}) == len(actual), "case-insensitive collision remained")
+    for value in actual:
+        _assert_filename_characters_are_safe(value)
+
+
+def _assert_filename_characters_are_safe(value: str) -> None:
+    windows_invalid = set('\\/:*?"<>|')
+    _assert(not any(ord(char) < 32 for char in value), f"control character remained in {value!r}")
+    _assert("\x7f" not in value, f"DEL remained in {value!r}")
+    _assert(not any(char in windows_invalid for char in value), f"Windows-invalid character remained in {value!r}")
 
 
 def _test_build_output_paths_are_extensionless() -> None:

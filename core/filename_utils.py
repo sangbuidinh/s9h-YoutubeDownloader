@@ -44,7 +44,7 @@ def sanitize_channel_name(name: str) -> str:
 
 
 def sanitize_video_filename_base(title: str, max_length: int = MAX_FILENAME_BASE_LENGTH) -> str:
-    cleaned = re.sub(r'[\\/:*?"<>|]', "_", title or "")
+    cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f\x7f]', "_", title or "")
     cleaned = cleaned.strip(" .")
     if not cleaned:
         cleaned = "Untitled"

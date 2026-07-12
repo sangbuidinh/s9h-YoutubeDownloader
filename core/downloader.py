@@ -781,7 +781,7 @@ def _terminate_process_tree(process: subprocess.Popen | None) -> None:
 
     if os.name == "nt":
         try:
-            subprocess.run(
+            result = subprocess.run(
                 ["taskkill", "/PID", str(process.pid), "/T", "/F"],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
@@ -790,7 +790,8 @@ def _terminate_process_tree(process: subprocess.Popen | None) -> None:
                 timeout=3,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            return
+            if result.returncode == 0:
+                return
         except Exception:
             pass
 
@@ -815,8 +816,11 @@ def _wait_for_process_exit(process: subprocess.Popen, timeout: float) -> int | N
         return process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         return None
-    except OSError:
-        return process.poll()
+    except Exception:
+        try:
+            return process.poll()
+        except Exception:
+            return None
 
 
 def validate_speed_limit(value: str) -> str | None:

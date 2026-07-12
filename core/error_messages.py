@@ -55,6 +55,8 @@ def classify_ytdlp_error(
 
 def classify_api_error(code: str, message: str = "") -> FriendlyError:
     haystack = f"{code} {message}".lower()
+    if "api_key_file_error" in haystack:
+        return FRIENDLY_ERRORS["api_key_file_error"]
     if _contains_invalid_api_key(haystack):
         return FRIENDLY_ERRORS["invalid_api_key"]
     if _contains_quota(haystack):
@@ -599,6 +601,15 @@ FRIENDLY_ERRORS = {
             "Kiểm tra lại API key",
             "Bật YouTube Data API v3 trong Google Cloud",
             r"Thêm API key mới vào data\api key.txt",
+        ),
+    ),
+    "api_key_file_error": FriendlyError(
+        "ERROR",
+        "Không thể đọc tệp API key. Hãy kiểm tra quyền truy cập và bảo đảm tệp được lưu bằng UTF-8.",
+        "Tệp API key không thể được đọc an toàn.",
+        (
+            "Kiểm tra quyền truy cập tệp",
+            "Lưu lại tệp bằng mã hóa UTF-8",
         ),
     ),
     "api_quota": FriendlyError(

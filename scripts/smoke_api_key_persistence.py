@@ -12,7 +12,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core import app_settings
-from core.youtube_api import read_api_keys
+from core.error_messages import classify_api_error, format_friendly_error
+from core.youtube_api import YoutubeApiError, read_api_keys
 from ui import main_window
 
 
@@ -39,6 +40,7 @@ def main() -> int:
     _test_startup_logs_only_actionable_failures()
     _test_request_context_and_ui_have_no_remember_state()
     _test_api_key_file_still_supplies_fallback_keys()
+    _test_api_key_file_read_failures_are_safe_and_friendly()
     print("api key persistence smoke passed")
     return 0
 
@@ -360,6 +362,41 @@ def _test_api_key_file_still_supplies_fallback_keys() -> None:
         keys = read_api_keys("manual-ui-key", api_key_file=api_key_file)
         _assert(keys == ["manual-ui-key", "file-key"], "API-key file fallback order changed")
         _assert(api_key_file.read_text(encoding="utf-8") == "file-key\nmanual-ui-key\n", "API-key file was modified")
+
+        missing = Path(temp_dir) / "missing-api-key.txt"
+        _assert(read_api_keys("manual-only", api_key_file=missing) == ["manual-only"], "missing API-key file failed")
+
+
+def _test_api_key_file_read_failures_are_safe_and_friendly() -> None:
+    failures = (
+        PermissionError("private path and permission detail"),
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid byte"),
+        OSError("sample key or path detail"),
+    )
+    for failure in failures:
+        try:
+            read_api_keys(SECRET, api_key_file=_FailingApiKeyFile(failure))
+        except YoutubeApiError as exc:
+            _assert(exc.code == "api_key_file_error", f"wrong API-key file error code: {exc.code}")
+            _assert(exc.message == "Cannot read API key file", f"unsafe API-key file message: {exc.message!r}")
+            friendly = classify_api_error(exc.code, exc.message)
+            rendered = format_friendly_error(friendly, [exc.message])
+            expected = "Không thể đọc tệp API key. Hãy kiểm tra quyền truy cập và bảo đảm tệp được lưu bằng UTF-8."
+            _assert(friendly.title == expected, "API-key file error did not use the required Vietnamese message")
+            _assert(expected in rendered, "formatted API-key file error lost the friendly message")
+            _assert(SECRET not in repr(exc), "API-key file exception leaked the sample key")
+            _assert(SECRET not in rendered, "friendly API-key file error leaked the sample key")
+            _assert(str(failure) not in rendered, "friendly API-key file error leaked the underlying failure")
+        else:
+            raise AssertionError(f"{type(failure).__name__} was not converted to YoutubeApiError")
+
+
+class _FailingApiKeyFile:
+    def __init__(self, failure: BaseException) -> None:
+        self.failure = failure
+
+    def read_text(self, **_kwargs):
+        raise self.failure
 
 
 def _window_harness(*, manual_key: str):
