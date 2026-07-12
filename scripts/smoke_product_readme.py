@@ -47,6 +47,7 @@ def main() -> int:
         _assert(re.search(pattern, readme) is None, f"README contains {label}")
 
     _verify_relative_links(readme)
+    _test_historical_archive_eol_portability()
     _verify_historical_archive()
     print("product README smoke tests passed")
     return 0
@@ -70,17 +71,67 @@ def _verify_relative_links(readme: str) -> None:
     _assert(expected.issubset(checked), f"required documentation links are missing: {sorted(expected - checked)}")
 
 
-def _verify_historical_archive() -> None:
-    _assert(HISTORY_PATH.is_file(), "historical Phase 3H.8 file is missing")
-    archived = HISTORY_PATH.read_bytes()
+def _normalize_newlines(data: bytes) -> bytes:
+    return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
+def _verify_historical_archive_bytes(archived_raw: bytes, baseline_raw: bytes) -> None:
+    archived = _normalize_newlines(archived_raw)
+    baseline = _normalize_newlines(baseline_raw)
     _assert(archived.startswith(ARCHIVE_HEADER), "historical archive metadata header changed")
     archived_body = archived[len(ARCHIVE_HEADER) :]
-    baseline_body = subprocess.check_output(
+    _assert(archived_body == baseline, "historical Phase 3H.8 body does not match baseline README")
+    _assert(b"# Phase 3H.8" in archived_body, "historical Phase 3H.8 title is missing")
+
+
+def _verify_historical_archive() -> None:
+    _assert(HISTORY_PATH.is_file(), "historical Phase 3H.8 file is missing")
+    archived_raw = HISTORY_PATH.read_bytes()
+    baseline_raw = subprocess.check_output(
         ["git", "show", f"{BASELINE_COMMIT}:README.md"],
         cwd=REPO_ROOT,
-    ).replace(b"\r\n", b"\n")
-    _assert(archived_body == baseline_body, "historical Phase 3H.8 body does not match baseline README")
-    _assert(b"# Phase 3H.8" in archived_body, "historical Phase 3H.8 title is missing")
+    )
+    _verify_historical_archive_bytes(archived_raw, baseline_raw)
+
+
+def _test_historical_archive_eol_portability() -> None:
+    baseline_lf = b"# Phase 3H.8 - Synthetic history\n\nBody line.\n"
+    archive_lf = ARCHIVE_HEADER + baseline_lf
+    _verify_historical_archive_bytes(archive_lf, baseline_lf)
+
+    archive_crlf = archive_lf.replace(b"\n", b"\r\n")
+    baseline_crlf = baseline_lf.replace(b"\n", b"\r\n")
+    _verify_historical_archive_bytes(archive_crlf, baseline_crlf)
+
+    archive_cr = archive_lf.replace(b"\n", b"\r")
+    baseline_cr = baseline_lf.replace(b"\n", b"\r")
+    _verify_historical_archive_bytes(archive_cr, baseline_cr)
+
+    changed_header = archive_lf.replace(b"Historical implementation note", b"Changed implementation note", 1)
+    _assert_archive_failure(changed_header, baseline_lf, "historical archive metadata header changed")
+
+    changed_body = archive_lf.replace(b"Body line.", b"Changed body.", 1)
+    _assert_archive_failure(
+        changed_body,
+        baseline_lf,
+        "historical Phase 3H.8 body does not match baseline README",
+    )
+
+    baseline_without_title = b"Historical content without the required title.\n"
+    _assert_archive_failure(
+        ARCHIVE_HEADER + baseline_without_title,
+        baseline_without_title,
+        "historical Phase 3H.8 title is missing",
+    )
+
+
+def _assert_archive_failure(archived_raw: bytes, baseline_raw: bytes, expected_message: str) -> None:
+    try:
+        _verify_historical_archive_bytes(archived_raw, baseline_raw)
+    except AssertionError as exc:
+        _assert(str(exc) == expected_message, f"unexpected archive assertion: {exc}")
+    else:
+        raise AssertionError(f"expected archive assertion was not raised: {expected_message}")
 
 
 def _assert(condition: bool, message: str) -> None:
