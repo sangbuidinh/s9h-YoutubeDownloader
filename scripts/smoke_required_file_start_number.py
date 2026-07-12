@@ -33,6 +33,7 @@ def _test_required_file_start_number_ui() -> None:
         focused: list[bool] = []
         started_threads: list[object] = []
         captured_options: list[object] = []
+        captured_run_ids: list[int] = []
 
         video = SimpleNamespace(
             video_id="video-1",
@@ -57,6 +58,7 @@ def _test_required_file_start_number_ui() -> None:
             window.save_folder_var.set(temp_dir)
             old_validate_env = main_window.validate_download_environment
             old_save_prefs = main_window.save_cookie_preferences
+            old_get_video_entry = main_window.get_video_entry
             old_thread = main_window.threading.Thread
 
             class FakeThread:
@@ -65,6 +67,7 @@ def _test_required_file_start_number_ui() -> None:
                     self.args = args
                     self.daemon = daemon
                     captured_options.append(args[1])
+                    captured_run_ids.append(args[3])
 
                 def start(self):
                     started_threads.append(self)
@@ -75,6 +78,7 @@ def _test_required_file_start_number_ui() -> None:
             try:
                 main_window.validate_download_environment = lambda _options: None
                 main_window.save_cookie_preferences = lambda *_args, **_kwargs: True
+                main_window.get_video_entry = lambda *_args, **_kwargs: None
                 main_window.threading.Thread = FakeThread
 
                 window.file_start_number_var.set("")
@@ -102,9 +106,36 @@ def _test_required_file_start_number_ui() -> None:
                 window.start_download()
                 _assert(started_threads, "valid value did not create a worker")
                 _assert(captured_options[-1].file_start_number == 51, "valid value was not passed to DownloadOptions")
+                _assert(window._download_run_start_number == 51, "validated run start was not captured")
+                _assert(window._download_run_selected_ids == {"video-1"}, "selected run snapshot was wrong")
+                _assert(not window._download_run_completed_ids, "new run completion set was not empty")
+                _assert(captured_run_ids[-1] == window._active_download_run_id, "worker received wrong run ID")
+                _assert(
+                    str(window.file_start_number_entry.cget("state")) == "disabled",
+                    "field was not locked during the active run",
+                )
+                window._handle_event(
+                    (
+                        "download_video_completed_for_numbering",
+                        captured_run_ids[-1],
+                        "video-1",
+                    )
+                )
+                _assert(window.file_start_number_var.get() == "52", "completion did not update visible value")
+                _assert(
+                    str(window.file_start_number_entry.cget("state")) == "disabled",
+                    "completion unlocked the field before worker termination",
+                )
+                window._handle_download_worker_finished("completed", "")
+                _assert(window.file_start_number_var.get() == "52", "terminal handling reset visible value")
+                _assert(
+                    str(window.file_start_number_entry.cget("state")) == "normal",
+                    "field did not unlock after worker termination",
+                )
             finally:
                 main_window.validate_download_environment = old_validate_env
                 main_window.save_cookie_preferences = old_save_prefs
+                main_window.get_video_entry = old_get_video_entry
                 main_window.threading.Thread = old_thread
     finally:
         root.destroy()
