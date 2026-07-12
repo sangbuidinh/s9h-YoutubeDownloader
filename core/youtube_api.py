@@ -79,6 +79,8 @@ def read_api_keys(manual_key: str = "", api_key_file: Path | None = None) -> lis
                 keys.append(key)
     except FileNotFoundError:
         pass
+    except (OSError, UnicodeError):
+        raise YoutubeApiError("api_key_file_error", "Cannot read API key file") from None
 
     deduped: list[str] = []
     seen: set[str] = set()

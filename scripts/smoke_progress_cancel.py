@@ -20,6 +20,13 @@ from ui.main_window import YouTubeDownloaderWindow
 
 
 def main() -> int:
+    _test_windows_taskkill_success_skips_fallback()
+    _test_windows_taskkill_failure_uses_terminate()
+    _test_windows_terminate_timeout_uses_kill()
+    _test_windows_taskkill_timeout_uses_fallback()
+    _test_windows_taskkill_oserror_uses_fallback()
+    _test_process_wait_errors_do_not_escape_cleanup()
+    _test_terminate_process_tree_skips_exited_process()
     _test_terminate_process_tree_stops_dummy_process()
     if os.name == "nt":
         _test_terminate_process_tree_kills_windows_child_process()
@@ -28,6 +35,116 @@ def main() -> int:
     _test_cancelled_batch_does_not_emit_batch_completed()
     print("progress cancel smoke tests passed")
     return 0
+
+
+def _test_windows_taskkill_success_skips_fallback() -> None:
+    process = _FakeProcess()
+    calls = _run_fake_windows_termination(process, taskkill_result=SimpleNamespace(returncode=0))
+    _assert(calls == 1, "successful taskkill was not called exactly once")
+    _assert(process.terminate_calls == 0 and process.kill_calls == 0, "successful taskkill used fallback")
+
+
+def _test_windows_taskkill_failure_uses_terminate() -> None:
+    process = _FakeProcess(wait_results=[0])
+    _run_fake_windows_termination(process, taskkill_result=SimpleNamespace(returncode=1))
+    _assert(process.terminate_calls == 1, "failed taskkill did not call terminate")
+    _assert(process.kill_calls == 0, "successful terminate unexpectedly called kill")
+
+
+def _test_windows_terminate_timeout_uses_kill() -> None:
+    process = _FakeProcess(wait_results=[subprocess.TimeoutExpired("fake", 2), 0])
+    _run_fake_windows_termination(process, taskkill_result=SimpleNamespace(returncode=1))
+    _assert(process.terminate_calls == 1, "terminate was not attempted")
+    _assert(process.kill_calls == 1, "ineffective terminate did not call kill")
+
+
+def _test_windows_taskkill_timeout_uses_fallback() -> None:
+    process = _FakeProcess(wait_results=[0])
+    _run_fake_windows_termination(process, taskkill_error=subprocess.TimeoutExpired("taskkill", 3))
+    _assert(process.terminate_calls == 1, "taskkill timeout did not use terminate fallback")
+
+
+def _test_windows_taskkill_oserror_uses_fallback() -> None:
+    process = _FakeProcess(wait_results=[0])
+    _run_fake_windows_termination(process, taskkill_error=OSError("taskkill unavailable"))
+    _assert(process.terminate_calls == 1, "taskkill OSError did not use terminate fallback")
+
+
+def _test_process_wait_errors_do_not_escape_cleanup() -> None:
+    process = _WaitAndPollErrorProcess()
+    _run_fake_windows_termination(process, taskkill_result=SimpleNamespace(returncode=1))
+    _assert(process.terminate_calls == 1, "wait-error cleanup did not attempt terminate")
+
+
+def _test_terminate_process_tree_skips_exited_process() -> None:
+    process = _FakeProcess(initial_returncode=0)
+    calls = _run_fake_windows_termination(process, taskkill_result=SimpleNamespace(returncode=0))
+    _assert(calls == 0, "already-exited process invoked taskkill")
+    _assert(process.terminate_calls == 0 and process.kill_calls == 0, "already-exited process used fallback")
+
+
+def _run_fake_windows_termination(process, *, taskkill_result=None, taskkill_error=None) -> int:
+    original_os = downloader.os
+    original_run = downloader.subprocess.run
+    calls = 0
+
+    def fake_run(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if taskkill_error is not None:
+            raise taskkill_error
+        return taskkill_result
+
+    try:
+        downloader.os = SimpleNamespace(name="nt")
+        downloader.subprocess.run = fake_run
+        downloader._terminate_process_tree(process)
+    finally:
+        downloader.os = original_os
+        downloader.subprocess.run = original_run
+    return calls
+
+
+class _FakeProcess:
+    def __init__(self, *, initial_returncode=None, wait_results=None) -> None:
+        self.pid = 12345
+        self.returncode = initial_returncode
+        self.wait_results = list(wait_results or [])
+        self.terminate_calls = 0
+        self.kill_calls = 0
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.terminate_calls += 1
+
+    def kill(self) -> None:
+        self.kill_calls += 1
+
+    def wait(self, timeout=None):
+        if self.wait_results:
+            result = self.wait_results.pop(0)
+            if isinstance(result, BaseException):
+                raise result
+            self.returncode = result
+            return result
+        return self.returncode
+
+
+class _WaitAndPollErrorProcess(_FakeProcess):
+    def __init__(self) -> None:
+        super().__init__()
+        self.poll_calls = 0
+
+    def poll(self):
+        self.poll_calls += 1
+        if self.poll_calls == 1:
+            return None
+        raise OSError("poll failed")
+
+    def wait(self, timeout=None):
+        raise OSError("wait failed")
 
 
 def _test_terminate_process_tree_stops_dummy_process() -> None:

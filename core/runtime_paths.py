@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -9,6 +10,11 @@ RUNTIME_BIN_FILENAMES = {"yt-dlp.exe", "ffmpeg.exe", "deno.exe", "aria2c.exe"}
 
 def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
+
+
+def _legacy_runtime_enabled() -> bool:
+    # Legacy source-tree compatibility is available only through explicit opt-in.
+    return os.environ.get("S9H_ALLOW_LEGACY_RUNTIME", "").strip() == "1"
 
 
 def app_root() -> Path:
@@ -40,7 +46,7 @@ def runtime_file(filename: str) -> Path:
         primary = app_root() / filename
         candidates = (primary,)
 
-    if not is_frozen():
+    if not is_frozen() and _legacy_runtime_enabled():
         candidates = (*candidates, LEGACY_RUNTIME_DIR / filename)
 
     for path in candidates:
