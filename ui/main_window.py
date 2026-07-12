@@ -52,6 +52,7 @@ from core.state_store import (
     SUPPORTED_STATUS_VALUES,
     clear_manual_status,
     get_video_entry,
+    is_mode_complete,
     update_manual_status,
 )
 from core.youtube_api import (
@@ -204,6 +205,12 @@ class YouTubeDownloaderWindow:
         self._download_terminal_received = False
         self._download_terminal_outcome = ""
         self._download_terminal_message = ""
+        self._download_run_sequence = 0
+        self._active_download_run_id: int | None = None
+        self._download_run_start_number: int | None = None
+        self._download_run_selected_ids: set[str] = set()
+        self._download_run_initial_complete_ids: set[str] = set()
+        self._download_run_completed_ids: set[str] = set()
         self.status_editor = None
 
         api_key_state = load_api_key_persistence_state()
@@ -1476,6 +1483,16 @@ class YouTubeDownloaderWindow:
             self._show_error_dialog(friendly)
             return
 
+        initial_complete_ids = self._initial_complete_video_ids(
+            selected,
+            options.channel_id,
+            options.download_mode,
+        )
+        download_run_id = self._begin_download_run_numbering(
+            file_start_number,
+            selected_video_ids,
+            initial_complete_ids,
+        )
         self.downloading = True
         self.download_stop_requested = False
         self.exit_after_download_stop = False
@@ -1498,10 +1515,47 @@ class YouTubeDownloaderWindow:
         self._set_download_controls_locked(True)
         self.download_worker = threading.Thread(
             target=self._download_worker,
-            args=(selected, options, self.download_controller),
+            args=(selected, options, self.download_controller, download_run_id),
             daemon=False,
         )
         self.download_worker.start()
+
+    def _initial_complete_video_ids(
+        self,
+        selected: list,
+        channel_id: str,
+        download_mode: str,
+    ) -> set[str]:
+        complete_ids: set[str] = set()
+        for video in selected:
+            video_id = str(getattr(video, "video_id", "") or "").strip()
+            if video_id and is_mode_complete(get_video_entry(channel_id, video_id), download_mode):
+                complete_ids.add(video_id)
+        return complete_ids
+
+    def _begin_download_run_numbering(
+        self,
+        run_start_number: int,
+        selected_video_ids,
+        initial_complete_ids,
+    ) -> int:
+        self._download_run_sequence = getattr(self, "_download_run_sequence", 0) + 1
+        run_id = self._download_run_sequence
+        selected_ids: set[str] = set()
+        for video_id in selected_video_ids:
+            normalized_id = str(video_id or "").strip()
+            if normalized_id:
+                selected_ids.add(normalized_id)
+        self._active_download_run_id = run_id
+        self._download_run_start_number = run_start_number
+        self._download_run_selected_ids = selected_ids
+        self._download_run_initial_complete_ids = set()
+        for video_id in initial_complete_ids:
+            normalized_id = str(video_id or "").strip()
+            if normalized_id in selected_ids:
+                self._download_run_initial_complete_ids.add(normalized_id)
+        self._download_run_completed_ids = set()
+        return run_id
 
     def stop_download(self) -> None:
         if not self.downloading:
@@ -1542,7 +1596,13 @@ class YouTubeDownloaderWindow:
         if self.download_controller is not None:
             self.download_controller.request_cancel()
 
-    def _download_worker(self, selected, options: DownloadOptions, controller: DownloadController) -> None:
+    def _download_worker(
+        self,
+        selected,
+        options: DownloadOptions,
+        controller: DownloadController,
+        download_run_id: int,
+    ) -> None:
         outcome = "completed"
         message = ""
         try:
@@ -1550,7 +1610,7 @@ class YouTubeDownloaderWindow:
                 selected,
                 options,
                 self._thread_log,
-                lambda video: self.events.put(("status_update", video.display_order, video.status)),
+                lambda video: self._queue_download_status(video, download_run_id),
                 cancel_controller=controller,
                 progress_callback=self._enqueue_progress_event,
             )
@@ -1564,6 +1624,23 @@ class YouTubeDownloaderWindow:
             self._enqueue_progress_event(ProgressEvent(kind="error", phase="Lỗi", message=message))
         finally:
             self.events.put(("download_worker_finished", outcome, message))
+
+    def _queue_download_status(self, video, download_run_id: int) -> None:
+        self.events.put(("status_update", video.display_order, video.status))
+        if video.status != STATUS_DOWNLOADED:
+            return
+        try:
+            video_id = str(getattr(video, "video_id", "") or "").strip()
+        except Exception:
+            return
+        if video_id:
+            self.events.put(
+                (
+                    "download_video_completed_for_numbering",
+                    download_run_id,
+                    video_id,
+                )
+            )
 
     def apply_filter(self) -> None:
         self._destroy_status_editor()
@@ -2572,6 +2649,7 @@ class YouTubeDownloaderWindow:
         self._download_terminal_received = False
         self._download_terminal_outcome = ""
         self._download_terminal_message = ""
+        self._active_download_run_id = None
         self._set_download_controls_locked(False)
 
     def _on_close(self) -> None:
@@ -3175,6 +3253,8 @@ class YouTubeDownloaderWindow:
                     video.status = status
                     break
             self.apply_filter()
+        elif kind == "download_video_completed_for_numbering":
+            self._handle_download_video_completed_for_numbering(event)
         elif kind == "systemic_download_block":
             self._handle_systemic_download_block(event[1])
         elif kind == "download_worker_finished":
@@ -3185,6 +3265,38 @@ class YouTubeDownloaderWindow:
             self._handle_download_worker_finished("completed", "")
         elif kind == "download_error":
             self._handle_download_worker_finished("error", event[1])
+
+    def _handle_download_video_completed_for_numbering(self, event) -> None:
+        if not isinstance(event, (tuple, list)) or len(event) < 3:
+            return
+        run_id = event[1]
+        try:
+            video_id = str(event[2] or "").strip()
+        except Exception:
+            return
+        if run_id != getattr(self, "_active_download_run_id", None) or not video_id:
+            return
+        if video_id not in getattr(self, "_download_run_selected_ids", set()):
+            return
+        if video_id in getattr(self, "_download_run_initial_complete_ids", set()):
+            return
+        completed_ids = getattr(self, "_download_run_completed_ids", None)
+        run_start_number = getattr(self, "_download_run_start_number", None)
+        if not isinstance(completed_ids, set) or not isinstance(run_start_number, int):
+            return
+        if video_id in completed_ids:
+            return
+
+        # This advances only the next-run suggestion; active-batch allocation stays unchanged.
+        completed_ids.add(video_id)
+        next_number = run_start_number + len(completed_ids)
+        try:
+            self.file_start_number_var.set(str(next_number))
+            self._append_log(
+                f"[INFO] File start number advanced to {next_number} after a completed video."
+            )
+        except (AttributeError, tk.TclError):
+            return
 
     def _handle_download_worker_finished(self, outcome: str, message: str = "") -> None:
         if self._download_terminal_received:

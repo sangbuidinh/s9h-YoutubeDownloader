@@ -133,6 +133,17 @@ The internal `HTTP_403` failure kind is reused as a compatibility class for retr
 - Numbered output stems are rebuilt from the video's canonical title for every batch. A numbered stem from a previous run must never be used as the next batch's source title, so prefixes cannot accumulate.
 - Number assignment is fixed by original selected-list order. Skipped, failed, unavailable, cancelled, and partially complete items still consume their assigned number; later items are not renumbered based on success count.
 
+### File start number synchronization
+
+- The input is blank on application startup and the user must enter a positive integer before each run.
+- A run captures the validated value as an immutable starting snapshot. `DownloadOptions.file_start_number` and active-batch filename allocation continue using that snapshot.
+- The visible next-run suggestion is `run start number + newly completed logical videos`. It advances after the authoritative final status callback reports `STATUS_DOWNLOADED` for a selected item that became complete during the current run.
+- Items already complete before the run, incomplete items, failures, skips, and cancellations do not advance the input. Duplicate completion callbacks are deduplicated by video ID for the current run.
+- A run generation ID rejects delayed completion events from an older run. Tkinter variables are updated only by `_handle_event()` on the main thread.
+- Stop, cancellation, and errors leave the latest advanced value visible. After controls unlock, a manual edit becomes the immutable start snapshot for the next run.
+- The value and run-scoped ID sets are session-only. They are not written to settings or SQLite, and closing and reopening the application resets the input to blank.
+- Active-batch filename allocation remains selected-list based and unchanged. The suggestion does not scan existing filenames and no persistent continuation or video-to-number mapping is maintained.
+
 Manual status context menu commands:
 
 - `Đánh dấu là Đã tải` -> `_apply_manual_status_to_selected("Đã tải")`
@@ -494,7 +505,8 @@ Worker threads never directly update Tk widgets. They enqueue events:
 - Fetch worker -> `("fetch_done", request_token, channel, videos, next_page_token)` or `("fetch_error", request_token, message)`
 - Load-more worker -> `("load_more_done", request_token, videos, next_page_token)` or `("load_more_error", request_token, message)`
 - Download worker status callback -> `("status_update", video.display_order, video.status)`
-- Download worker completion -> `("download_done",)` or `("download_error", message)`
+- Download worker numbering callback -> `("download_video_completed_for_numbering", run_id, video.video_id)` after a final `STATUS_DOWNLOADED` status
+- Download worker completion -> `("download_worker_finished", outcome, message)`
 
 `_process_events()` runs every 100 ms and dispatches through `_handle_event()`.
 

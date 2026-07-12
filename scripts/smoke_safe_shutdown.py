@@ -111,12 +111,15 @@ def _test_controls_unlock_only_after_worker_exit() -> None:
     _assert(window.root.destroy_count == 0, "root destroyed during normal Stop completion")
 
     worker.alive = False
+    window.file_start_number_var.set("53")
     window._poll_download_finish_completion()
 
     _assert(not window.downloading, "download state was not cleared after worker exit")
     _assert(window.download_worker is None, "worker reference was not cleared after exit")
     _assert(window.download_controller is None, "controller reference was not cleared after exit")
     _assert(window.controls_locked and window.controls_locked[-1] is False, "controls were not unlocked")
+    _assert(window.file_start_number_var.get() == "53", "finish reset the advanced file number")
+    _assert(window._active_download_run_id is None, "finished run still accepted numbering events")
     _assert(window.root.destroy_count == 0, "normal finish destroyed root")
 
 
@@ -273,6 +276,8 @@ def _fake_window(worker, controller):
     window._download_terminal_received = False
     window._download_terminal_outcome = ""
     window._download_terminal_message = ""
+    window._active_download_run_id = 1
+    window.file_start_number_var = _Var()
     window.progress_current_var = _Var()
     window.progress_detail_var = _Var()
     window.logs = []
@@ -336,6 +341,9 @@ class _Var:
 
     def set(self, value: str) -> None:
         self.value = value
+
+    def get(self) -> str:
+        return self.value
 
 
 class _patched_dialog:
