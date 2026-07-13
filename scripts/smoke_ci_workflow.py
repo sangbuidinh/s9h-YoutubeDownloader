@@ -76,7 +76,18 @@ def validate_workflow(workflow: str) -> None:
         "concurrency must cancel older in-progress runs",
     )
 
+    jobs = _mapping_block(lines, "jobs", 0)
+    _require(
+        _direct_mapping_keys(jobs, 2)
+        == ["windows-smoke", "release-bundle-handoff"],
+        "CI must contain exactly the producer and handoff jobs",
+    )
     job = _mapping_block(lines, "windows-smoke", 2)
+    _require(
+        _direct_mapping_pairs(_mapping_block(job, "permissions", 4), 6)
+        == [("contents", "read")],
+        "windows-smoke permissions must contain only contents: read",
+    )
     _require(
         _scalar_value(job, "runs-on", 4) == "windows-2022",
         "runner must be windows-2022",
@@ -157,6 +168,128 @@ def validate_workflow(workflow: str) -> None:
         "CI must invoke the locked installer exactly once",
     )
 
+    create_step = _named_step(steps, "Create and verify synthetic release bundle")
+    upload_step = _action_step(steps, "actions/upload-artifact")
+    report_step = _named_step(steps, "Report synthetic release bundle handoff")
+    _require(
+        steps.index(installer_step)
+        < steps.index(create_step)
+        < steps.index(upload_step)
+        < steps.index(report_step),
+        "synthetic bundle handoff must follow locked dependency validation",
+    )
+    outputs = _direct_mapping_pairs(_mapping_block(job, "outputs", 4), 6)
+    _require(
+        outputs
+        == [
+            ("artifact-id", "${{ steps.upload-release-bundle.outputs.artifact-id }}"),
+            ("artifact-digest", "${{ steps.upload-release-bundle.outputs.artifact-digest }}"),
+        ],
+        "windows-smoke artifact outputs are invalid",
+    )
+    create_text = "\n".join(create_step)
+    for required in (
+        '$env:RUNNER_TEMP',
+        'b"MZ synthetic CI fixture; this file is not executable.\\n"',
+        'zipfile.ZipInfo("SYNTHETIC.txt", date_time=(1980, 1, 1, 0, 0, 0))',
+        'b"# Synthetic CI release\\n\\nArtifact handoff verification only.\\n"',
+        "python scripts/prepare_release_bundle.py create",
+        "python scripts/prepare_release_bundle.py verify",
+        "--tag v0.0.0-ci",
+        "--source-commit $Commit",
+        "--control-commit $Commit",
+        "--prerelease true",
+    ):
+        _require(required in create_text, f"synthetic bundle producer is missing: {required}")
+    upload_ref = _action_ref(upload_step, "actions/upload-artifact")
+    _require_safe_action_ref("actions/upload-artifact", upload_ref)
+    for required in (
+        "id: upload-release-bundle",
+        "ci-release-bundle-${{ github.run_id }}-${{ github.run_attempt }}",
+        "if-no-files-found: error",
+        "compression-level: 0",
+        "overwrite: false",
+        "include-hidden-files: false",
+        "retention-days: 1",
+    ):
+        _require(required in "\n".join(upload_step), f"synthetic upload is missing: {required}")
+    report_text = "\n".join(report_step)
+    _require("^[0-9a-f]{64}$" in report_text, "producer artifact digest validation is missing")
+
+    handoff = _mapping_block(jobs, "release-bundle-handoff", 2)
+    _require(
+        _scalar_value(handoff, "needs", 4) == "windows-smoke",
+        "handoff job must need windows-smoke",
+    )
+    _require(
+        _direct_mapping_pairs(_mapping_block(handoff, "permissions", 4), 6)
+        == [("contents", "read")],
+        "handoff permissions must contain only contents: read",
+    )
+    _require(
+        _scalar_value(handoff, "runs-on", 4) == "windows-2022",
+        "handoff runner must be windows-2022",
+    )
+    handoff_steps = _step_blocks(handoff)
+    _require(len(handoff_steps) == 3, "handoff job must contain exactly three steps")
+    output_check = _named_step(handoff_steps, "Validate immutable synthetic bundle outputs")
+    download = _action_step(handoff_steps, "actions/download-artifact")
+    verifier = _named_step(handoff_steps, "Verify synthetic release bundle handoff")
+    _require(
+        handoff_steps == [output_check, download, verifier],
+        "handoff job step order is invalid",
+    )
+    output_text = "\n".join(output_check)
+    for required in (
+        "${{ needs.windows-smoke.outputs.artifact-id }}",
+        "${{ needs.windows-smoke.outputs.artifact-digest }}",
+        "^[0-9a-f]{64}$",
+    ):
+        _require(required in output_text, f"handoff output validation is missing: {required}")
+    download_ref = _action_ref(download, "actions/download-artifact")
+    _require_safe_action_ref("actions/download-artifact", download_ref)
+    download_text = "\n".join(download)
+    download_with = _mapping_block(download, "with", 8)
+    _require(
+        _scalar_value(download_with, "merge-multiple", 10) == "true",
+        "handoff download merge-multiple must be the YAML boolean true",
+    )
+    _require(
+        _direct_mapping_pairs(download_with, 10)
+        == [
+            ("artifact-ids", "${{ needs.windows-smoke.outputs.artifact-id }}"),
+            ("path", "release-bundle"),
+            ("merge-multiple", "true"),
+        ],
+        "handoff download must use only the producer artifact ID",
+    )
+    verifier_text = "\n".join(verifier)
+    for required in (
+        "Synthetic release bundle handoff verified",
+        "v0.0.0-ci",
+        "${{ github.sha }}",
+        "Get-FileHash",
+        "ConvertFrom-Json",
+        "SHA256SUMS.txt",
+        "ReparsePoint",
+    ):
+        _require(required in verifier_text, f"handoff verifier is missing: {required}")
+    for forbidden in (
+        "actions/checkout@",
+        "actions/setup-python@",
+        "python ",
+        "Invoke-Expression",
+        "Start-Process",
+        "&",
+        ".ps1",
+        ".cmd",
+        ".bat",
+    ):
+        _require(forbidden not in verifier_text, f"handoff verifier may execute downloaded code: {forbidden}")
+    handoff_text = "\n".join(handoff)
+    _require("actions/checkout@" not in handoff_text, "handoff job must not checkout source")
+    _require("actions/setup-python@" not in handoff_text, "handoff job must not setup Python")
+
     _require("continue-on-error" not in code, "continue-on-error must be absent")
     _forbid(
         code,
@@ -164,7 +297,6 @@ def validate_workflow(workflow: str) -> None:
         "pip install or upgrade must be absent",
     )
     _forbid(code, r"(?i)\bPyInstaller\b", "PyInstaller invocation must be absent")
-    _forbid(code, r"(?i)upload-artifact", "artifact upload must be absent")
     _forbid(
         code,
         r"(?i)(?:action-gh-release|create-release|release-action)",
@@ -336,7 +468,11 @@ def _test_negative_mutations(workflow: str) -> None:
     mutations = (
         (
             "contents write",
-            _replace_once(workflow, "contents: read", "contents: write"),
+            _replace_once(
+                workflow,
+                "permissions:\n  contents: read",
+                "permissions:\n  contents: write",
+            ),
             "permissions",
         ),
         (
@@ -357,23 +493,25 @@ def _test_negative_mutations(workflow: str) -> None:
             "continue on error",
             _replace_once(
                 workflow,
-                "    runs-on: windows-2022\n",
-                "    runs-on: windows-2022\n    continue-on-error: true\n",
+                "    runs-on: windows-2022\n    timeout-minutes: 30\n",
+                "    runs-on: windows-2022\n    timeout-minutes: 30\n    continue-on-error: true\n",
             ),
             "continue-on-error",
         ),
         (
-            "artifact upload",
-            workflow
-            + "\n      - name: Unsafe artifact upload\n"
-            + "        uses: actions/upload-artifact@v4\n",
-            "artifact upload",
+            "unsafe artifact retention",
+            _replace_once(workflow, "          retention-days: 1", "          retention-days: 2"),
+            "retention-days",
         ),
         (
             "pip install",
-            workflow
-            + "\n      - name: Unsafe dependency install\n"
-            + "        run: python -m pip install pyinstaller\n",
+            _replace_once(
+                workflow,
+                "      - name: Create and verify synthetic release bundle",
+                "      - name: Unsafe dependency install\n"
+                "        run: python -m pip install pyinstaller\n"
+                "      - name: Create and verify synthetic release bundle",
+            ),
             "pip install",
         ),
         (
@@ -431,6 +569,108 @@ def _test_negative_mutations(workflow: str) -> None:
             _remove_named_step(workflow, "Validate locked build dependencies"),
             "Validate locked build dependencies",
         ),
+        (
+            "missing handoff dependency",
+            _replace_once(workflow, "    needs: windows-smoke\n", ""),
+            "need windows-smoke",
+        ),
+        (
+            "handoff write permission",
+            _replace_once(
+                workflow,
+                "  release-bundle-handoff:\n    name: Release bundle artifact handoff\n    needs: windows-smoke\n    permissions:\n      contents: read",
+                "  release-bundle-handoff:\n    name: Release bundle artifact handoff\n    needs: windows-smoke\n    permissions:\n      contents: write",
+            ),
+            "contents: write",
+        ),
+        (
+            "missing merge-multiple",
+            _replace_once(workflow, "          merge-multiple: true\n", ""),
+            "merge-multiple",
+        ),
+        (
+            "false merge-multiple",
+            _replace_once(
+                workflow,
+                "          merge-multiple: true",
+                "          merge-multiple: false",
+            ),
+            "merge-multiple",
+        ),
+        (
+            "quoted true merge-multiple",
+            _replace_once(
+                workflow,
+                "          merge-multiple: true",
+                '          merge-multiple: "true"',
+            ),
+            "merge-multiple",
+        ),
+        (
+            "quoted false merge-multiple",
+            _replace_once(
+                workflow,
+                "          merge-multiple: true",
+                '          merge-multiple: "false"',
+            ),
+            "merge-multiple",
+        ),
+        (
+            "multiple artifact IDs",
+            _replace_once(
+                workflow,
+                "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}",
+                "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}, 123",
+            ),
+            "artifact ID",
+        ),
+        (
+            "nested artifact destination",
+            _replace_once(
+                workflow,
+                "          path: release-bundle",
+                "          path: release-bundle/nested",
+            ),
+            "artifact ID",
+        ),
+        (
+            "artifact name input",
+            _replace_once(
+                workflow,
+                "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}",
+                "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}\n"
+                "          name: synthetic-release-bundle",
+            ),
+            "artifact ID",
+        ),
+        (
+            "artifact pattern input",
+            _replace_once(
+                workflow,
+                "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}",
+                "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}\n"
+                "          pattern: synthetic-*",
+            ),
+            "artifact ID",
+        ),
+        (
+            "missing handoff digest validation",
+            _replace_once(
+                workflow,
+                "          ARTIFACT_DIGEST: ${{ needs.windows-smoke.outputs.artifact-digest }}",
+                "          ARTIFACT_DIGEST: invalid",
+            ),
+            "artifact-digest",
+        ),
+        (
+            "Python in handoff verifier",
+            _replace_once(
+                workflow,
+                "      - name: Verify synthetic release bundle handoff\n        shell: pwsh",
+                "      - name: Verify synthetic release bundle handoff\n        run: python downloaded.py\n        shell: pwsh",
+            ),
+            "execute downloaded code",
+        ),
     )
     for label, mutated, expected in mutations:
         _expect_contract_failure(label, mutated, expected)
@@ -439,10 +679,20 @@ def _test_negative_mutations(workflow: str) -> None:
 def _test_immutable_action_policy(workflow: str) -> None:
     checkout_ref = _workflow_action_ref(workflow, "actions/checkout")
     setup_ref = _workflow_action_ref(workflow, "actions/setup-python")
+    upload_ref = _workflow_action_ref(workflow, "actions/upload-artifact")
+    download_ref = _workflow_action_ref(workflow, "actions/download-artifact")
     generic_pins = _replace_action_ref(
-        _replace_action_ref(workflow, "actions/checkout", "a" * 40),
-        "actions/setup-python",
-        "b" * 40,
+        _replace_action_ref(
+            _replace_action_ref(
+                _replace_action_ref(workflow, "actions/checkout", "a" * 40),
+                "actions/setup-python",
+                "b" * 40,
+            ),
+            "actions/upload-artifact",
+            "c" * 40,
+        ),
+        "actions/download-artifact",
+        "d" * 40,
     )
     validate_workflow(generic_pins)
 
@@ -454,6 +704,14 @@ def _test_immutable_action_policy(workflow: str) -> None:
         (
             "setup-python major tag",
             _replace_action_ref(workflow, "actions/setup-python", "v5"),
+        ),
+        (
+            "upload-artifact major tag",
+            _replace_action_ref(workflow, "actions/upload-artifact", "v4"),
+        ),
+        (
+            "download-artifact major tag",
+            _replace_action_ref(workflow, "actions/download-artifact", "v4"),
         ),
         (
             "seven-character SHA",
@@ -473,7 +731,11 @@ def _test_immutable_action_policy(workflow: str) -> None:
         ),
         (
             "mutable runner",
-            _replace_once(workflow, "runs-on: windows-2022", "runs-on: windows-latest"),
+            _replace_once(
+                workflow,
+                "    runs-on: windows-2022\n    timeout-minutes: 30",
+                "    runs-on: windows-latest\n    timeout-minutes: 30",
+            ),
         ),
         (
             "broad Python selector",
@@ -503,15 +765,18 @@ def _test_immutable_action_policy(workflow: str) -> None:
             "CI job contents write",
             _replace_once(
                 workflow,
-                "  windows-smoke:\n",
-                "  windows-smoke:\n    permissions:\n      contents: write\n",
+                "  windows-smoke:\n    name: Windows compile, preflight and smoke\n    permissions:\n      contents: read",
+                "  windows-smoke:\n    name: Windows compile, preflight and smoke\n    permissions:\n      contents: write",
             ),
         ),
     )
     for label, mutated in mutations:
         _expect_contract_failure(label, mutated, "")
 
-    _require(checkout_ref != setup_ref, "action refs unexpectedly share one commit")
+    _require(
+        len({checkout_ref, setup_ref, upload_ref, download_ref}) == 4,
+        "action refs unexpectedly share one commit",
+    )
 
 
 def _workflow_action_ref(workflow: str, action: str) -> str:

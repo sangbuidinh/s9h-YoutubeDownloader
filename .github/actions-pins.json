@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "resolved_at_utc": "2026-07-13T03:34:40.979309Z",
+  "resolved_at_utc": "2026-07-13T10:28:25.7582346Z",
   "actions": {
     "actions/checkout": {
       "tag": "v4",
@@ -13,6 +13,10 @@
     "actions/upload-artifact": {
       "tag": "v4",
       "commit": "ea165f8d65b6e75b540449e92b4886f43607fa02"
+    },
+    "actions/download-artifact": {
+      "tag": "v4",
+      "commit": "d3f86a106a0bac45b974a628896c90dbdf5c8093"
     },
     "softprops/action-gh-release": {
       "tag": "v2",

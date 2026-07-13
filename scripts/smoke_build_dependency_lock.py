@@ -28,7 +28,11 @@ WORKFLOW_PATHS = (
     ".github/workflows/release-v1.3.1.yml",
 )
 LEGACY_WORKFLOW = ".github/workflows/prerelease-v1.2.7-rc.1.yml"
-FIXED_TAG_WORKFLOWS = WORKFLOW_PATHS[2:]
+FIXED_TAG_WORKFLOWS = {
+    ".github/workflows/prerelease-v1.3.0-rc.1.yml": "v1.3.0-rc.1",
+    ".github/workflows/release-v1.3.0.yml": "v1.3.0",
+    ".github/workflows/release-v1.3.1.yml": "v1.3.1",
+}
 OFFICIAL_INDEX = "https://pypi.org/simple"
 HASH = re.compile(r"[0-9a-f]{64}\Z")
 WHEEL = re.compile(r"[A-Za-z0-9_.]+-[^-]+-[^-]+-[^-]+-[^-]+\.whl\Z")
@@ -582,32 +586,63 @@ def _validate_workflow_usage(workflows: dict[str, str]) -> None:
         r"(?im)^\s*(?:run:\s*)?(?:python\s+-m\s+)?pip\s+install\b"
     )
     for path, workflow in workflows.items():
-        _require(
-            workflow.count("python scripts/install_build_dependencies.py") == 1,
-            f"{path} must call installer once",
-        )
         _require(direct_pip.search(workflow) is None, f"{path} contains direct pip install")
     ci = workflows[".github/workflows/ci.yml"]
+    _require(
+        ci.count("python scripts/install_build_dependencies.py") == 1,
+        "CI must call installer once",
+    )
     _require(
         ci.index("Run tracked smoke suite") < ci.index("Validate locked build dependencies"),
         "CI installer must run after smoke suite",
     )
     legacy = workflows[LEGACY_WORKFLOW]
+    _require(
+        legacy.count("python scripts/install_build_dependencies.py") == 1,
+        "legacy workflow must call installer once",
+    )
     _require(legacy.count("uses: actions/checkout@") == 1, "legacy checkout count")
     _require(
         legacy.index("Install locked build dependencies")
         < legacy.index(r".\scripts\build_prerelease_v1_2_7_rc1.ps1"),
         "legacy installer order",
     )
-    for path in FIXED_TAG_WORKFLOWS:
+    for path, tag in FIXED_TAG_WORKFLOWS.items():
         workflow = workflows[path]
+        build, publish = workflow.split("\n  publish:\n", 1)
+        _require(
+            build.count("python control/scripts/install_build_dependencies.py") == 1,
+            f"{path} build must call control installer once",
+        )
+        _require(
+            "install_build_dependencies.py" not in publish,
+            f"{path} publish must not call dependency installer",
+        )
+        _require(
+            re.search(r"(?im)^\s*(?:run:\s*)?python\b", publish) is None,
+            f"{path} publish must not invoke Python",
+        )
         _require(workflow.count("uses: actions/checkout@") == 2, f"{path} checkout count")
         _require(
-            workflow.index("Check out dependency lock source")
+            workflow.index("Check out workflow control source")
             < workflow.index("Install locked build dependencies")
             < workflow.index("Check out release tag")
             < workflow.index("Verify annotated tag and release absence"),
             f"{path} fixed-tag order",
+        )
+        _require(
+            len(re.findall(r"(?m)^          path: control$", build)) == 1,
+            f"{path} control checkout path",
+        )
+        _require(
+            len(re.findall(r"(?m)^          path: source$", build)) == 1,
+            f"{path} source checkout path",
+        )
+        _require(f"          ref: {tag}" in build, f"{path} fixed tag ref")
+        _require("working-directory: source" in build, f"{path} build source directory")
+        _require(
+            "python ..\\control\\scripts\\prepare_release_bundle.py" in build,
+            f"{path} bundle builder must come from control source",
         )
 
 
@@ -661,6 +696,46 @@ def _test_negative_mutations(
     )
     mutations.append(("installer after build", bootstrap, build, inventory, ordered_workflows))
 
+    publish_installer = copy.deepcopy(workflows)
+    publish_installer[".github/workflows/release-v1.3.1.yml"] = publish_installer[
+        ".github/workflows/release-v1.3.1.yml"
+    ].replace(
+        "\n  publish:\n",
+        "\n  publish:\n"
+        "    # Negative fixture: dependency mutation in write-enabled job.\n"
+        "    installer-fixture: python control/scripts/install_build_dependencies.py\n",
+        1,
+    )
+    mutations.append(("installer in publish", bootstrap, build, inventory, publish_installer))
+
+    early_source = copy.deepcopy(workflows)
+    early_source[".github/workflows/release-v1.3.1.yml"] = _move_named_step_after(
+        early_source[".github/workflows/release-v1.3.1.yml"],
+        "Install locked build dependencies",
+        "Check out release tag",
+    )
+    mutations.append(("source checkout before installer", bootstrap, build, inventory, early_source))
+
+    missing_control = copy.deepcopy(workflows)
+    missing_control[".github/workflows/release-v1.3.1.yml"] = _remove_named_step(
+        missing_control[".github/workflows/release-v1.3.1.yml"],
+        "Check out workflow control source",
+    )
+    mutations.append(("missing control checkout", bootstrap, build, inventory, missing_control))
+
+    missing_source = copy.deepcopy(workflows)
+    missing_source[".github/workflows/release-v1.3.1.yml"] = _remove_named_step(
+        missing_source[".github/workflows/release-v1.3.1.yml"],
+        "Check out release tag",
+    )
+    mutations.append(("missing source checkout", bootstrap, build, inventory, missing_source))
+
+    tag_into_control = copy.deepcopy(workflows)
+    tag_into_control[".github/workflows/release-v1.3.1.yml"] = tag_into_control[
+        ".github/workflows/release-v1.3.1.yml"
+    ].replace("          path: source", "          path: control", 1)
+    mutations.append(("tag checkout into control", bootstrap, build, inventory, tag_into_control))
+
     for label, mutated_bootstrap, mutated_build, mutated_inventory, mutated_workflows in mutations:
         try:
             validate_contract(
@@ -689,6 +764,15 @@ def _move_named_step_after(workflow: str, name: str, target: str) -> str:
     target_match = target_pattern.search(without)
     _require(target_match is not None, f"mutation target is missing: {target}")
     return without[: target_match.end()] + block + without[target_match.end() :]
+
+
+def _remove_named_step(workflow: str, name: str) -> str:
+    pattern = re.compile(
+        rf"(?ms)^      - name:\s*{re.escape(name)}\s*$\n.*?(?=^      - |\Z)"
+    )
+    mutated, count = pattern.subn("", workflow, count=1)
+    _require(count == 1, f"mutation step is missing: {name}")
+    return mutated
 
 
 def _read_lf_text(path: Path) -> str:
