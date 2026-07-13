@@ -20,6 +20,11 @@ EXPECTED_PYTHON = (3, 11, 9)
 EXPECTED_PIP = "26.1.2"
 EXPECTED_PYINSTALLER = "6.21.0"
 OFFICIAL_INDEX = "https://pypi.org/simple"
+S9H_BUILD_VENV_MARKER = ".s9h-build-venv.json"
+S9H_BUILD_VENV_MARKER_DATA = {
+    "schema_version": 1,
+    "purpose": "s9h-build-dependencies",
+}
 
 
 class BuildDependencyError(RuntimeError):
@@ -30,10 +35,18 @@ def main() -> int:
     args = _parse_args()
     _verify_host()
     target = args.venv.expanduser().resolve(strict=False)
-    _verify_target(target)
+    _install_locked_dependencies(target, args.github_env, args.github_path)
+    return 0
+
+
+def _install_locked_dependencies(
+    target: Path,
+    github_env: Path | None,
+    github_path: Path | None,
+) -> None:
     inventory = _load_inventory()
 
-    venv.EnvBuilder(with_pip=True, clear=True).create(target)
+    target = _create_build_venv(target)
     venv_python = target / "Scripts" / "python.exe"
     scripts_dir = target / "Scripts"
     if not venv_python.is_file():
@@ -85,13 +98,13 @@ def main() -> int:
     for name in sorted(expected):
         print(f"{name}=={expected[name]}")
 
-    if args.github_env is not None:
-        _append_utf8(args.github_env, f"S9H_BUILD_PYTHON={venv_python.resolve()}")
-    if args.github_path is not None:
-        _append_utf8(args.github_path, str(scripts_dir.resolve()))
+    if github_env is not None:
+        _append_utf8(github_env, f"S9H_BUILD_PYTHON={venv_python.resolve()}")
+    if github_path is not None:
+        _append_utf8(github_path, str(scripts_dir.resolve()))
 
+    _write_owned_marker(target)
     print("Locked build dependencies verified")
-    return 0
 
 
 def _parse_args() -> argparse.Namespace:
@@ -116,12 +129,83 @@ def _verify_host() -> None:
         raise BuildDependencyError("Locked build dependencies require Windows x86_64")
 
 
-def _verify_target(target: Path) -> None:
-    repo = REPO_ROOT.resolve()
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def _validate_target_location(target: Path, repo: Path) -> None:
+    target = target.resolve(strict=False)
+    repo = repo.resolve()
     if target == Path(target.anchor):
         raise BuildDependencyError("The virtual environment cannot be a filesystem root")
-    if target == repo or repo in target.parents:
+    if _is_relative_to(target, repo):
         raise BuildDependencyError("The build virtual environment must be outside the repository")
+    if _is_relative_to(repo, target):
+        raise BuildDependencyError("The build virtual environment cannot contain the repository")
+
+
+def _read_owned_marker(target: Path) -> dict:
+    marker = target / S9H_BUILD_VENV_MARKER
+    if not marker.exists():
+        raise BuildDependencyError("The non-empty target is not owned by this installer")
+    if not marker.is_file():
+        raise BuildDependencyError("The build virtual environment marker is not a file")
+    try:
+        value = json.loads(marker.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise BuildDependencyError("The build virtual environment marker is unreadable") from exc
+    except json.JSONDecodeError as exc:
+        raise BuildDependencyError("The build virtual environment marker is invalid") from exc
+    if not isinstance(value, dict) or value.get("schema_version") != 1:
+        raise BuildDependencyError("The build virtual environment marker schema is invalid")
+    if value.get("purpose") != "s9h-build-dependencies":
+        raise BuildDependencyError("The build virtual environment marker purpose is invalid")
+    if value != S9H_BUILD_VENV_MARKER_DATA:
+        raise BuildDependencyError("The build virtual environment marker contains unknown data")
+    return value
+
+
+def _target_is_owned_venv(target: Path) -> bool:
+    try:
+        _read_owned_marker(target)
+    except BuildDependencyError:
+        return False
+    return True
+
+
+def _verify_target(target: Path) -> Path:
+    target = target.resolve(strict=False)
+    repo = REPO_ROOT.resolve()
+    _validate_target_location(target, repo)
+    if not target.exists():
+        return target
+    if not target.is_dir():
+        raise BuildDependencyError("The build virtual environment target must be a directory")
+    try:
+        next(target.iterdir())
+    except StopIteration:
+        return target
+    except OSError as exc:
+        raise BuildDependencyError("The build virtual environment target is unreadable") from exc
+    _read_owned_marker(target)
+    return target
+
+
+def _create_build_venv(target: Path) -> Path:
+    target = _verify_target(target)
+    venv.EnvBuilder(with_pip=True, clear=True).create(target)
+    return target
+
+
+def _write_owned_marker(target: Path) -> None:
+    marker = target / S9H_BUILD_VENV_MARKER
+    content = json.dumps(S9H_BUILD_VENV_MARKER_DATA, indent=2) + "\n"
+    with marker.open("w", encoding="utf-8", newline="\n") as stream:
+        stream.write(content)
 
 
 def _load_inventory() -> dict:

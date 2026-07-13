@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import copy
 import datetime
+import importlib.util
 import json
 import re
 import sys
+import tempfile
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +46,7 @@ def main() -> int:
     }
     validate_contract(bootstrap, build, inventory, installer, workflows)
     _test_negative_mutations(bootstrap, build, inventory, installer, workflows)
+    _test_target_path_safety(_load_installer_module())
     print("build dependency lock smoke tests passed")
     return 0
 
@@ -181,9 +185,17 @@ def _validate_installer(installer: str) -> None:
         'os.name != "nt"',
         'platform.system() != "Windows"',
         "EXPECTED_PYTHON = (3, 11, 9)",
+        'S9H_BUILD_VENV_MARKER = ".s9h-build-venv.json"',
+        '"purpose": "s9h-build-dependencies"',
         "venv.EnvBuilder(with_pip=True, clear=True)",
         'target / "Scripts" / "python.exe"',
-        'repo in target.parents',
+        "_is_relative_to(target, repo)",
+        "_is_relative_to(repo, target)",
+        "target = target.resolve(strict=False)",
+        "repo = repo.resolve()",
+        "_read_owned_marker(target)",
+        "def _target_is_owned_venv(",
+        "_write_owned_marker(target)",
         '"--isolated"',
         '"--disable-pip-version-check"',
         '"--no-input"',
@@ -200,6 +212,16 @@ def _validate_installer(installer: str) -> None:
         "Locked build dependencies verified",
     ):
         _require(required in installer, f"installer contract is missing: {required}")
+    _require(
+        installer.index("_verify_inventory(installed, expected)")
+        < installer.index("_write_owned_marker(target)"),
+        "ownership marker must be written after inventory verification",
+    )
+    _require(
+        installer.index("if github_path is not None:")
+        < installer.index("_write_owned_marker(target)"),
+        "ownership marker must be written after GitHub environment export",
+    )
     _require(installer.count('"--no-deps"') == 1, "--no-deps must be bootstrap-only")
     for forbidden in (
         "shell=True",
@@ -211,6 +233,270 @@ def _validate_installer(installer: str) -> None:
         "wheelhouse",
     ):
         _require(forbidden not in installer, f"installer contains forbidden input: {forbidden}")
+
+
+def _load_installer_module():
+    spec = importlib.util.spec_from_file_location(
+        "phase_4b_build_dependency_installer",
+        INSTALLER_PATH,
+    )
+    _require(spec is not None and spec.loader is not None, "installer module load failed")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _test_target_path_safety(installer) -> None:
+    with tempfile.TemporaryDirectory(prefix="s9h-phase-4b-path-safety-") as raw_temp:
+        temp_root = Path(raw_temp).resolve()
+        synthetic_repo = temp_root / "workspace" / "repository"
+        synthetic_repo.mkdir(parents=True)
+        safe_root = temp_root / "venvs"
+        safe_root.mkdir()
+        _require(
+            not installer._is_relative_to(Path("C:/safe"), Path("D:/repository")),
+            "cross-drive ancestry check failed",
+        )
+
+        _expect_installer_error(
+            installer,
+            lambda: installer._validate_target_location(Path(temp_root.anchor), synthetic_repo),
+            "filesystem root",
+        )
+        _expect_installer_error(
+            installer,
+            lambda: installer._validate_target_location(synthetic_repo, synthetic_repo),
+            "repository root",
+        )
+        _expect_installer_error(
+            installer,
+            lambda: installer._validate_target_location(
+                synthetic_repo / "nested",
+                synthetic_repo,
+            ),
+            "repository descendant",
+        )
+        _expect_installer_error(
+            installer,
+            lambda: installer._validate_target_location(
+                synthetic_repo.parent,
+                synthetic_repo,
+            ),
+            "repository ancestor",
+        )
+
+        with mock.patch.object(installer, "REPO_ROOT", synthetic_repo):
+            absent = safe_root / "absent"
+            _require(installer._verify_target(absent) == absent, "absent target rejected")
+
+            empty = safe_root / "empty"
+            empty.mkdir()
+            _require(installer._verify_target(empty) == empty, "empty target rejected")
+
+            existing_file = safe_root / "existing-file"
+            existing_file.write_bytes(b"sentinel-file")
+            _expect_installer_error(
+                installer,
+                lambda: installer._verify_target(existing_file),
+                "existing file",
+            )
+
+            unowned = safe_root / "unowned"
+            unowned.mkdir()
+            (unowned / "Scripts").mkdir()
+            (unowned / "Scripts" / "python.exe").write_bytes(b"unrelated-venv")
+            sentinel = unowned / "pyvenv.cfg"
+            sentinel.write_bytes(b"do-not-delete")
+            before = sentinel.read_bytes()
+            _expect_installer_error(
+                installer,
+                lambda: installer._verify_target(unowned),
+                "non-empty unmarked target",
+            )
+            _require(sentinel.read_bytes() == before, "unowned sentinel changed")
+
+            malformed = _marker_target(installer, safe_root / "malformed", "{not-json\n")
+            _expect_installer_error(
+                installer,
+                lambda: installer._verify_target(malformed),
+                "malformed marker",
+            )
+            wrong_schema = _marker_target(
+                installer,
+                safe_root / "wrong-schema",
+                {"schema_version": 2, "purpose": "s9h-build-dependencies"},
+            )
+            _expect_installer_error(
+                installer,
+                lambda: installer._verify_target(wrong_schema),
+                "wrong marker schema",
+            )
+            wrong_purpose = _marker_target(
+                installer,
+                safe_root / "wrong-purpose",
+                {"schema_version": 1, "purpose": "unrelated"},
+            )
+            _expect_installer_error(
+                installer,
+                lambda: installer._verify_target(wrong_purpose),
+                "wrong marker purpose",
+            )
+            marker_directory = safe_root / "marker-directory"
+            marker_directory.mkdir()
+            (marker_directory / installer.S9H_BUILD_VENV_MARKER).mkdir()
+            _expect_installer_error(
+                installer,
+                lambda: installer._verify_target(marker_directory),
+                "marker directory",
+            )
+
+            unreadable = _marker_target(
+                installer,
+                safe_root / "unreadable",
+                installer.S9H_BUILD_VENV_MARKER_DATA,
+            )
+            marker_path = unreadable / installer.S9H_BUILD_VENV_MARKER
+            path_type = type(marker_path)
+            original_read_text = path_type.read_text
+
+            def deny_marker_read(path, *args, **kwargs):
+                if path == marker_path:
+                    raise OSError("simulated unreadable marker")
+                return original_read_text(path, *args, **kwargs)
+
+            with mock.patch.object(path_type, "read_text", deny_marker_read):
+                _expect_installer_error(
+                    installer,
+                    lambda: installer._verify_target(unreadable),
+                    "unreadable marker",
+                )
+
+            owned = _marker_target(
+                installer,
+                safe_root / "owned",
+                installer.S9H_BUILD_VENV_MARKER_DATA,
+            )
+            _require(installer._verify_target(owned) == owned, "owned target rejected")
+            _require(installer._target_is_owned_venv(owned), "owned marker not recognized")
+            _require(
+                not installer._target_is_owned_venv(unowned),
+                "unowned target recognized as owned",
+            )
+
+            create_calls = []
+
+            def record_create(_builder, target):
+                create_calls.append(Path(target))
+
+            with mock.patch.object(installer.venv.EnvBuilder, "create", record_create):
+                _expect_installer_error(
+                    installer,
+                    lambda: installer._create_build_venv(synthetic_repo.parent),
+                    "repository ancestor destructive guard",
+                )
+                _expect_installer_error(
+                    installer,
+                    lambda: installer._create_build_venv(unowned),
+                    "destructive guard",
+                )
+                _require(not create_calls, "create reached for an unowned target")
+                installer._create_build_venv(owned)
+                _require(
+                    create_calls == [owned],
+                    "create was not reached exactly once for an owned target",
+                )
+
+            _test_marker_lifecycle(installer, safe_root, synthetic_repo)
+
+
+def _marker_target(installer, target: Path, value) -> Path:
+    target.mkdir()
+    marker = target / installer.S9H_BUILD_VENV_MARKER
+    if isinstance(value, str):
+        content = value
+    else:
+        content = json.dumps(value, indent=2) + "\n"
+    marker.write_text(content, encoding="utf-8", newline="\n")
+    return target
+
+
+def _test_marker_lifecycle(installer, safe_root: Path, synthetic_repo: Path) -> None:
+    inventory = {
+        "packages": [
+            {"name": "pyinstaller", "version": "6.21.0"},
+        ],
+    }
+
+    def create_skeleton(_builder, target):
+        scripts = Path(target) / "Scripts"
+        scripts.mkdir(parents=True, exist_ok=True)
+        (scripts / "python.exe").write_bytes(b"")
+
+    common_patches = (
+        mock.patch.object(installer, "REPO_ROOT", synthetic_repo),
+        mock.patch.object(installer, "_load_inventory", return_value=inventory),
+        mock.patch.object(installer.venv.EnvBuilder, "create", create_skeleton),
+        mock.patch.object(installer, "_run", return_value=None),
+        mock.patch.object(installer, "_verify_pip", return_value=None),
+        mock.patch.object(installer, "_verify_pyinstaller", return_value=None),
+        mock.patch.object(
+            installer,
+            "_installed_distributions",
+            return_value={"pyinstaller": "6.21.0"},
+        ),
+    )
+    success = safe_root / "marker-success"
+    with _combined_patches(common_patches):
+        installer._install_locked_dependencies(success, None, None)
+    marker = success / installer.S9H_BUILD_VENV_MARKER
+    _require(marker.is_file(), "success marker was not written")
+    _require(
+        json.loads(marker.read_text(encoding="utf-8"))
+        == installer.S9H_BUILD_VENV_MARKER_DATA,
+        "success marker content is invalid",
+    )
+    _require(marker.read_bytes().endswith(b"\n"), "success marker lacks trailing newline")
+
+    failed = safe_root / "marker-failure"
+    failing_patches = common_patches + (
+        mock.patch.object(
+            installer,
+            "_verify_inventory",
+            side_effect=installer.BuildDependencyError("simulated verification failure"),
+        ),
+    )
+    with _combined_patches(failing_patches):
+        _expect_installer_error(
+            installer,
+            lambda: installer._install_locked_dependencies(failed, None, None),
+            "failed installation marker",
+        )
+    _require(
+        not (failed / installer.S9H_BUILD_VENV_MARKER).exists(),
+        "marker was written before complete verification",
+    )
+
+
+class _combined_patches:
+    def __init__(self, patches) -> None:
+        self._patches = patches
+
+    def __enter__(self):
+        for patcher in self._patches:
+            patcher.start()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        for patcher in reversed(self._patches):
+            patcher.stop()
+
+
+def _expect_installer_error(installer, callback, label: str) -> None:
+    try:
+        callback()
+    except installer.BuildDependencyError:
+        return
+    raise BuildLockContractError(f"unsafe installer case was accepted: {label}")
 
 
 def _validate_workflow_usage(workflows: dict[str, str]) -> None:
