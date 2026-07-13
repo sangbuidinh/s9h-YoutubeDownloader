@@ -30,10 +30,16 @@ FORBIDDEN_VERSION_WORKFLOW_TRIGGERS = {
     "workflow_run",
 }
 ACTION_POLICY = {
-    "actions/checkout": ("v4", 5),
+    "actions/checkout": ("v4", 8),
     "actions/setup-python": ("v5", 5),
     "actions/upload-artifact": ("v4", 4),
     "softprops/action-gh-release": ("v2", 4),
+}
+LEGACY_WORKFLOW = ".github/workflows/prerelease-v1.2.7-rc.1.yml"
+FIXED_TAG_WORKFLOWS = {
+    ".github/workflows/prerelease-v1.3.0-rc.1.yml": "v1.3.0-rc.1",
+    ".github/workflows/release-v1.3.0.yml": "v1.3.0",
+    ".github/workflows/release-v1.3.1.yml": "v1.3.1",
 }
 RELEASE_POLICY = {
     ".github/workflows/prerelease-v1.2.7-rc.1.yml": (
@@ -137,7 +143,7 @@ def validate_supply_chain(documents: dict[str, str], inventory: dict) -> None:
     counts = Counter({name: len(rows) for name, rows in uses_by_action.items()})
     expected_counts = Counter({name: policy[1] for name, policy in ACTION_POLICY.items()})
     _require(counts == expected_counts, f"action occurrence counts differ: {counts}")
-    _require(sum(counts.values()) == 18, "total immutable action count must be 18")
+    _require(sum(counts.values()) == 21, "total immutable action count must be 21")
     for repository, rows in uses_by_action.items():
         _require(
             len({commit for _, commit, _ in rows}) == 1,
@@ -284,9 +290,104 @@ def _validate_historical_behavior(path: str, workflow: str) -> None:
         "softprops/action-gh-release@" in workflow,
         f"{path} publishing action is missing",
     )
+    _validate_dependency_install(path, workflow, tag, build_command)
+
+
+def _validate_dependency_install(
+    path: str,
+    workflow: str,
+    tag: str,
+    build_command: str,
+) -> None:
     _require(
-        "python -m pip install --upgrade pip pyinstaller" in workflow,
-        f"{path} Phase 4B install line changed early",
+        re.search(
+            r"(?im)^\s*(?:run:\s*)?(?:python\s+-m\s+)?pip\s+install\b",
+            workflow,
+        )
+        is None,
+        f"{path} must not contain a direct pip install",
+    )
+    for forbidden in (
+        "--extra-index-url",
+        "--trusted-host",
+        "--pre",
+        "--no-binary",
+        "--only-binary=:none:",
+    ):
+        _require(forbidden not in workflow, f"{path} contains unsafe installer input")
+
+    job = _mapping_block(workflow.splitlines(), "release", 2)
+    steps = _step_blocks(job)
+    installer = _named_step(steps, "Install locked build dependencies")
+    installer_text = "\n".join(installer)
+    for required in (
+        "python scripts/install_build_dependencies.py",
+        '$env:RUNNER_TEMP\\s9h-build-venv-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT',
+        '--github-env "$env:GITHUB_ENV"',
+        '--github-path "$env:GITHUB_PATH"',
+    ):
+        _require(required in installer_text, f"{path} installer is missing: {required}")
+    _require(
+        workflow.count("python scripts/install_build_dependencies.py") == 1,
+        f"{path} must invoke the locked installer exactly once",
+    )
+
+    setup_steps = _action_steps(steps, "actions/setup-python")
+    checkout_steps = _action_steps(steps, "actions/checkout")
+    _require(len(setup_steps) == 1, f"{path} must set up Python exactly once")
+    build_steps = [step for step in steps if build_command in "\n".join(step)]
+    _require(len(build_steps) == 1, f"{path} build step is ambiguous")
+    _require(
+        steps.index(setup_steps[0]) < steps.index(installer) < steps.index(build_steps[0]),
+        f"{path} installer must run after setup-python and before build",
+    )
+
+    if path == LEGACY_WORKFLOW:
+        _require(len(checkout_steps) == 1, "legacy workflow must use one source checkout")
+        _require(
+            _step_name(checkout_steps[0]) == "Check out source",
+            "legacy workflow must retain current-source build semantics",
+        )
+        _require(
+            _scalar_value(checkout_steps[0], "ref", 10) is None,
+            "legacy source checkout must not select a historical tag",
+        )
+        return
+
+    _require(path in FIXED_TAG_WORKFLOWS, f"unexpected version workflow: {path}")
+    _require(len(checkout_steps) == 2, f"{path} must use two checkout steps")
+    lock_checkout, tag_checkout = checkout_steps
+    _require(
+        _step_name(lock_checkout) == "Check out dependency lock source",
+        f"{path} lock-source checkout is missing",
+    )
+    _require(
+        _scalar_value(lock_checkout, "ref", 10) is None,
+        f"{path} lock-source checkout must use dispatch source",
+    )
+    _require(
+        _step_name(tag_checkout) == "Check out release tag",
+        f"{path} release-tag checkout is missing",
+    )
+    _require(
+        _unquote(_scalar_value(tag_checkout, "ref", 10) or "") == tag,
+        f"{path} release-tag checkout ref changed",
+    )
+    _require(
+        _unquote(_scalar_value(tag_checkout, "fetch-depth", 10) or "") == "0",
+        f"{path} release-tag checkout must use fetch-depth 0",
+    )
+    verification = _named_step(steps, "Verify annotated tag and release absence")
+    canonical_temp = _named_step(steps, "Configure canonical Windows temp path")
+    _require(
+        steps.index(lock_checkout)
+        < steps.index(setup_steps[0])
+        < steps.index(installer)
+        < steps.index(tag_checkout)
+        < steps.index(verification)
+        < steps.index(canonical_temp)
+        < steps.index(build_steps[0]),
+        f"{path} fixed-tag dependency installation order is invalid",
     )
 
 
@@ -338,8 +439,10 @@ def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None
     mutated = copy.deepcopy(documents)
     mutated[release] = _replace_once(
         mutated[release],
-        f"actions/checkout@{checkout_sha}",
-        "actions/checkout@" + "a" * 40,
+        "      - name: Check out dependency lock source\n"
+        f"        uses: actions/checkout@{checkout_sha} # v4\n",
+        "      - name: Check out dependency lock source\n"
+        f"        uses: actions/checkout@{'a' * 40} # v4\n",
     )
     mutations.append(("inconsistent action SHA", mutated))
 
@@ -410,6 +513,73 @@ def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None
         "docker://example.invalid/tool:latest",
     )
     mutations.append(("Docker action", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] += (
+        "\n      - name: Legacy direct dependency install\n"
+        "        run: python -m pip install --upgrade pip pyinstaller\n"
+    )
+    mutations.append(("legacy direct pip install", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] += (
+        "\n      - name: Unpinned dependency install\n"
+        "        run: python -m pip install pyinstaller\n"
+    )
+    mutations.append(("unpinned direct pip install", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] = _move_named_step_after(
+        mutated[release],
+        "Install locked build dependencies",
+        "Build and validate checksum-pinned assets",
+    )
+    mutations.append(("installer after build", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] = _move_named_step_after(
+        mutated[release],
+        "Install locked build dependencies",
+        "Check out release tag",
+    )
+    mutations.append(("installer after fixed-tag checkout", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] = _remove_named_step(
+        mutated[release],
+        "Check out dependency lock source",
+    )
+    mutations.append(("missing lock-source checkout", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] = _replace_once(
+        mutated[release],
+        "          ref: v1.3.1\n",
+        "          ref: v1.3.0\n",
+    )
+    mutations.append(("modified release tag ref", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] = _replace_once(
+        mutated[release],
+        '$env:RUNNER_TEMP\\s9h-build-venv-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT',
+        ".build-venv",
+    )
+    mutations.append(("repository-contained build venv", mutated))
+
+    for label, unsafe_argument in (
+        ("alternate package index", "--extra-index-url https://example.invalid/simple"),
+        ("trusted host", "--trusted-host example.invalid"),
+        ("source distribution allowance", "--no-binary=:all:"),
+    ):
+        mutated = copy.deepcopy(documents)
+        mutated[release] = _replace_once(
+            mutated[release],
+            '            --github-path "$env:GITHUB_PATH"\n',
+            '            --github-path "$env:GITHUB_PATH" `\n'
+            f"            {unsafe_argument}\n",
+        )
+        mutations.append((label, mutated))
 
     manual_trigger = "on:\n  workflow_dispatch:\n"
     trigger_mutations = (
@@ -485,6 +655,45 @@ def _mapping_block(lines: list[str], key: str, indent: int) -> list[str]:
     return block
 
 
+def _step_blocks(job: list[str]) -> list[list[str]]:
+    starts = [
+        index
+        for index, line in enumerate(job)
+        if _indent(line) == 6 and line.lstrip().startswith("- ")
+    ]
+    blocks = []
+    for position, start in enumerate(starts):
+        end = starts[position + 1] if position + 1 < len(starts) else len(job)
+        blocks.append(job[start:end])
+    _require(bool(blocks), "release job contains no workflow steps")
+    return blocks
+
+
+def _step_name(step: list[str]) -> str | None:
+    match = re.match(r"^\s*-\s+name:\s*(.*?)\s*$", step[0])
+    return _unquote(match.group(1)) if match else None
+
+
+def _named_step(steps: list[list[str]], name: str) -> list[str]:
+    matches = [step for step in steps if _step_name(step) == name]
+    _require(len(matches) == 1, f"workflow step must appear exactly once: {name}")
+    return matches[0]
+
+
+def _action_steps(steps: list[list[str]], action: str) -> list[list[str]]:
+    pattern = re.compile(rf"\buses:\s*{re.escape(action)}@")
+    return [step for step in steps if pattern.search("\n".join(step))]
+
+
+def _scalar_value(lines: list[str], key: str, indent: int) -> str | None:
+    pattern = re.compile(rf"^{' ' * indent}{re.escape(key)}\s*:\s*(.*?)\s*$")
+    for line in lines:
+        match = pattern.match(line)
+        if match:
+            return match.group(1)
+    return None
+
+
 def _direct_mapping_pairs(lines: list[str], indent: int) -> list[tuple[str, str]]:
     pattern = re.compile(rf"^{' ' * indent}([A-Za-z0-9_-]+)\s*:\s*(.*?)\s*$")
     return [
@@ -506,6 +715,32 @@ def _direct_sequence_values(lines: list[str], indent: int) -> list[str]:
         for line in lines
         if (match := pattern.match(line))
     ]
+
+
+def _remove_named_step(workflow: str, name: str) -> str:
+    pattern = re.compile(
+        rf"(?ms)^      - name:\s*{re.escape(name)}\s*$\n.*?(?=^      - |\Z)"
+    )
+    mutated, count = pattern.subn("", _normalize_newlines(workflow), count=1)
+    _require(count == 1, f"step mutation target count is {count}: {name}")
+    return mutated
+
+
+def _move_named_step_after(workflow: str, name: str, target: str) -> str:
+    normalized = _normalize_newlines(workflow)
+    pattern = re.compile(
+        rf"(?ms)^      - name:\s*{re.escape(name)}\s*$\n.*?(?=^      - |\Z)"
+    )
+    match = pattern.search(normalized)
+    _require(match is not None, f"step mutation target is missing: {name}")
+    block = match.group(0).rstrip("\n") + "\n"
+    without = normalized[: match.start()] + normalized[match.end() :]
+    target_pattern = re.compile(
+        rf"(?ms)^      - name:\s*{re.escape(target)}\s*$\n.*?(?=^      - |\Z)"
+    )
+    target_match = target_pattern.search(without)
+    _require(target_match is not None, f"step move target is missing: {target}")
+    return without[: target_match.end()] + block + without[target_match.end() :]
 
 
 def _replace_once(value: str, old: str, new: str) -> str:

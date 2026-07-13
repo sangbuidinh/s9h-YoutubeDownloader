@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "resolved_at_utc": "2026-07-13T06:28:28.130799Z",
+  "target": {
+    "os": "windows",
+    "architecture": "x86_64",
+    "python": "3.11.9"
+  },
+  "index": "https://pypi.org/simple",
+  "bootstrap": {
+    "name": "pip",
+    "version": "26.1.2",
+    "wheel": "pip-26.1.2-py3-none-any.whl",
+    "sha256": "382ff9f685ee3bc25864f820aa50505825f10f5458ffff07e30a6d96e5715cab"
+  },
+  "build_root": {
+    "name": "PyInstaller",
+    "version": "6.21.0"
+  },
+  "packages": [
+    {
+      "name": "altgraph",
+      "version": "0.17.5",
+      "wheel": "altgraph-0.17.5-py2.py3-none-any.whl",
+      "sha256": "f3a22400bce1b0c701683820ac4f3b159cd301acab067c51c653e06961600597",
+      "direct": false
+    },
+    {
+      "name": "packaging",
+      "version": "26.2",
+      "wheel": "packaging-26.2-py3-none-any.whl",
+      "sha256": "5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e",
+      "direct": false
+    },
+    {
+      "name": "pefile",
+      "version": "2024.8.26",
+      "wheel": "pefile-2024.8.26-py3-none-any.whl",
+      "sha256": "76f8b485dcd3b1bb8166f1128d395fa3d87af26360c2358fb75b80019b957c6f",
+      "direct": false
+    },
+    {
+      "name": "pyinstaller",
+      "version": "6.21.0",
+      "wheel": "pyinstaller-6.21.0-py3-none-win_amd64.whl",
+      "sha256": "7fae06c494ce0ebfe6bd3055c0e409def884f63af2e3705d06bd431ad9237fc7",
+      "direct": true
+    },
+    {
+      "name": "pyinstaller-hooks-contrib",
+      "version": "2026.6",
+      "wheel": "pyinstaller_hooks_contrib-2026.6-py3-none-any.whl",
+      "sha256": "fd13b8ac126b35361175edacd41a0d97080b75dd5f4b594ecefefff969509dd3",
+      "direct": false
+    },
+    {
+      "name": "pywin32-ctypes",
+      "version": "0.2.3",
+      "wheel": "pywin32_ctypes-0.2.3-py3-none-any.whl",
+      "sha256": "8a1513379d709975552d202d942d9837758905c8d01eb82b8bcc30918929e7b8",
+      "direct": false
+    },
+    {
+      "name": "setuptools",
+      "version": "83.0.0",
+      "wheel": "setuptools-83.0.0-py3-none-any.whl",
+      "sha256": "29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3",
+      "direct": false
+    }
+  ]
+}

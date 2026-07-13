@@ -138,6 +138,25 @@ def validate_workflow(workflow: str) -> None:
         "empty smoke discovery must fail",
     )
 
+    smoke_step = _named_step(steps, "Run tracked smoke suite")
+    installer_step = _named_step(steps, "Validate locked build dependencies")
+    _require(
+        steps.index(smoke_step) < steps.index(installer_step),
+        "tracked smoke suite must run before build dependency installation",
+    )
+    installer_text = "\n".join(installer_step)
+    for required in (
+        "python scripts/install_build_dependencies.py",
+        '$env:RUNNER_TEMP\\s9h-build-lock-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT',
+        '--github-env "$env:GITHUB_ENV"',
+        '--github-path "$env:GITHUB_PATH"',
+    ):
+        _require(required in installer_text, f"CI locked installer is missing: {required}")
+    _require(
+        installer_text.count("python scripts/install_build_dependencies.py") == 1,
+        "CI must invoke the locked installer exactly once",
+    )
+
     _require("continue-on-error" not in code, "continue-on-error must be absent")
     _forbid(
         code,
@@ -293,6 +312,13 @@ def _action_step(steps: list[list[str]], action: str) -> list[str]:
     return matches[0]
 
 
+def _named_step(steps: list[list[str]], name: str) -> list[str]:
+    pattern = re.compile(rf"^\s*-\s+name:\s*{re.escape(name)}\s*$")
+    matches = [step for step in steps if any(pattern.match(line) for line in step)]
+    _require(len(matches) == 1, f"workflow step must appear exactly once: {name}")
+    return matches[0]
+
+
 def _action_ref(step: list[str], action: str) -> str:
     match = re.search(rf"\buses:\s*{re.escape(action)}@([^\s#]+)", "\n".join(step))
     _require(match is not None and bool(match.group(1)), f"{action} ref is missing")
@@ -347,7 +373,7 @@ def _test_negative_mutations(workflow: str) -> None:
             "pip install",
             workflow
             + "\n      - name: Unsafe dependency install\n"
-            + "        run: pip install example\n",
+            + "        run: python -m pip install pyinstaller\n",
             "pip install",
         ),
         (
@@ -363,6 +389,47 @@ def _test_negative_mutations(workflow: str) -> None:
                 'Get-ChildItem "scripts/smoke_*.py"',
             ),
             "smoke discovery",
+        ),
+        (
+            "missing github env export",
+            _replace_once(
+                workflow,
+                '            --github-env "$env:GITHUB_ENV" `\n',
+                "",
+            ),
+            "github-env",
+        ),
+        (
+            "missing github path export",
+            _replace_once(
+                workflow,
+                '            --github-path "$env:GITHUB_PATH"\n',
+                "",
+            ),
+            "github-path",
+        ),
+        (
+            "repository-contained build venv",
+            _replace_once(
+                workflow,
+                '            --venv "$env:RUNNER_TEMP\\s9h-build-lock-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" `\n',
+                '            --venv ".build-venv" `\n',
+            ),
+            "RUNNER_TEMP",
+        ),
+        (
+            "installer before smoke suite",
+            _move_named_step_before(
+                workflow,
+                "Validate locked build dependencies",
+                "Run tracked smoke suite",
+            ),
+            "before build dependency installation",
+        ),
+        (
+            "missing installer step",
+            _remove_named_step(workflow, "Validate locked build dependencies"),
+            "Validate locked build dependencies",
         ),
     )
     for label, mutated, expected in mutations:
@@ -458,6 +525,30 @@ def _replace_action_ref(workflow: str, action: str, replacement: str) -> str:
     mutated, count = re.subn(pattern, rf"\g<1>{replacement}", workflow)
     _require(count == 1, f"{action} mutation target count is {count}")
     return mutated
+
+
+def _remove_named_step(workflow: str, name: str) -> str:
+    pattern = re.compile(
+        rf"(?ms)^      - name:\s*{re.escape(name)}\s*$\n.*?(?=^      - |\Z)"
+    )
+    mutated, count = pattern.subn("", _normalize_newlines(workflow), count=1)
+    _require(count == 1, f"step mutation target count is {count}: {name}")
+    return mutated
+
+
+def _move_named_step_before(workflow: str, name: str, target: str) -> str:
+    normalized = _normalize_newlines(workflow)
+    pattern = re.compile(
+        rf"(?ms)^      - name:\s*{re.escape(name)}\s*$\n.*?(?=^      - |\Z)"
+    )
+    match = pattern.search(normalized)
+    _require(match is not None, f"step mutation target is missing: {name}")
+    block = match.group(0).rstrip("\n") + "\n"
+    without = normalized[: match.start()] + normalized[match.end() :]
+    target_pattern = re.compile(rf"(?m)^      - name:\s*{re.escape(target)}\s*$")
+    target_match = target_pattern.search(without)
+    _require(target_match is not None, f"step move target is missing: {target}")
+    return without[: target_match.start()] + block + without[target_match.start() :]
 
 
 def _expect_contract_failure(label: str, workflow: str, expected: str) -> None:

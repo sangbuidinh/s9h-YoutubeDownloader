@@ -151,3 +151,14 @@ jobs:
           }
 
           Write-Host "Smoke tests passed: $Passed/$($SmokeTests.Count)"
+
+      - name: Validate locked build dependencies
+        shell: pwsh
+        run: |
+          python scripts/install_build_dependencies.py `
+            --venv "$env:RUNNER_TEMP\s9h-build-lock-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" `
+            --github-env "$env:GITHUB_ENV" `
+            --github-path "$env:GITHUB_PATH"
+          if ($LASTEXITCODE -ne 0) {
+              throw "Locked build dependency validation failed"
+          }
