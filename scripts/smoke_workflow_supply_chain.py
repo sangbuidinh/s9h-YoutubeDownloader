@@ -18,6 +18,17 @@ EXPECTED_WORKFLOWS = (
     ".github/workflows/release-v1.3.0.yml",
     ".github/workflows/release-v1.3.1.yml",
 )
+CI_WORKFLOW = ".github/workflows/ci.yml"
+FORBIDDEN_VERSION_WORKFLOW_TRIGGERS = {
+    "branch_protection_rule",
+    "pull_request",
+    "pull_request_target",
+    "push",
+    "release",
+    "repository_dispatch",
+    "schedule",
+    "workflow_run",
+}
 ACTION_POLICY = {
     "actions/checkout": ("v4", 5),
     "actions/setup-python": ("v5", 5),
@@ -75,6 +86,7 @@ def validate_supply_chain(documents: dict[str, str], inventory: dict) -> None:
     uses_by_action: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
     for path, workflow in documents.items():
         workflow = _normalize_newlines(workflow)
+        _validate_trigger_policy(path, workflow)
         _validate_workflow_environment(path, workflow)
         _validate_permissions(path, workflow)
         _validate_historical_behavior(path, workflow)
@@ -195,6 +207,40 @@ def _validate_workflow_environment(path: str, workflow: str) -> None:
         _require(required in workflow, f"{path} exact Python verification is missing")
 
 
+def _validate_trigger_policy(path: str, workflow: str) -> None:
+    lines = workflow.splitlines()
+    trigger_block = _mapping_block(lines, "on", 0)
+    event_keys = _direct_mapping_keys(trigger_block, 2)
+
+    if path == CI_WORKFLOW:
+        _require(
+            event_keys == ["pull_request", "push"],
+            "CI direct triggers must be pull_request and push only",
+        )
+        for event in event_keys:
+            event_block = _mapping_block(trigger_block, event, 2)
+            _require(
+                _direct_mapping_keys(event_block, 4) == ["branches"],
+                f"CI {event} must define only a branches filter",
+            )
+            branches_block = _mapping_block(event_block, "branches", 4)
+            _require(
+                _direct_sequence_values(branches_block, 6) == ["main"],
+                f"CI {event} must target main only",
+            )
+        return
+
+    forbidden = FORBIDDEN_VERSION_WORKFLOW_TRIGGERS.intersection(event_keys)
+    _require(
+        not forbidden,
+        f"{path} contains automatic trigger(s): {sorted(forbidden)}",
+    )
+    _require(
+        event_keys == ["workflow_dispatch"],
+        f"{path} direct trigger must be workflow_dispatch only",
+    )
+
+
 def _validate_permissions(path: str, workflow: str) -> None:
     lines = workflow.splitlines()
     top = _mapping_block(lines, "permissions", 0)
@@ -258,7 +304,7 @@ def _verify_no_sensitive_literals(path: str, workflow: str) -> None:
 
 
 def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None:
-    ci = ".github/workflows/ci.yml"
+    ci = CI_WORKFLOW
     release = ".github/workflows/release-v1.3.1.yml"
     checkout_sha = inventory["actions"]["actions/checkout"]["commit"]
     setup_sha = inventory["actions"]["actions/setup-python"]["commit"]
@@ -365,6 +411,56 @@ def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None
     )
     mutations.append(("Docker action", mutated))
 
+    manual_trigger = "on:\n  workflow_dispatch:\n"
+    trigger_mutations = (
+        (
+            "version workflow push trigger",
+            "on:\n  workflow_dispatch:\n  push:\n    branches:\n      - main\n",
+        ),
+        (
+            "version workflow self-path push trigger",
+            "on:\n  workflow_dispatch:\n  push:\n    branches:\n      - main\n"
+            "    paths:\n      - .github/workflows/release-v1.3.1.yml\n",
+        ),
+        (
+            "version workflow schedule trigger",
+            'on:\n  workflow_dispatch:\n  schedule:\n    - cron: "0 0 * * *"\n',
+        ),
+        (
+            "version workflow pull request trigger",
+            "on:\n  workflow_dispatch:\n  pull_request:\n",
+        ),
+        ("missing version workflow manual trigger", "on:\n"),
+        (
+            "version workflow pull request target trigger",
+            "on:\n  workflow_dispatch:\n  pull_request_target:\n",
+        ),
+        (
+            "version workflow inline pull request trigger",
+            "on:\n  workflow_dispatch:\n  pull_request: {}\n",
+        ),
+    )
+    for label, replacement in trigger_mutations:
+        mutated = copy.deepcopy(documents)
+        mutated[release] = _replace_once(mutated[release], manual_trigger, replacement)
+        mutations.append((label, mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(mutated[ci], "  pull_request:\n", "")
+    mutations.append(("CI missing pull request trigger", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(mutated[ci], "  push:\n", "")
+    mutations.append(("CI missing push trigger", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "  pull_request:\n    branches:\n      - main\n",
+        "  pull_request:\n    branches:\n      - develop\n",
+    )
+    mutations.append(("CI non-main branch filter", mutated))
+
     for label, mutated_documents in mutations:
         _expect_failure(label, mutated_documents, inventory)
 
@@ -393,6 +489,20 @@ def _direct_mapping_pairs(lines: list[str], indent: int) -> list[tuple[str, str]
     pattern = re.compile(rf"^{' ' * indent}([A-Za-z0-9_-]+)\s*:\s*(.*?)\s*$")
     return [
         (match.group(1), _unquote(match.group(2)))
+        for line in lines
+        if (match := pattern.match(line))
+    ]
+
+
+def _direct_mapping_keys(lines: list[str], indent: int) -> list[str]:
+    pattern = re.compile(rf"^{' ' * indent}([A-Za-z0-9_-]+)\s*:.*$")
+    return [match.group(1) for line in lines if (match := pattern.match(line))]
+
+
+def _direct_sequence_values(lines: list[str], indent: int) -> list[str]:
+    pattern = re.compile(rf"^{' ' * indent}-\s*(.*?)\s*$")
+    return [
+        _unquote(match.group(1))
         for line in lines
         if (match := pattern.match(line))
     ]

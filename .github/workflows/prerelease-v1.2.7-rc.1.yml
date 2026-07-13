@@ -1,10 +1,6 @@
 name: Prerelease v1.2.7-rc.1
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/prerelease-v1.2.7-rc.1.yml
   workflow_dispatch:
 
 permissions:
