@@ -169,12 +169,18 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
     _require("ARTIFACT_DIGEST" in report and "^[0-9a-f]{64}$" in report, f"{contract.path} artifact digest validation is missing")
 
     download = _single_action_step(publish_steps, "actions/download-artifact")
-    download_with = _direct_mapping_pairs(_mapping_block(download, "with", 8), 10)
+    download_with_block = _mapping_block(download, "with", 8)
+    _require(
+        _raw_scalar_value(download_with_block, "merge-multiple", 10) == "true",
+        f"{contract.path} merge-multiple must be the YAML boolean true",
+    )
+    download_with = _direct_mapping_pairs(download_with_block, 10)
     _require(
         download_with
         == [
             ("artifact-ids", "${{ needs.build.outputs.artifact-id }}"),
             ("path", "release-bundle"),
+            ("merge-multiple", "true"),
         ],
         f"{contract.path} download must use only the build artifact ID",
     )
@@ -194,6 +200,7 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
         "ReparsePoint",
         "${{ needs.build.outputs.source-commit }}",
         "${{ needs.build.outputs.control-commit }}",
+        '$bundle = [IO.Path]::GetFullPath((Join-Path $workspace "release-bundle"))',
     ):
         _require(required in verifier_text, f"{contract.path} inline verifier is missing: {required}")
     for forbidden in ("Invoke-Expression", "Start-Process", "&", "python ", ".ps1", ".cmd", ".bat"):
@@ -279,7 +286,19 @@ def _test_negative_mutations(documents: dict[str, str]) -> None:
         ("Python in publish", legacy.path, "      - name: Validate immutable build outputs\n        shell: pwsh", "      - name: Validate immutable build outputs\n        run: python downloaded.py\n        shell: pwsh"),
         ("artifact execution", legacy.path, "          Write-Host \"Release bundle handoff verified\"", "          & release-bundle/assets/Youtube.Downloaderbs.exe\n          Write-Host \"Release bundle handoff verified\""),
         ("upload compression", legacy.path, "          compression-level: 0", "          compression-level: 6"),
+        ("missing merge-multiple", legacy.path, "          merge-multiple: true\n", ""),
+        ("false merge-multiple", legacy.path, "          merge-multiple: true", "          merge-multiple: false"),
+        ("quoted true merge-multiple", legacy.path, "          merge-multiple: true", '          merge-multiple: "true"'),
         ("download by name", legacy.path, "          artifact-ids: ${{ needs.build.outputs.artifact-id }}", "          name: release-bundle"),
+        ("multiple artifact IDs", legacy.path, "          artifact-ids: ${{ needs.build.outputs.artifact-id }}", "          artifact-ids: ${{ needs.build.outputs.artifact-id }}, 123"),
+        ("nested artifact destination", legacy.path, "          path: release-bundle", "          path: release-bundle/nested"),
+        (
+            "dynamic artifact-name discovery",
+            legacy.path,
+            '          $bundle = [IO.Path]::GetFullPath((Join-Path $workspace "release-bundle"))',
+            '          $bundleRoot = [IO.Path]::GetFullPath((Join-Path $workspace "release-bundle"))\n'
+            '          $bundle = @(Get-ChildItem -LiteralPath $bundleRoot -Directory)[0].FullName',
+        ),
         ("missing digest output", legacy.path, "      artifact-digest: ${{ steps.upload-release-bundle.outputs.artifact-digest }}\n", ""),
         ("missing digest validation", legacy.path, "          if ($env:ARTIFACT_DIGEST -cnotmatch \"^[0-9a-f]{64}$\")", "          if ($env:ARTIFACT_DIGEST -eq \"\")"),
         ("notes outside bundle", legacy.path, "          body_path: release-bundle/RELEASE_NOTES.md", "          body_path: release/RELEASE_NOTES.md"),
@@ -342,6 +361,15 @@ def _scalar_value(lines: list[str], key: str, indent: int) -> str | None:
         if line.startswith(prefix):
             value = line[len(prefix) :].strip()
             return _unquote(value) if value else None
+    return None
+
+
+def _raw_scalar_value(lines: list[str], key: str, indent: int) -> str | None:
+    prefix = " " * indent + key + ":"
+    for line in lines:
+        if line.startswith(prefix):
+            value = line[len(prefix) :].strip()
+            return value if value else None
     return None
 
 

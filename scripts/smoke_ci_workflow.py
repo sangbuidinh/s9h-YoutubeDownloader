@@ -249,11 +249,17 @@ def validate_workflow(workflow: str) -> None:
     download_ref = _action_ref(download, "actions/download-artifact")
     _require_safe_action_ref("actions/download-artifact", download_ref)
     download_text = "\n".join(download)
+    download_with = _mapping_block(download, "with", 8)
     _require(
-        _direct_mapping_pairs(_mapping_block(download, "with", 8), 10)
+        _scalar_value(download_with, "merge-multiple", 10) == "true",
+        "handoff download merge-multiple must be the YAML boolean true",
+    )
+    _require(
+        _direct_mapping_pairs(download_with, 10)
         == [
             ("artifact-ids", "${{ needs.windows-smoke.outputs.artifact-id }}"),
             ("path", "release-bundle"),
+            ("merge-multiple", "true"),
         ],
         "handoff download must use only the producer artifact ID",
     )
@@ -578,11 +584,72 @@ def _test_negative_mutations(workflow: str) -> None:
             "contents: write",
         ),
         (
-            "download by artifact name",
+            "missing merge-multiple",
+            _replace_once(workflow, "          merge-multiple: true\n", ""),
+            "merge-multiple",
+        ),
+        (
+            "false merge-multiple",
+            _replace_once(
+                workflow,
+                "          merge-multiple: true",
+                "          merge-multiple: false",
+            ),
+            "merge-multiple",
+        ),
+        (
+            "quoted true merge-multiple",
+            _replace_once(
+                workflow,
+                "          merge-multiple: true",
+                '          merge-multiple: "true"',
+            ),
+            "merge-multiple",
+        ),
+        (
+            "quoted false merge-multiple",
+            _replace_once(
+                workflow,
+                "          merge-multiple: true",
+                '          merge-multiple: "false"',
+            ),
+            "merge-multiple",
+        ),
+        (
+            "multiple artifact IDs",
             _replace_once(
                 workflow,
                 "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}",
+                "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}, 123",
+            ),
+            "artifact ID",
+        ),
+        (
+            "nested artifact destination",
+            _replace_once(
+                workflow,
+                "          path: release-bundle",
+                "          path: release-bundle/nested",
+            ),
+            "artifact ID",
+        ),
+        (
+            "artifact name input",
+            _replace_once(
+                workflow,
+                "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}",
+                "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}\n"
                 "          name: synthetic-release-bundle",
+            ),
+            "artifact ID",
+        ),
+        (
+            "artifact pattern input",
+            _replace_once(
+                workflow,
+                "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}",
+                "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}\n"
+                "          pattern: synthetic-*",
             ),
             "artifact ID",
         ),

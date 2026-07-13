@@ -342,9 +342,22 @@ def _validate_action_placement(path: str, workflow: str) -> None:
 
 
 def _validate_download_inputs(job: str, artifact_id: str, label: str) -> None:
-    _require(f"artifact-ids: {artifact_id}" in job, f"{label} must download by artifact ID")
-    for forbidden in ("pattern:", "github-token:", "repository:", "run-id:", "merge-multiple:"):
-        _require(forbidden not in job, f"{label} contains forbidden download input: {forbidden}")
+    download_steps = _action_steps(_step_blocks(job.splitlines()), "actions/download-artifact")
+    _require(len(download_steps) == 1, f"{label} download action count is invalid")
+    download_with = _mapping_block(download_steps[0], "with", 8)
+    _require(
+        _scalar_value(download_with, "merge-multiple", 10) == "true",
+        f"{label} merge-multiple must be the YAML boolean true",
+    )
+    _require(
+        _direct_mapping_pairs(download_with, 10)
+        == [
+            ("artifact-ids", artifact_id),
+            ("path", "release-bundle"),
+            ("merge-multiple", "true"),
+        ],
+        f"{label} download inputs must select one artifact ID and release-bundle",
+    )
 
 
 def _validate_dependency_install(
@@ -698,6 +711,33 @@ def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None
             "          artifact-ids: ${{ needs.build.outputs.artifact-id }}\n",
             "          artifact-ids: ${{ needs.build.outputs.artifact-id }}\n" + injected,
         )
+        mutations.append((label, mutated))
+
+    for label, old, new in (
+        ("missing merge-multiple", "          merge-multiple: true\n", ""),
+        ("false merge-multiple", "          merge-multiple: true", "          merge-multiple: false"),
+        ("quoted true merge-multiple", "          merge-multiple: true", '          merge-multiple: "true"'),
+        ("quoted false merge-multiple", "          merge-multiple: true", '          merge-multiple: "false"'),
+        (
+            "download by artifact name",
+            "          artifact-ids: ${{ needs.build.outputs.artifact-id }}",
+            "          artifact-ids: ${{ needs.build.outputs.artifact-id }}\n"
+            "          name: release-bundle",
+        ),
+        (
+            "download by artifact pattern",
+            "          artifact-ids: ${{ needs.build.outputs.artifact-id }}",
+            "          artifact-ids: ${{ needs.build.outputs.artifact-id }}\n"
+            "          pattern: release-*",
+        ),
+        (
+            "multiple artifact IDs",
+            "          artifact-ids: ${{ needs.build.outputs.artifact-id }}",
+            "          artifact-ids: ${{ needs.build.outputs.artifact-id }}, 123",
+        ),
+    ):
+        mutated = copy.deepcopy(documents)
+        mutated[release] = _replace_once(mutated[release], old, new)
         mutations.append((label, mutated))
 
     mutated = copy.deepcopy(documents)

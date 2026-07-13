@@ -317,6 +317,7 @@ jobs:
         with:
           artifact-ids: ${{ needs.build.outputs.artifact-id }}
           path: release-bundle
+          merge-multiple: true
       - name: Verify downloaded release bundle
         shell: pwsh
         env:

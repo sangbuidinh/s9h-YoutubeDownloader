@@ -286,6 +286,7 @@ jobs:
         with:
           artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}
           path: release-bundle
+          merge-multiple: true
 
       - name: Verify synthetic release bundle handoff
         shell: pwsh
