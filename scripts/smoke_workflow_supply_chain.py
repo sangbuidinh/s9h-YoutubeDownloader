@@ -32,7 +32,8 @@ FORBIDDEN_VERSION_WORKFLOW_TRIGGERS = {
 ACTION_POLICY = {
     "actions/checkout": ("v4", 8),
     "actions/setup-python": ("v5", 5),
-    "actions/upload-artifact": ("v4", 4),
+    "actions/upload-artifact": ("v4", 5),
+    "actions/download-artifact": ("v4", 5),
     "softprops/action-gh-release": ("v2", 4),
 }
 LEGACY_WORKFLOW = ".github/workflows/prerelease-v1.2.7-rc.1.yml"
@@ -96,6 +97,7 @@ def validate_supply_chain(documents: dict[str, str], inventory: dict) -> None:
         _validate_workflow_environment(path, workflow)
         _validate_permissions(path, workflow)
         _validate_historical_behavior(path, workflow)
+        _validate_action_placement(path, workflow)
         _verify_no_sensitive_literals(path, workflow)
 
         uses_lines = [
@@ -143,7 +145,7 @@ def validate_supply_chain(documents: dict[str, str], inventory: dict) -> None:
     counts = Counter({name: len(rows) for name, rows in uses_by_action.items()})
     expected_counts = Counter({name: policy[1] for name, policy in ACTION_POLICY.items()})
     _require(counts == expected_counts, f"action occurrence counts differ: {counts}")
-    _require(sum(counts.values()) == 21, "total immutable action count must be 21")
+    _require(sum(counts.values()) == 27, "total immutable action count must be 27")
     for repository, rows in uses_by_action.items():
         _require(
             len({commit for _, commit, _ in rows}) == 1,
@@ -200,7 +202,10 @@ def _validate_inventory(inventory: dict) -> dict[str, str]:
 
 def _validate_workflow_environment(path: str, workflow: str) -> None:
     runners = re.findall(r"(?m)^\s*runs-on:\s*(\S+)\s*$", workflow)
-    _require(runners == ["windows-2022"], f"{path} runner must be windows-2022")
+    _require(
+        runners == ["windows-2022", "windows-2022"],
+        f"{path} jobs must use windows-2022",
+    )
 
     versions = re.findall(r'(?m)^\s*python-version:\s*"?([^"\s]+)"?\s*$', workflow)
     _require(versions == ["3.11.9"], f"{path} Python selector must be 3.11.9")
@@ -262,13 +267,26 @@ def _validate_permissions(path: str, workflow: str) -> None:
 
     if path == ".github/workflows/ci.yml":
         _require(not writes, "CI must not contain job-level write permission")
+        for job_name in ("windows-smoke", "release-bundle-handoff"):
+            job = _mapping_block(lines, job_name, 2)
+            _require(
+                _direct_mapping_pairs(_mapping_block(job, "permissions", 4), 6)
+                == [("contents", "read")],
+                f"CI {job_name} job must have contents read only",
+            )
         return
 
-    release_job = _mapping_block(lines, "release", 2)
-    job_permissions = _mapping_block(release_job, "permissions", 4)
+    build_job = _mapping_block(lines, "build", 2)
+    _require(
+        _direct_mapping_pairs(_mapping_block(build_job, "permissions", 4), 6)
+        == [("contents", "read")],
+        f"{path} build job must have contents read only",
+    )
+    publish_job = _mapping_block(lines, "publish", 2)
+    job_permissions = _mapping_block(publish_job, "permissions", 4)
     _require(
         _direct_mapping_pairs(job_permissions, 6) == [("contents", "write")],
-        f"{path} release job must have contents write only",
+        f"{path} publish job must have contents write only",
     )
     _require(
         len(writes) == 1 and writes[0][1:] == (6, "contents"),
@@ -293,6 +311,42 @@ def _validate_historical_behavior(path: str, workflow: str) -> None:
     _validate_dependency_install(path, workflow, tag, build_command)
 
 
+def _validate_action_placement(path: str, workflow: str) -> None:
+    lines = workflow.splitlines()
+    if path == CI_WORKFLOW:
+        producer = "\n".join(_mapping_block(lines, "windows-smoke", 2))
+        consumer = "\n".join(_mapping_block(lines, "release-bundle-handoff", 2))
+        _require(producer.count("actions/upload-artifact@") == 1, "CI producer upload action count")
+        _require("actions/download-artifact@" not in producer, "CI producer must not download")
+        _require(consumer.count("actions/download-artifact@") == 1, "CI consumer download action count")
+        for forbidden in (
+            "actions/checkout@",
+            "actions/setup-python@",
+            "actions/upload-artifact@",
+            "softprops/action-gh-release@",
+        ):
+            _require(forbidden not in consumer, f"CI consumer contains forbidden action: {forbidden}")
+        _validate_download_inputs(consumer, "${{ needs.windows-smoke.outputs.artifact-id }}", "CI consumer")
+        return
+
+    build = "\n".join(_mapping_block(lines, "build", 2))
+    publish = "\n".join(_mapping_block(lines, "publish", 2))
+    _require(build.count("actions/upload-artifact@") == 1, f"{path} build upload action count")
+    _require("actions/download-artifact@" not in build, f"{path} build must not download")
+    _require("softprops/action-gh-release@" not in build, f"{path} build must not publish")
+    _require(publish.count("actions/download-artifact@") == 1, f"{path} publish download action count")
+    _require(publish.count("softprops/action-gh-release@") == 1, f"{path} publish action count")
+    for forbidden in ("actions/checkout@", "actions/setup-python@", "actions/upload-artifact@"):
+        _require(forbidden not in publish, f"{path} publish contains forbidden action: {forbidden}")
+    _validate_download_inputs(publish, "${{ needs.build.outputs.artifact-id }}", path)
+
+
+def _validate_download_inputs(job: str, artifact_id: str, label: str) -> None:
+    _require(f"artifact-ids: {artifact_id}" in job, f"{label} must download by artifact ID")
+    for forbidden in ("pattern:", "github-token:", "repository:", "run-id:", "merge-multiple:"):
+        _require(forbidden not in job, f"{label} contains forbidden download input: {forbidden}")
+
+
 def _validate_dependency_install(
     path: str,
     workflow: str,
@@ -314,21 +368,30 @@ def _validate_dependency_install(
         "--no-binary",
         "--only-binary=:none:",
     ):
-        _require(forbidden not in workflow, f"{path} contains unsafe installer input")
+        _require(
+            re.search(rf"(?m)(?:^|\s){re.escape(forbidden)}(?:\s|=|$)", workflow)
+            is None,
+            f"{path} contains unsafe installer input",
+        )
 
-    job = _mapping_block(workflow.splitlines(), "release", 2)
+    job = _mapping_block(workflow.splitlines(), "build", 2)
     steps = _step_blocks(job)
     installer = _named_step(steps, "Install locked build dependencies")
     installer_text = "\n".join(installer)
+    installer_command = (
+        "python scripts/install_build_dependencies.py"
+        if path == LEGACY_WORKFLOW
+        else "python control/scripts/install_build_dependencies.py"
+    )
     for required in (
-        "python scripts/install_build_dependencies.py",
+        installer_command,
         '$env:RUNNER_TEMP\\s9h-build-venv-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT',
         '--github-env "$env:GITHUB_ENV"',
         '--github-path "$env:GITHUB_PATH"',
     ):
         _require(required in installer_text, f"{path} installer is missing: {required}")
     _require(
-        workflow.count("python scripts/install_build_dependencies.py") == 1,
+        "\n".join(job).count(installer_command) == 1,
         f"{path} must invoke the locked installer exactly once",
     )
 
@@ -358,12 +421,16 @@ def _validate_dependency_install(
     _require(len(checkout_steps) == 2, f"{path} must use two checkout steps")
     lock_checkout, tag_checkout = checkout_steps
     _require(
-        _step_name(lock_checkout) == "Check out dependency lock source",
-        f"{path} lock-source checkout is missing",
+        _step_name(lock_checkout) == "Check out workflow control source",
+        f"{path} control-source checkout is missing",
     )
     _require(
         _scalar_value(lock_checkout, "ref", 10) is None,
-        f"{path} lock-source checkout must use dispatch source",
+        f"{path} control-source checkout must use dispatch source",
+    )
+    _require(
+        _unquote(_scalar_value(lock_checkout, "path", 10) or "") == "control",
+        f"{path} control-source checkout path changed",
     )
     _require(
         _step_name(tag_checkout) == "Check out release tag",
@@ -376,6 +443,10 @@ def _validate_dependency_install(
     _require(
         _unquote(_scalar_value(tag_checkout, "fetch-depth", 10) or "") == "0",
         f"{path} release-tag checkout must use fetch-depth 0",
+    )
+    _require(
+        _unquote(_scalar_value(tag_checkout, "path", 10) or "") == "source",
+        f"{path} release-tag checkout path changed",
     )
     verification = _named_step(steps, "Verify annotated tag and release absence")
     canonical_temp = _named_step(steps, "Configure canonical Windows temp path")
@@ -409,6 +480,9 @@ def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None
     release = ".github/workflows/release-v1.3.1.yml"
     checkout_sha = inventory["actions"]["actions/checkout"]["commit"]
     setup_sha = inventory["actions"]["actions/setup-python"]["commit"]
+    upload_sha = inventory["actions"]["actions/upload-artifact"]["commit"]
+    download_sha = inventory["actions"]["actions/download-artifact"]["commit"]
+    release_sha = inventory["actions"]["softprops/action-gh-release"]["commit"]
 
     mutations = []
 
@@ -431,6 +505,22 @@ def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None
     mutated = copy.deepcopy(documents)
     mutated[ci] = _replace_once(
         mutated[ci],
+        f"actions/download-artifact@{download_sha}",
+        "actions/download-artifact@v4",
+    )
+    mutations.append(("mutable download action", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "actions/download-artifact@",
+        "unknown/download-artifact@",
+    )
+    mutations.append(("unknown download action owner", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
         "actions/checkout@",
         "unknown/checkout@",
     )
@@ -439,9 +529,9 @@ def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None
     mutated = copy.deepcopy(documents)
     mutated[release] = _replace_once(
         mutated[release],
-        "      - name: Check out dependency lock source\n"
+        "      - name: Check out workflow control source\n"
         f"        uses: actions/checkout@{checkout_sha} # v4\n",
-        "      - name: Check out dependency lock source\n"
+        "      - name: Check out workflow control source\n"
         f"        uses: actions/checkout@{'a' * 40} # v4\n",
     )
     mutations.append(("inconsistent action SHA", mutated))
@@ -449,8 +539,8 @@ def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None
     mutated = copy.deepcopy(documents)
     mutated[ci] = _replace_once(
         mutated[ci],
-        "runs-on: windows-2022",
-        "runs-on: windows-latest",
+        "    runs-on: windows-2022\n    timeout-minutes: 30",
+        "    runs-on: windows-latest\n    timeout-minutes: 30",
     )
     mutations.append(("mutable runner", mutated))
 
@@ -463,7 +553,11 @@ def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None
     mutations.append(("broad Python selector", mutated))
 
     mutated = copy.deepcopy(documents)
-    mutated[ci] = _replace_once(mutated[ci], "contents: read", "contents: write")
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "permissions:\n  contents: read",
+        "permissions:\n  contents: write",
+    )
     mutations.append(("top-level contents write", mutated))
 
     mutated = copy.deepcopy(documents)
@@ -472,13 +566,13 @@ def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None
         "    permissions:\n      contents: write\n",
         "",
     )
-    mutations.append(("missing release job write", mutated))
+    mutations.append(("missing publish job write", mutated))
 
     mutated = copy.deepcopy(documents)
     mutated[ci] = _replace_once(
         mutated[ci],
-        "  windows-smoke:\n",
-        "  windows-smoke:\n    permissions:\n      contents: write\n",
+        "  windows-smoke:\n    name: Windows compile, preflight and smoke\n    permissions:\n      contents: read",
+        "  windows-smoke:\n    name: Windows compile, preflight and smoke\n    permissions:\n      contents: write",
     )
     mutations.append(("CI job write", mutated))
 
@@ -547,9 +641,64 @@ def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None
     mutated = copy.deepcopy(documents)
     mutated[release] = _remove_named_step(
         mutated[release],
-        "Check out dependency lock source",
+        "Check out workflow control source",
     )
-    mutations.append(("missing lock-source checkout", mutated))
+    mutations.append(("missing control-source checkout", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] = _replace_once(
+        mutated[release],
+        "    permissions:\n      contents: read\n    runs-on: windows-2022",
+        "    permissions:\n      contents: write\n    runs-on: windows-2022",
+    )
+    mutations.append(("build job contents write", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] = _replace_once(
+        mutated[release],
+        "    permissions:\n      contents: write\n    runs-on: windows-2022",
+        "    permissions:\n      contents: write\n      packages: write\n    runs-on: windows-2022",
+    )
+    mutations.append(("publish job packages write", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] = _replace_once(
+        mutated[release],
+        "      - name: Create and verify release bundle",
+        f"      - uses: softprops/action-gh-release@{release_sha} # v2\n"
+        "      - name: Create and verify release bundle",
+    )
+    mutations.append(("release action in build job", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] = _replace_once(
+        mutated[release],
+        "      - name: Validate immutable build outputs",
+        f"      - uses: actions/upload-artifact@{upload_sha} # v4\n"
+        "      - name: Validate immutable build outputs",
+    )
+    mutations.append(("upload action in publish job", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] = _replace_once(
+        mutated[release],
+        "      - name: Create and verify release bundle",
+        f"      - uses: actions/download-artifact@{download_sha} # v4\n"
+        "      - name: Create and verify release bundle",
+    )
+    mutations.append(("download action in build job", mutated))
+
+    for label, injected in (
+        ("download from another repository", "          repository: other/repository\n"),
+        ("download from another run", "          run-id: 123\n"),
+    ):
+        mutated = copy.deepcopy(documents)
+        mutated[release] = _replace_once(
+            mutated[release],
+            "          artifact-ids: ${{ needs.build.outputs.artifact-id }}\n",
+            "          artifact-ids: ${{ needs.build.outputs.artifact-id }}\n" + injected,
+        )
+        mutations.append((label, mutated))
 
     mutated = copy.deepcopy(documents)
     mutated[release] = _replace_once(
