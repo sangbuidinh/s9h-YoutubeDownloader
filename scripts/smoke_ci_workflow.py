@@ -5,7 +5,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
-SAFE_ACTION_REF = re.compile(r"(?:v\d+|[0-9a-fA-F]{40})\Z")
+IMMUTABLE_ACTION_REF = re.compile(r"[0-9a-f]{40}\Z")
 
 
 class WorkflowContractError(AssertionError):
@@ -17,7 +17,7 @@ def main() -> int:
     workflow = _normalize_newlines(WORKFLOW_PATH.read_text(encoding="utf-8"))
     validate_workflow(workflow)
     _test_negative_mutations(workflow)
-    _test_phase_4_action_refs(workflow)
+    _test_immutable_action_policy(workflow)
     validate_workflow(workflow + "\n# Harmless trailing comment.\n")
     print("CI workflow smoke tests passed")
     return 0
@@ -78,8 +78,8 @@ def validate_workflow(workflow: str) -> None:
 
     job = _mapping_block(lines, "windows-smoke", 2)
     _require(
-        _scalar_value(job, "runs-on", 4) == "windows-latest",
-        "runner must be windows-latest",
+        _scalar_value(job, "runs-on", 4) == "windows-2022",
+        "runner must be windows-2022",
     )
     timeout = _scalar_value(job, "timeout-minutes", 4)
     _require(timeout is not None and timeout.isdigit(), "job timeout is missing")
@@ -103,9 +103,10 @@ def validate_workflow(workflow: str) -> None:
     _require_safe_action_ref("actions/setup-python", setup_ref)
     python_version = _scalar_value(setup_python, "python-version", 10)
     _require(
-        _unquote(python_version) == "3.11",
-        "setup-python must use Python 3.11",
+        _unquote(python_version) == "3.11.9",
+        "setup-python must use Python 3.11.9",
     )
+    _verify_exact_python_version(code)
 
     _verify_canonical_temp(code)
     _require(
@@ -191,6 +192,16 @@ def _verify_canonical_temp(code: str) -> None:
         "if raw_path != canonical_path:" in code,
         "temporary-directory probe must reject non-canonical paths",
     )
+
+
+def _verify_exact_python_version(code: str) -> None:
+    for required in (
+        "python --version",
+        '$VersionOutput = (& python --version 2>&1 | Out-String).Trim()',
+        'if ($VersionOutput -ne "Python 3.11.9")',
+        'Write-Host "Pinned Python verified: $VersionOutput"',
+    ):
+        _require(required in code, f"exact Python version verification is missing: {required}")
 
 
 def _verify_no_sensitive_literals(code: str) -> None:
@@ -290,12 +301,8 @@ def _action_ref(step: list[str], action: str) -> str:
 
 def _require_safe_action_ref(action: str, ref: str) -> None:
     _require(
-        SAFE_ACTION_REF.fullmatch(ref) is not None,
-        f"{action} ref must be a major tag or 40-character commit SHA",
-    )
-    _require(
-        ref.casefold() not in {"main", "master", "latest"},
-        f"{action} ref is unsafe",
+        IMMUTABLE_ACTION_REF.fullmatch(ref) is not None,
+        f"{action} ref must be a lowercase 40-character commit SHA",
     )
 
 
@@ -324,8 +331,8 @@ def _test_negative_mutations(workflow: str) -> None:
             "continue on error",
             _replace_once(
                 workflow,
-                "    runs-on: windows-latest\n",
-                "    runs-on: windows-latest\n    continue-on-error: true\n",
+                "    runs-on: windows-2022\n",
+                "    runs-on: windows-2022\n    continue-on-error: true\n",
             ),
             "continue-on-error",
         ),
@@ -362,32 +369,106 @@ def _test_negative_mutations(workflow: str) -> None:
         _expect_contract_failure(label, mutated, expected)
 
 
-def _test_phase_4_action_refs(workflow: str) -> None:
-    phase_4_shape = _replace_once(
-        _replace_once(
-            workflow,
-            "actions/checkout@v4",
-            "actions/checkout@" + "a" * 40,
+def _test_immutable_action_policy(workflow: str) -> None:
+    checkout_ref = _workflow_action_ref(workflow, "actions/checkout")
+    setup_ref = _workflow_action_ref(workflow, "actions/setup-python")
+    generic_pins = _replace_action_ref(
+        _replace_action_ref(workflow, "actions/checkout", "a" * 40),
+        "actions/setup-python",
+        "b" * 40,
+    )
+    validate_workflow(generic_pins)
+
+    mutations = (
+        (
+            "checkout major tag",
+            _replace_action_ref(workflow, "actions/checkout", "v4"),
         ),
-        "actions/setup-python@v5",
-        "actions/setup-python@" + "b" * 40,
+        (
+            "setup-python major tag",
+            _replace_action_ref(workflow, "actions/setup-python", "v5"),
+        ),
+        (
+            "seven-character SHA",
+            _replace_action_ref(workflow, "actions/checkout", checkout_ref[:7]),
+        ),
+        (
+            "39-character SHA",
+            _replace_action_ref(workflow, "actions/checkout", "a" * 39),
+        ),
+        (
+            "41-character SHA",
+            _replace_action_ref(workflow, "actions/checkout", "a" * 41),
+        ),
+        (
+            "nonhex 40-character ref",
+            _replace_action_ref(workflow, "actions/checkout", "g" * 40),
+        ),
+        (
+            "mutable runner",
+            _replace_once(workflow, "runs-on: windows-2022", "runs-on: windows-latest"),
+        ),
+        (
+            "broad Python selector",
+            _replace_once(
+                workflow,
+                'python-version: "3.11.9"',
+                'python-version: "3.11"',
+            ),
+        ),
+        (
+            "different Python patch",
+            _replace_once(
+                workflow,
+                'python-version: "3.11.9"',
+                'python-version: "3.11.10"',
+            ),
+        ),
+        (
+            "missing exact version verification",
+            _replace_once(
+                workflow,
+                'if ($VersionOutput -ne "Python 3.11.9")',
+                'if ($VersionOutput -ne "Python 3.11")',
+            ),
+        ),
+        (
+            "CI job contents write",
+            _replace_once(
+                workflow,
+                "  windows-smoke:\n",
+                "  windows-smoke:\n    permissions:\n      contents: write\n",
+            ),
+        ),
     )
-    validate_workflow(phase_4_shape)
-    _expect_contract_failure(
-        "unsafe checkout ref",
-        _replace_once(workflow, "actions/checkout@v4", "actions/checkout@main"),
-        "ref",
-    )
+    for label, mutated in mutations:
+        _expect_contract_failure(label, mutated, "")
+
+    _require(checkout_ref != setup_ref, "action refs unexpectedly share one commit")
+
+
+def _workflow_action_ref(workflow: str, action: str) -> str:
+    match = re.search(rf"\buses:\s*{re.escape(action)}@([^\s#]+)", workflow)
+    _require(match is not None, f"{action} invocation is missing")
+    return match.group(1)
+
+
+def _replace_action_ref(workflow: str, action: str, replacement: str) -> str:
+    pattern = rf"(\buses:\s*{re.escape(action)}@)[^\s#]+"
+    mutated, count = re.subn(pattern, rf"\g<1>{replacement}", workflow)
+    _require(count == 1, f"{action} mutation target count is {count}")
+    return mutated
 
 
 def _expect_contract_failure(label: str, workflow: str, expected: str) -> None:
     try:
         validate_workflow(workflow)
     except WorkflowContractError as exc:
-        _require(
-            expected.casefold() in str(exc).casefold(),
-            f"{label} raised unexpected contract error: {exc}",
-        )
+        if expected:
+            _require(
+                expected.casefold() in str(exc).casefold(),
+                f"{label} raised unexpected contract error: {exc}",
+            )
     else:
         raise WorkflowContractError(f"negative mutation was accepted: {label}")
 

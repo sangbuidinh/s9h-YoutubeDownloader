@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-v1.3.1
@@ -12,9 +12,11 @@ concurrency:
 
 jobs:
   release:
-    runs-on: windows-latest
+    permissions:
+      contents: write
+    runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: v1.3.1
           fetch-depth: 0
@@ -98,9 +100,24 @@ jobs:
           Write-Host "Confirmed: GitHub release $tag does not exist."
           $global:LASTEXITCODE = 0
           exit 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.11"
+          python-version: "3.11.9"
+      - name: Verify pinned Python version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          $VersionOutput = (& python --version 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not query Python version"
+          }
+          if ($VersionOutput -ne "Python 3.11.9") {
+              throw "Unexpected Python version: $VersionOutput"
+          }
+
+          Write-Host "Pinned Python verified: $VersionOutput"
       - name: Configure canonical Windows temp path
         shell: pwsh
         run: |
@@ -184,13 +201,13 @@ jobs:
         shell: pwsh
         run: .\scripts\build_release_v1_3_1.ps1 -PreparePinnedRuntime
       - name: Keep downloadable workflow artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Youtube-Downloaderbs-v1.3.1
           path: release/assets/*
           if-no-files-found: error
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: v1.3.1
           name: Youtube Downloaderbs v1.3.1
