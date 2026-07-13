@@ -240,6 +240,7 @@ def _verify_pip(venv_python: Path) -> None:
     match = re.match(r"^pip\s+([^\s]+)\s+", result.stdout.strip())
     if match is None or match.group(1) != EXPECTED_PIP:
         raise BuildDependencyError("The locked pip version was not installed")
+    print(f"Verified pip {match.group(1)}")
 
 
 def _verify_pyinstaller(venv_python: Path) -> None:

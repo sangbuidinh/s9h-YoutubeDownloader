@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import copy
+import contextlib
 import datetime
 import importlib.util
+import io
 import json
 import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -46,7 +49,10 @@ def main() -> int:
     }
     validate_contract(bootstrap, build, inventory, installer, workflows)
     _test_negative_mutations(bootstrap, build, inventory, installer, workflows)
-    _test_target_path_safety(_load_installer_module())
+    _test_installer_logging_mutations(installer)
+    installer_module = _load_installer_module()
+    _test_verified_pip_output(installer_module)
+    _test_target_path_safety(installer_module)
     print("build dependency lock smoke tests passed")
     return 0
 
@@ -206,6 +212,7 @@ def _validate_installer(installer: str) -> None:
         '"-m",\n        "PyInstaller",',
         "import importlib.metadata",
         "S9H_BUILD_PYTHON=",
+        'print(f"Verified pip {match.group(1)}")',
         "--github-env",
         "--github-path",
         "shell=False",
@@ -222,6 +229,15 @@ def _validate_installer(installer: str) -> None:
         < installer.index("_write_owned_marker(target)"),
         "ownership marker must be written after GitHub environment export",
     )
+    _require(
+        installer.index('if match is None or match.group(1) != EXPECTED_PIP:')
+        < installer.index('print(f"Verified pip {match.group(1)}")'),
+        "verified pip output must follow exact version validation",
+    )
+    _require(
+        re.search(r"print\s*\([^)]*result\.(?:stdout|stderr)", installer) is None,
+        "raw pip process output must not be printed",
+    )
     _require(installer.count('"--no-deps"') == 1, "--no-deps must be bootstrap-only")
     for forbidden in (
         "shell=True",
@@ -233,6 +249,67 @@ def _validate_installer(installer: str) -> None:
         "wheelhouse",
     ):
         _require(forbidden not in installer, f"installer contains forbidden input: {forbidden}")
+
+
+def _test_installer_logging_mutations(installer: str) -> None:
+    success_line = '    print(f"Verified pip {match.group(1)}")\n'
+    validation_line = '    if match is None or match.group(1) != EXPECTED_PIP:\n'
+    _require(installer.count(success_line) == 1, "verified pip source line is ambiguous")
+    raw_output = installer.replace(success_line, "    print(result.stdout)\n", 1)
+    early_output = installer.replace(success_line, "", 1).replace(
+        validation_line,
+        success_line + validation_line,
+        1,
+    )
+    for label, mutated in (
+        ("raw pip output", raw_output),
+        ("pip output before validation", early_output),
+    ):
+        try:
+            _validate_installer(mutated)
+        except BuildLockContractError:
+            continue
+        raise BuildLockContractError(f"unsafe installer logging mutation accepted: {label}")
+
+
+def _test_verified_pip_output(installer) -> None:
+    cases = (
+        ("pip 26.1.1 from <NEUTRAL_PATH> (python 3.11)", "wrong version"),
+        ("unexpected output", "malformed output"),
+        ("", "empty output"),
+    )
+    success = subprocess.CompletedProcess(
+        args=["python", "-m", "pip", "--version"],
+        returncode=0,
+        stdout="pip 26.1.2 from <NEUTRAL_PATH> (python 3.11)\n",
+        stderr="",
+    )
+    output = io.StringIO()
+    with mock.patch.object(installer, "_run", return_value=success):
+        with contextlib.redirect_stdout(output):
+            installer._verify_pip(Path("<PYTHON_EXECUTABLE>"))
+    value = output.getvalue()
+    _require(value == "Verified pip 26.1.2\n", "verified pip output is not sanitized")
+    _require(value.count("Verified pip 26.1.2") == 1, "verified pip output is duplicated")
+    for forbidden in ("<NEUTRAL_PATH>", " from ", "<PYTHON_EXECUTABLE>", OFFICIAL_INDEX):
+        _require(forbidden not in value, f"verified pip output leaked: {forbidden}")
+
+    for stdout, label in cases:
+        result = subprocess.CompletedProcess(
+            args=["python", "-m", "pip", "--version"],
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+        )
+        output = io.StringIO()
+        with mock.patch.object(installer, "_run", return_value=result):
+            with contextlib.redirect_stdout(output):
+                _expect_installer_error(
+                    installer,
+                    lambda: installer._verify_pip(Path("<PYTHON_EXECUTABLE>")),
+                    label,
+                )
+        _require(not output.getvalue(), f"failed pip verification emitted output: {label}")
 
 
 def _load_installer_module():
