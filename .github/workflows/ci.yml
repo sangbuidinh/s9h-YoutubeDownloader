@@ -1,0 +1,137 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-smoke:
+    name: Windows compile, preflight and smoke
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Configure canonical Windows temporary directory
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+              throw "Runner temporary root is unavailable"
+          }
+
+          $requestedTemp = Join-Path $env:RUNNER_TEMP "s9h-ci-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          New-Item -ItemType Directory -Force -Path $requestedTemp | Out-Null
+
+          $resolvedOutput = @(
+              & python -c "from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=False))" $requestedTemp
+          )
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not resolve the canonical Windows temporary directory"
+          }
+
+          $resolvedTemp = $resolvedOutput | Select-Object -Last 1
+          if ([string]::IsNullOrWhiteSpace([string]$resolvedTemp)) {
+              throw "Python returned an empty canonical temporary path"
+          }
+
+          $resolvedTemp = ([string]$resolvedTemp).Trim()
+          New-Item -ItemType Directory -Force -Path $resolvedTemp | Out-Null
+
+          $env:TEMP = $resolvedTemp
+          $env:TMP = $resolvedTemp
+          $env:TMPDIR = $resolvedTemp
+
+          "TEMP=$resolvedTemp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TMP=$resolvedTemp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TMPDIR=$resolvedTemp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          @'
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
+          with TemporaryDirectory() as temp_dir:
+              raw_path = Path(temp_dir)
+              canonical_path = raw_path.resolve(strict=False)
+              if raw_path != canonical_path:
+                  raise SystemExit("Configured temporary path is not canonical")
+          '@ | python -
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Canonical temporary-path probe failed"
+          }
+
+      - name: Compile Python sources
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          python -m compileall app.py core ui scripts
+          if ($LASTEXITCODE -ne 0) {
+              throw "Python source compilation failed"
+          }
+
+      - name: Run package preflight
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          python scripts/package_windows.py --preflight-only
+          if ($LASTEXITCODE -ne 0) {
+              throw "Package preflight failed"
+          }
+
+      - name: Run tracked smoke suite
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          $SmokeTests = @(
+              git ls-files "scripts/smoke_*.py" |
+                  Sort-Object
+          )
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not enumerate tracked smoke tests"
+          }
+          if ($SmokeTests.Count -eq 0) {
+              throw "No tracked smoke tests were found"
+          }
+
+          $Passed = 0
+          foreach ($Test in $SmokeTests) {
+              Write-Host "RUN $Test"
+
+              python $Test
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Smoke test failed: $Test"
+              }
+
+              $Passed++
+          }
+
+          Write-Host "Smoke tests passed: $Passed/$($SmokeTests.Count)"
