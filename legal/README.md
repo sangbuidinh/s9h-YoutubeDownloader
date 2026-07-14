@@ -47,3 +47,9 @@ Phase 6B2 must complete all of the following before the release gate can be reco
 - provide verified source kits and implement source availability or source-offer handling;
 - update the release bundle schema;
 - update the release gate only after its prerequisites are verified.
+
+## Phase 6B2A source correspondence audit
+
+The exact pinned FFmpeg and aria2 binary packages were audited without executing them. Exact core source refs were resolved where the package evidence permitted, but core source is not represented as the full source required for the distributed static packages. External static-component sources and build-recipe gaps remain explicit. The result is **source correspondence partially identified**, **source kit not ready**, and **no compliance certification**.
+
+`legal/source-correspondence.json` records the audit findings. `legal/source-kit-requirements.json` defines the prerequisites for Phase 6B2B. The audit confirms that all four workflows remain fail-closed; Phase 6B2A does not enable publishing, source kits and legal payloads remain absent, and existing releases are not retroactively certified.
