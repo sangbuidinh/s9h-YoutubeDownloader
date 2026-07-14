@@ -37,6 +37,12 @@ jobs:
           }
 
           Write-Host "Pinned Python verified: $VersionOutput"
+      - name: Enforce fail-closed release legal gate
+        shell: pwsh
+        run: |
+          python scripts/verify_release_legal_gate.py `
+            --policy legal/release-policy.json `
+            --tag v1.2.7-rc.1
       - name: Install locked build dependencies
         shell: pwsh
         run: |

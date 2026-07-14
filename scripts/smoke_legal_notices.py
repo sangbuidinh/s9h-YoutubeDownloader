@@ -21,6 +21,7 @@ def main() -> int:
     _verify_positive_repository()
     _run_checkout_policy_tests()
     _run_inventory_mutations()
+    _run_phase6b1_mutations()
     _run_license_mutations()
     _run_notice_mutations()
     _run_claim_and_hygiene_mutations()
@@ -43,6 +44,12 @@ def _verify_positive_repository() -> None:
     )
     raw_inventory = (REPO_ROOT / "legal/components.json").read_bytes()
     _assert(raw_inventory == verifier.canonical_inventory_bytes(inventory), "inventory is not deterministic")
+    artifact_inventory = verifier.built_inventory.load_inventory(
+        REPO_ROOT / "legal/built-artifact-inventory.json"
+    )
+    release_policy = verifier.release_gate.load_policy(REPO_ROOT / "legal/release-policy.json")
+    _assert(bool(artifact_inventory["unresolved_native_members"]), "unresolved native members disappeared")
+    _assert(len(release_policy["releases"]) == 4, "release policy tag count changed")
 
     for component in components:
         data = (REPO_ROOT / component["local_license_path"]).read_bytes()
@@ -71,7 +78,9 @@ def _run_checkout_policy_tests() -> None:
     _verify_windows_checkout_simulation()
     mutations = (
         ("missing .gitattributes", _missing_gitattributes, "regular file"),
+        ("missing built inventory rule", _missing_built_inventory_rule, "checkout rules"),
         ("missing components rule", _missing_components_rule, "checkout rules"),
+        ("missing release policy rule", _missing_release_policy_rule, "checkout rules"),
         ("missing license rule", _missing_license_rule, "checkout rules"),
         ("components eol=crlf", _components_eol_crlf, "checkout rules"),
         ("components missing eol=lf", _components_missing_eol, "checkout rules"),
@@ -119,6 +128,11 @@ def _verify_windows_checkout_simulation() -> None:
         _assert(b"\n" in inventory and b"\r" not in inventory, "components JSON is not LF-only after checkout")
         _assert(inventory == _git_blob(source, commit, "legal/components.json"), "components JSON blob mismatch")
 
+        for relative in ("legal/built-artifact-inventory.json", "legal/release-policy.json"):
+            data = (checkout / relative).read_bytes()
+            _assert(b"\n" in data and b"\r" not in data, f"{relative} is not LF-only after checkout")
+            _assert(data == _git_blob(source, commit, relative), f"{relative} blob mismatch")
+
         preserved = 0
         for relative in verifier.ALL_LICENSE_PATHS:
             data = (checkout / relative).read_bytes()
@@ -130,12 +144,26 @@ def _verify_windows_checkout_simulation() -> None:
 
 
 def _assert_effective_attributes(root: Path) -> None:
-    output = _git(root, "check-attr", "text", "eol", "--", ".gitattributes", "legal/components.json")
+    output = _git(
+        root,
+        "check-attr",
+        "text",
+        "eol",
+        "--",
+        ".gitattributes",
+        "legal/built-artifact-inventory.json",
+        "legal/components.json",
+        "legal/release-policy.json",
+    )
     required = {
         ".gitattributes: text: set",
         ".gitattributes: eol: lf",
         "legal/components.json: text: set",
         "legal/components.json: eol: lf",
+        "legal/built-artifact-inventory.json: text: set",
+        "legal/built-artifact-inventory.json: eol: lf",
+        "legal/release-policy.json: text: set",
+        "legal/release-policy.json: eol: lf",
     }
     _assert(required.issubset(set(output.splitlines())), "effective text/eol attributes changed")
     for relative in verifier.ALL_LICENSE_PATHS:
@@ -156,6 +184,16 @@ def _run_inventory_mutations() -> None:
     _expect_failure("wrong Git blob SHA", _wrong_git_blob_sha, "upstream_license_blob_sha1")
     _expect_failure("wrong Apache SHA-256", _wrong_apache_sha, "Apache SHA-256")
     _expect_failure("malformed JSON", _malformed_json)
+    _expect_failure("altered release integration status", _alter_release_status, "release integration status")
+
+
+def _run_phase6b1_mutations() -> None:
+    _expect_failure("missing built inventory", _missing_built_inventory, "required file is missing")
+    _expect_failure("missing release policy", _missing_release_policy, "required file is missing")
+    _expect_failure("release policy allows publishing", _allow_release, "blocked")
+    _expect_failure("release-ready claim", _add_release_ready_claim, "unsupported project claim")
+    _expect_failure("source-complete claim", _add_source_complete_claim, "unsupported project claim")
+    _expect_failure("exhaustive inventory claim", _add_exhaustive_inventory_claim, "unsupported project claim")
 
 
 def _run_license_mutations() -> None:
@@ -208,7 +246,14 @@ def _expect_failure(
             _initialize_git_repository(root, commit=False)
         try:
             verifier.verify_repository(root)
-        except (verifier.LegalVerificationError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+        except (
+            verifier.LegalVerificationError,
+            verifier.built_inventory.InventoryError,
+            verifier.release_gate.ReleaseLegalGateError,
+            OSError,
+            UnicodeError,
+            json.JSONDecodeError,
+        ) as exc:
             if expected_message is not None:
                 _assert(expected_message.casefold() in str(exc).casefold(), f"{label}: unexpected failure: {exc}")
         else:
@@ -272,6 +317,20 @@ def _missing_gitattributes(root: Path) -> None:
 
 def _missing_components_rule(root: Path) -> None:
     _rewrite_gitattributes(root, lambda data: data.replace(b"/legal/components.json text eol=lf\n", b""))
+
+
+def _missing_built_inventory_rule(root: Path) -> None:
+    _rewrite_gitattributes(
+        root,
+        lambda data: data.replace(b"/legal/built-artifact-inventory.json text eol=lf\n", b""),
+    )
+
+
+def _missing_release_policy_rule(root: Path) -> None:
+    _rewrite_gitattributes(
+        root,
+        lambda data: data.replace(b"/legal/release-policy.json text eol=lf\n", b""),
+    )
 
 
 def _missing_license_rule(root: Path) -> None:
@@ -407,6 +466,28 @@ def _malformed_json(root: Path) -> None:
     (root / "legal/components.json").write_bytes(b"{malformed\n")
 
 
+def _alter_release_status(root: Path) -> None:
+    _mutate_inventory(
+        root,
+        lambda inventory: inventory.__setitem__("release_integration_status", "deferred-to-phase-6b"),
+    )
+
+
+def _missing_built_inventory(root: Path) -> None:
+    (root / "legal/built-artifact-inventory.json").unlink()
+
+
+def _missing_release_policy(root: Path) -> None:
+    (root / "legal/release-policy.json").unlink()
+
+
+def _allow_release(root: Path) -> None:
+    path = root / "legal/release-policy.json"
+    policy = json.loads(path.read_text(encoding="utf-8"))
+    policy["releases"][0]["status"] = "allow"
+    path.write_bytes(verifier.release_gate.canonical_policy_bytes(policy))
+
+
 def _modify_license_byte(root: Path, relative: str) -> None:
     path = root / relative
     data = bytearray(path.read_bytes())
@@ -471,6 +552,18 @@ def _add_open_project_claim(root: Path) -> None:
 
 def _add_compliance_claim(root: Path) -> None:
     _append_notice(root, "The project is " + "fully" + " compliant.")
+
+
+def _add_release_ready_claim(root: Path) -> None:
+    _append_notice(root, "The release is " + "release ready.")
+
+
+def _add_source_complete_claim(root: Path) -> None:
+    _append_notice(root, "The source availability is " + "complete.")
+
+
+def _add_exhaustive_inventory_claim(root: Path) -> None:
+    _append_notice(root, "This is an " + "exhaustive binary inventory.")
 
 
 def _add_root_license(root: Path) -> None:

@@ -2,7 +2,7 @@
 
 ## Scope and limitations
 
-This file covers known direct third-party components that current repository sources identify as build inputs or distributed runtime tools. It is not a project license and does not license original project code or assets. It is not legal advice or a certification of complete binary-level legal compliance. Exact embedded runtime inventory remains pending Phase 6B.
+This file covers known direct third-party components that current repository sources identify as build inputs or distributed runtime tools. It is not a project license and does not license original project code or assets. It is not legal advice or a certification of complete binary-level legal compliance. A controlled build snapshot exists, but unresolved embedded components remain pending Phase 6B2.
 
 ## Distributed runtime tools
 
@@ -61,11 +61,23 @@ PyInstaller is GPL-2.0-or-later. Its bootloader exception permits distribution o
 
 ### Tcl/Tk conservative notice
 
-The application imports Tkinter, and a packaged Windows executable may contain Tcl/Tk runtime material. Upstream Tcl terms from `tcltk/tcl` ref `core-8-6-13` are preserved at `legal/licenses/Tcl-Tk-license.terms` as a conservative notice. Phase 6A does not assert that this ref is the exact Tcl/Tk version embedded by every build workflow. Exact executable contents require built-artifact inspection.
+The application imports Tkinter, and the controlled Phase 6B1 build contains Tcl/Tk runtime material. Upstream Tcl terms from `tcltk/tcl` ref `core-8-6-13` are preserved at `legal/licenses/Tcl-Tk-license.terms` as a conservative notice. The exact Tcl/Tk patch version was not verified, and the snapshot does not assert what every future build contains.
 
 ## GPL source-availability warning
 
-FFmpeg/ffprobe and aria2 are distributed as separate executables. Separation does not eliminate each executable's own redistribution obligations. Attribution or a copied license text alone does not resolve source-distribution requirements. Exact Corresponding Source and source-offer handling have not been certified in Phase 6A, and release integration must not be described as complete until Phase 6B closes these items.
+FFmpeg/ffprobe and aria2 are distributed as separate executables. Separation does not eliminate each executable's own redistribution obligations. Attribution or a copied license text alone does not resolve source-distribution requirements. Exact Corresponding Source and source-offer handling have not been certified, and release integration must not be described as complete until Phase 6B2 closes these items.
+
+## Phase 6B1 controlled build inventory
+
+`legal/built-artifact-inventory.json` records one controlled Windows x64 PyInstaller build. It is not a prediction of future binaries, retains unresolved native members, and does not include the executable itself.
+
+## Release gate
+
+`legal/release-policy.json` keeps all current version workflows fail-closed before dependency installation, runtime acquisition, or application build. Existing releases are not retroactively certified.
+
+## Source availability status
+
+FFmpeg/ffprobe Corresponding Source remains unverified, and aria2 source-distribution integration remains incomplete. A copied license or upstream link is not represented as sufficient. Phase 6B2 must provide verified source kits and equivalent release access.
 
 ## Trademarks and affiliation
 

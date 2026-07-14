@@ -3,7 +3,7 @@
   "inventory_scope": "known-direct-components",
   "project_license_status": "not-selected",
   "legal_compliance_certified": false,
-  "release_integration_status": "deferred-to-phase-6b",
+  "release_integration_status": "blocked-pending-phase-6b2",
   "components": [
     {
       "id": "aria2",
@@ -23,7 +23,8 @@
       "source_distribution_status": "not-certified",
       "notes": [
         "Distributor source-offer handling has not been certified in Phase 6A.",
-        "The license label records the upstream COPYING file without selecting an only or or-later SPDX variant."
+        "The license label records the upstream COPYING file without selecting an only or or-later SPDX variant.",
+        "Phase 6B1 does not integrate an aria2 source archive into release payloads."
       ]
     },
     {
@@ -65,7 +66,8 @@
       "source_distribution_status": "not-certified",
       "notes": [
         "Binary package identified by current release scripts: ffmpeg-8.1.2-essentials_build.zip.",
-        "The recorded upstream FFmpeg source ref and build-provider information do not by themselves certify that complete Corresponding Source for the distributed static binary and all incorporated libraries is available."
+        "The recorded upstream FFmpeg source ref and build-provider information do not by themselves certify that complete Corresponding Source for the distributed static binary and all incorporated libraries is available.",
+        "Phase 6B1 does not certify Corresponding Source or integrate a source archive into release payloads."
       ]
     },
     {
@@ -89,7 +91,8 @@
         "PyInstaller is GPL-2.0-or-later.",
         "PyInstaller's bootloader exception permits distribution of the compiled bootloader embedded with another program without imposing GPL restrictions solely from that embedding.",
         "Runtime hooks are described by PyInstaller as Apache-2.0 licensed.",
-        "The bootloader exception does not license the project's original source."
+        "The bootloader exception does not license the project's original source.",
+        "The controlled Phase 6B1 executable snapshot is recorded in legal/built-artifact-inventory.json."
       ]
     },
     {
@@ -109,7 +112,8 @@
       "notice_status": "verified-license-text",
       "source_distribution_status": "requires-built-artifact-inventory",
       "notes": [
-        "Phase 6B must inspect the executable for components collected with the Python runtime."
+        "Phase 6B1 inspected one controlled executable and retained unresolved collected components in legal/built-artifact-inventory.json.",
+        "Current version workflows are fail-closed until Phase 6B2 integrates verified release legal payloads and source availability."
       ]
     },
     {

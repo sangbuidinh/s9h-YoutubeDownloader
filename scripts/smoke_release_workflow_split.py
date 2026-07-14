@@ -136,11 +136,22 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
     checkout_steps = _action_steps(build_steps, "actions/checkout")
     _require(bool(checkout_steps), f"{contract.path} build checkout is missing")
     _require(len(_action_steps(build_steps, "actions/setup-python")) == 1, f"{contract.path} setup-python count changed")
+    setup_python = _action_steps(build_steps, "actions/setup-python")[0]
+    python_verification = _named_step(build_steps, "Verify pinned Python version")
+    legal_gate = _named_step(build_steps, "Enforce fail-closed release legal gate")
     installer = _named_step(build_steps, "Install locked build dependencies")
     build_step = _named_step(build_steps, contract.build_step)
     bundle_step = _named_step(build_steps, "Create and verify release bundle")
     upload = _single_action_step(build_steps, "actions/upload-artifact")
-    _require(build_steps.index(installer) < build_steps.index(build_step), f"{contract.path} installer must precede build")
+    _validate_legal_gate(contract, build_steps, legal_gate)
+    _require(
+        build_steps.index(setup_python)
+        < build_steps.index(python_verification)
+        < build_steps.index(legal_gate)
+        < build_steps.index(installer)
+        < build_steps.index(build_step),
+        f"{contract.path} legal gate and build order is invalid",
+    )
     _require(build_steps.index(build_step) < build_steps.index(bundle_step) < build_steps.index(upload), f"{contract.path} build/bundle/upload order is invalid")
     _require(contract.build_command in "\n".join(build_step), f"{contract.path} build command changed")
     _require("prepare_release_bundle.py create" in "\n".join(bundle_step), f"{contract.path} bundle create is missing")
@@ -263,6 +274,10 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
         source_with = _direct_mapping_pairs(_mapping_block(checkout_steps[1], "with", 8), 10)
         _require(control_with == [("path", "control")], f"{contract.path} control checkout changed")
         _require(source_with == [("path", "source"), ("ref", contract.tag), ("fetch-depth", "0")], f"{contract.path} fixed tag checkout changed")
+        _require(
+            build_steps.index(legal_gate) < build_steps.index(checkout_steps[1]),
+            f"{contract.path} legal gate must precede release-tag checkout",
+        )
         _require("working-directory: source" in "\n".join(build_step), f"{contract.path} build must execute from source")
         _require("python ..\\control\\scripts\\prepare_release_bundle.py" in "\n".join(bundle_step), f"{contract.path} bundle tool must execute from control source")
     else:
@@ -270,6 +285,35 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
         checkout_with = _mapping_block(checkout_steps[0], "with", 8)
         _require(not checkout_with, f"{contract.path} current-source checkout must not set ref or path")
         _require("target_commitish: ${{ github.sha }}" in "\n".join(release), f"{contract.path} target commit semantics changed")
+
+
+def _validate_legal_gate(
+    contract: ReleaseContract, build_steps: list[list[str]], gate_step: list[str]
+) -> None:
+    gate_text = "\n".join(gate_step)
+    prefix = "control/" if contract.fixed_tag else ""
+    verifier = f"python {prefix}scripts/verify_release_legal_gate.py"
+    policy = f"--policy {prefix}legal/release-policy.json"
+    for required in (verifier, policy, f"--tag {contract.tag}"):
+        _require(required in gate_text, f"{contract.path} legal gate is missing: {required}")
+    build_text = "\n".join("\n".join(step) for step in build_steps)
+    _require(build_text.count("verify_release_legal_gate.py") == 1, f"{contract.path} legal gate count changed")
+    _require(build_text.count("release-policy.json") == 1, f"{contract.path} release policy path count changed")
+    _require(
+        re.search(r"(?m)^\s+(?:continue-on-error|if|env)\s*:", gate_text) is None,
+        f"{contract.path} legal gate contains a YAML bypass",
+    )
+    for forbidden in (
+        "||",
+        "; exit 0",
+        "continue-on-error",
+        "SilentlyContinue",
+        "-ErrorAction Ignore",
+        "2>$null",
+        "--allow",
+        "ALLOW_RELEASE",
+    ):
+        _require(forbidden not in gate_text, f"{contract.path} legal gate contains a bypass: {forbidden}")
 
 
 def _test_negative_mutations(documents: dict[str, str]) -> None:
@@ -318,6 +362,91 @@ def _test_negative_mutations(documents: dict[str, str]) -> None:
         except WorkflowSplitError:
             continue
         raise WorkflowSplitError(f"negative mutation was accepted: {label}")
+
+    contract = CONTRACTS[1]
+    gate_block = _named_step_text(documents[contract.path], "Enforce fail-closed release legal gate")
+    extra = []
+    extra.append(("remove legal gate", documents[contract.path].replace(gate_block, "", 1)))
+    extra.append(
+        (
+            "legal gate after installer",
+            _move_named_step_after(
+                documents[contract.path],
+                "Enforce fail-closed release legal gate",
+                "Install locked build dependencies",
+            ),
+        )
+    )
+    extra.append(
+        (
+            "legal gate after build",
+            _move_named_step_after(
+                documents[contract.path],
+                "Enforce fail-closed release legal gate",
+                contract.build_step,
+            ),
+        )
+    )
+    for label, old, new in (
+        ("wrong gate tag", f"--tag {contract.tag}", "--tag v1.3.1"),
+        ("wrong policy path", "--policy control/legal/release-policy.json", "--policy source/legal/release-policy.json"),
+        (
+            "gate continue-on-error",
+            "      - name: Enforce fail-closed release legal gate\n",
+            "      - name: Enforce fail-closed release legal gate\n        continue-on-error: true\n",
+        ),
+        (
+            "gate if false",
+            "      - name: Enforce fail-closed release legal gate\n",
+            "      - name: Enforce fail-closed release legal gate\n        if: false\n",
+        ),
+        (
+            "gate environment bypass",
+            "      - name: Enforce fail-closed release legal gate\n",
+            "      - name: Enforce fail-closed release legal gate\n        env:\n          ALLOW_RELEASE: 1\n",
+        ),
+        ("gate shell suppression", f"--tag {contract.tag}", f"--tag {contract.tag} || exit 0"),
+        (
+            "gate PowerShell suppression",
+            "        run: |\n          python control/scripts/verify_release_legal_gate.py",
+            "        run: |\n          $ErrorActionPreference = \"SilentlyContinue\"\n          python control/scripts/verify_release_legal_gate.py",
+        ),
+        ("gate allow argument", f"--tag {contract.tag}", f"--tag {contract.tag} `\n            --allow"),
+    ):
+        extra.append((label, _replace_once(documents[contract.path], old, new)))
+    extra.append(
+        (
+            "gate only in publish",
+            _move_named_step_after(
+                documents[contract.path],
+                "Enforce fail-closed release legal gate",
+                "Validate immutable build outputs",
+            ),
+        )
+    )
+    for label, workflow in extra:
+        mutated = dict(documents)
+        mutated[contract.path] = workflow
+        try:
+            validate_contracts(mutated)
+        except WorkflowSplitError:
+            continue
+        raise WorkflowSplitError(f"negative mutation was accepted: {label}")
+
+
+def _named_step_text(workflow: str, name: str) -> str:
+    pattern = re.compile(rf"(?ms)^      - name:\s*{re.escape(name)}\s*$\n.*?(?=^      - |\Z)")
+    match = pattern.search(_normalize_newlines(workflow))
+    _require(match is not None, f"step text is missing: {name}")
+    return match.group(0)
+
+
+def _move_named_step_after(workflow: str, name: str, target: str) -> str:
+    normalized = _normalize_newlines(workflow)
+    block = _named_step_text(normalized, name)
+    without = normalized.replace(block, "", 1)
+    target_block = _named_step_text(without, target)
+    return without.replace(target_block, target_block + block, 1)
 
 
 def _mapping_block(lines: list[str], key: str, indent: int) -> list[str]:

@@ -1,3 +1,5 @@
 /.gitattributes text eol=lf
+/legal/built-artifact-inventory.json text eol=lf
 /legal/components.json text eol=lf
+/legal/release-policy.json text eol=lf
 /legal/licenses/** -text
