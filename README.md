@@ -369,3 +369,5 @@ The aria2 and FFmpeg source asset names are defined but assets are not ready. Re
 ## Phase 6B2B2A source-kit feasibility
 
 [`legal/source-input-inventory.json`](legal/source-input-inventory.json) is an evidence-only source input inventory; unresolved does not mean absent, and identified does not mean complete. No source kit was assembled, the release remains blocked, and existing releases are not retroactively certified. See the [feasibility report](docs/source-kit-feasibility.md) for the recorded gaps.
+
+Phase 6B2B2A1a records official primary-source evidence for the six aria2 static inputs with **5 verified, 1 partial, 0 unresolved**. No source kit was assembled, assembly remains unauthorized, and publishing remains blocked. The result is evidence resolution only, not legal certification or proof of exact provider build reproduction; see [`legal/primary-source-evidence-aria2.json`](legal/primary-source-evidence-aria2.json).

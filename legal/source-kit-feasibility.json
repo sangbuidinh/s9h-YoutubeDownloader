@@ -21,14 +21,15 @@
         "zlib"
       ],
       "system_components": [],
-      "verified_immutable_inputs": [],
-      "partially_identified_inputs": [
+      "verified_immutable_inputs": [
         "c-ares",
         "expat",
-        "gmp",
         "libssh2",
         "sqlite",
         "zlib"
+      ],
+      "partially_identified_inputs": [
+        "gmp"
       ],
       "unresolved_inputs": [],
       "toolchain_status": "partial",

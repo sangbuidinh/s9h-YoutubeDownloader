@@ -85,6 +85,17 @@ def run_smoke_tests() -> None:
             ),
         )
 
+    def find_external_component(
+        value: dict[str, Any],
+        predicate: Callable[[dict[str, Any]], bool],
+        label: str,
+    ) -> dict[str, Any]:
+        for package in value["packages"]:
+            for component in package["external_components"]:
+                if predicate(component):
+                    return component
+        raise SmokeFailure(f"no external component matches {label}")
+
     reject_inventory(
         "legal compliance true",
         lambda value: value.__setitem__("legal_compliance_certified", True),
@@ -176,20 +187,27 @@ def run_smoke_tests() -> None:
         component["blockers"] = []
 
     reject_inventory("malformed commit", malformed_commit)
-    reject_inventory(
-        "missing blocker",
-        lambda value: value["packages"][0]["external_components"][0].__setitem__(
-            "blockers", []
-        ),
-    )
+    def missing_blocker(value: dict[str, Any]) -> None:
+        component = find_external_component(
+            value,
+            lambda item: item["resolution_status"] != "verified-immutable-input",
+            "a non-verified resolution state",
+        )
+        _require(component["blockers"], "non-verified component has no blockers")
+        component["blockers"] = []
+
+    reject_inventory("missing blocker", missing_blocker)
 
     def retained_verified_blocker(value: dict[str, Any]) -> None:
-        component = value["packages"][0]["external_components"][0]
-        component["version_status"] = "verified"
-        component["upstream_repository"] = "c-ares/c-ares"
-        component["immutable_ref"] = "1" * 40
-        component["evidence"][0]["status"] = "verified"
-        component["resolution_status"] = "verified-immutable-input"
+        component = find_external_component(
+            value,
+            lambda item: item["resolution_status"] == "verified-immutable-input",
+            "a verified immutable input",
+        )
+        _require(component["blockers"] == [], "verified component already has blockers")
+        component["blockers"] = sorted(
+            ["Synthetic blocker retained for verified input."]
+        )
 
     reject_inventory("blocker retained for verified input", retained_verified_blocker)
     reject_inventory(

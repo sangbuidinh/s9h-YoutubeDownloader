@@ -65,3 +65,11 @@ The aria2 and FFmpeg source asset names are defined but assets are not ready. Re
 The immutable-input feasibility inventory in `legal/source-input-inventory.json` and its generated assessment in `legal/source-kit-feasibility.json` preserve both verified evidence and unresolved evidence. The source input inventory is evidence-only: unresolved does not mean absent, and identified does not mean complete.
 
 No source archive or source kit was created, and no source kit was assembled. Source kits remain not ready, the release remains blocked, there is no release gate reconsideration, and there is no legal certification. Existing releases are not retroactively certified. Phase 6B2B2B is not authorized until blockers are resolved.
+
+## Phase 6B2B2A1a aria2 primary-source resolution
+
+`legal/primary-source-evidence-aria2.json` records official primary-source research for the six provider-identified aria2 static components. The exact result is **5 verified, 1 partial, 0 unresolved**: c-ares, Expat, libssh2, SQLite, and zlib have verified immutable inputs; GNU MP remains partial because its exact official Mercurial changeset was not established and the protected inventory accepts only a 40-character Git commit.
+
+The official source archives for all six components were downloaded temporarily outside the repository and independently hashed. They were not committed and were not assembled into a source kit. Provider identification is not the same as immutable upstream resolution, and upstream resolution does not prove exact provider build reproduction. Archive hashing does not prove that the binary incorporated unmodified source.
+
+No source kit was assembled. Toolchain and build orchestration remain incomplete, assembly remains unauthorized, publishing remains blocked, and existing releases are not retroactively certified. This is not legal advice.

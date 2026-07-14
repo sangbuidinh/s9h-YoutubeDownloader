@@ -29,12 +29,29 @@ PE imports only enumerate dynamic imports. They cannot enumerate code from stati
 | Input class | Count | Evidence state | Remaining gap |
 | --- | ---: | --- | --- |
 | Core source | 1 | Verified immutable evidence | None for the recorded core identity |
-| External static components | 6 | Provider-identified versions; partial | Official repositories, immutable refs, and independent archive hashes |
+| External static components | 6 | Five verified immutable inputs; one partial primary-source record | Exact official GMP Mercurial changeset remains unresolved |
 | External system-facing components | 0 | Not applicable | None |
 | Toolchain | 1 record | Partial | Exact compiler and supporting-tool versions |
 | Build orchestration | 1 record | Partial | Immutable provider script, exact configuration, patch status, and reproducible entrypoint |
 
-The six external static components are `c-ares`, `expat`, `gmp`, `libssh2`, `sqlite`, and `zlib`. In the generated external-component resolution buckets, aria2 has `0` verified immutable inputs, `6` partially identified inputs, and `0` wholly unresolved records. Those six partial records still contain `18` unresolved upstream identity fields: repository, immutable ref, and archive SHA-256 for each component.
+The six external static components are `c-ares`, `expat`, `gmp`, `libssh2`, `sqlite`, and `zlib`. In the generated external-component resolution buckets, aria2 has `5` verified immutable inputs, `1` partially identified input, and `0` wholly unresolved records. The one partial record is GNU MP 6.3.0: its official archive was independently hashed, but an exact official Mercurial changeset was not established and the protected inventory contract accepts only a 40-character Git commit.
+
+## Phase 6B2B2A1a — aria2 primary-source resolution
+
+This evidence-only batch researched the six provider-identified static inputs through official project repositories and release infrastructure. The machine-readable results are in `legal/primary-source-evidence-aria2.json`. The exact count is **5 verified, 1 partial, 0 unresolved**.
+
+| Component | Provider version | Official authority | Immutable identity status | Source archive hash status | Resolution status | Remaining blocker |
+| --- | --- | --- | --- | --- | --- | --- |
+| c-ares | 1.19.1 | `github.com/c-ares/c-ares` | Git commit `6360e96b5cf8e5980c887ce58ef727e53d77243a` | Independently hashed: `321700399b72ed0e037d0074c629e7741f6b2ec2dda92956abe3e9671d3e268e` | Verified immutable input | None for this upstream input |
+| expat | 2.5.0 | `github.com/libexpat/libexpat` | Git commit `654d2de0da85662fcc7644a7acd7c2dd2cfb21f0` | Independently hashed: `ef2420f0232c087801abf705e89ae65f6257df6b7931d37846a193ef2e8cdcbe` | Verified immutable input | None for this upstream input |
+| gmp | 6.3.0 | `gmplib.org` | Official Mercurial changeset unresolved | Independently hashed: `a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898` | Partial primary source | Exact official Mercurial changeset is unresolved; the protected inventory cannot represent it with a Git commit |
+| libssh2 | 1.11.0 | `github.com/libssh2/libssh2` | Git commit `1c3f1b7da588f2652260285529ec3c1f1125eb4e` | Independently hashed: `a488a22625296342ddae862de1d59633e6d446eff8417398e06674a49be3d7c2` | Verified immutable input | None for this upstream input |
+| sqlite | 3.43.1 | `sqlite.org` and official `github.com/sqlite/sqlite` mirror | Fossil check-in `2d3a40c05c49e1a49264912b1a05bc2143ac0e7c3df588276ce80a4cbc9bd1b0`, mapped to mirror commit `f1f6a0bba16895215150081e55dda0d960494773` | Independently hashed: `fe1bf29c5af379444ff5744f8317ad246fb865ceacc937903fe0fec0281fba2a` | Verified immutable input | None for this upstream input |
+| zlib | 1.3 | `github.com/madler/zlib` | Git commit `09155eaa2f9270dc4ed1fa13e2b4b2613e6e4851` | Independently hashed: `8a9ba2898e1d0d774eca6ba5b4627a11e5588ba85c8851336eb38de4683050a7` | Verified immutable input | None for this upstream input |
+
+Provider identification is not the same as immutable upstream resolution. Upstream resolution is not proof of exact provider build reproduction. Archive hashing does not prove the binary incorporated unmodified source. No source kit was assembled. Toolchain and build orchestration remain incomplete, source-kit assembly remains unauthorized, and publishing remains blocked. Existing releases are not retroactively certified.
+
+This evidence assessment is not legal advice.
 
 ## FFmpeg matrix
 
