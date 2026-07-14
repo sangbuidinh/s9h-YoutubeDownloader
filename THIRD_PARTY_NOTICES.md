@@ -24,7 +24,7 @@ This file covers known direct third-party components that current repository sou
 - Upstream: `FFmpeg/FFmpeg` at ref `n8.1.2`.
 - License label: GPLv3 static build, as identified by the Gyan build distributor.
 - Local license: `legal/licenses/FFmpeg-8.1.2-GPLv3.txt`.
-- Source-distribution status: not certified. Complete Corresponding Source for the distributed static binaries and incorporated libraries has not been certified.
+- Source-distribution status: not certified. The Corresponding Source set for the distributed static binaries and incorporated libraries has not been certified as complete.
 - Inclusion does not imply endorsement by or affiliation with FFmpeg or Gyan.
 
 ### aria2 1.37.0
@@ -84,6 +84,12 @@ FFmpeg/ffprobe Corresponding Source remains unverified, and aria2 source-distrib
 The exact pinned FFmpeg and aria2 binary packages were audited without executing them. Exact core source refs were resolved where the package evidence permitted, but core source is not represented as the full source required for the distributed static packages. External static-component sources and build-recipe gaps remain explicit. The result is **source correspondence partially identified**, **source kit not ready**, and **no compliance certification**.
 
 `legal/source-correspondence.json` records the audit findings. `legal/source-kit-requirements.json` defines the prerequisites for Phase 6B2B. The audit confirms that all four workflows remain fail-closed; Phase 6B2A does not enable publishing, source kits and legal payloads remain absent, and existing releases are not retroactively certified.
+
+## Phase 6B2B1 release legal payload
+
+The release contract states that portable packages will include verified legal materials, and standalone EXE releases require a companion legal ZIP. It also states that legal materials do not replace source-distribution obligations. The aria2 and FFmpeg source asset names are defined but assets are not ready, and release bundle v2 requires both source assets.
+
+The current release policy remains fail-closed, publishing remains disabled, existing releases are not retroactively certified, and Phase 6B2B2 remains required. This integration does not select a project license or certify source availability.
 
 ## Trademarks and affiliation
 

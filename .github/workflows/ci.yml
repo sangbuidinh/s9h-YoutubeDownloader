@@ -177,7 +177,10 @@ jobs:
           $SyntheticRoot = Join-Path $env:RUNNER_TEMP "s9h-ci-release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           $ReleaseRoot = Join-Path $SyntheticRoot "release"
           $BundleRoot = Join-Path $SyntheticRoot "publish-bundle"
+          $SourceAssetsRoot = Join-Path $SyntheticRoot "source-assets"
+          $LegalPayload = Join-Path $ReleaseRoot "assets\Youtube-Downloaderbs-v0.0.0-ci-legal.zip"
           New-Item -ItemType Directory -Force -Path (Join-Path $ReleaseRoot "assets") | Out-Null
+          New-Item -ItemType Directory -Force -Path $SourceAssetsRoot | Out-Null
 
           @'
           from pathlib import Path
@@ -185,6 +188,7 @@ jobs:
           import zipfile
 
           release_root = Path(sys.argv[1])
+          source_root = Path(sys.argv[2])
           assets = release_root / "assets"
           (assets / "Youtube.Downloaderbs.exe").write_bytes(
               b"MZ synthetic CI fixture; this file is not executable.\n"
@@ -195,10 +199,38 @@ jobs:
           info.external_attr = 0o100644 << 16
           with zipfile.ZipFile(archive, "w") as handle:
               handle.writestr(info, b"Synthetic CI release bundle fixture.\n")
+
+          source_notice = (
+              b"synthetic fixture\n"
+              b"not a real source kit\n"
+              b"not for distribution\n"
+          )
+          source_manifest = (
+              b'{"distribution_allowed":false,"fixture":"synthetic fixture",'
+              b'"notice":"not a real source kit; not for distribution"}\n'
+          )
+          for component in ("aria2", "ffmpeg"):
+              source_archive = (
+                  source_root /
+                  f"Youtube-Downloaderbs-v0.0.0-ci-{component}-source.zip"
+              )
+              with zipfile.ZipFile(source_archive, "w") as handle:
+                  for name, data in (
+                      ("SOURCE_MANIFEST.json", source_manifest),
+                      ("SYNTHETIC_SOURCE_FIXTURE.txt", source_notice),
+                  ):
+                      source_info = zipfile.ZipInfo(
+                          name,
+                          date_time=(1980, 1, 1, 0, 0, 0),
+                      )
+                      source_info.compress_type = zipfile.ZIP_DEFLATED
+                      source_info.create_system = 3
+                      source_info.external_attr = 0o100644 << 16
+                      handle.writestr(source_info, data)
           (release_root / "RELEASE_NOTES.md").write_bytes(
               b"# Synthetic CI release\n\nArtifact handoff verification only.\n"
           )
-          '@ | python - $ReleaseRoot
+          '@ | python - $ReleaseRoot $SourceAssetsRoot
           if ($LASTEXITCODE -ne 0) {
               throw "Synthetic release fixture creation failed"
           }
@@ -208,13 +240,28 @@ jobs:
               throw "Current CI commit is invalid"
           }
 
+          python scripts/prepare_release_legal_payload.py create `
+            --control-root . `
+            --portable-zip (Join-Path $ReleaseRoot "assets\Youtube-Downloaderbs-v0.0.0-ci.zip") `
+            --output-zip $LegalPayload `
+            --tag v0.0.0-ci `
+            --source-commit $Commit `
+            --control-commit $Commit
+          if ($LASTEXITCODE -ne 0) {
+              throw "Synthetic release legal payload creation failed"
+          }
+
           python scripts/prepare_release_bundle.py create `
             --release-root $ReleaseRoot `
             --bundle-root $BundleRoot `
             --tag v0.0.0-ci `
             --source-commit $Commit `
             --control-commit $Commit `
-            --prerelease true
+            --prerelease true `
+            --policy legal/release-policy.json `
+            --asset-contract legal/release-assets-v2.json `
+            --legal-payload $LegalPayload `
+            --source-assets-root $SourceAssetsRoot
           if ($LASTEXITCODE -ne 0) {
               throw "Synthetic release bundle creation failed"
           }
@@ -224,7 +271,12 @@ jobs:
             --tag v0.0.0-ci `
             --source-commit $Commit `
             --control-commit $Commit `
-            --prerelease true
+            --prerelease true `
+            --policy legal/release-policy.json `
+            --asset-contract legal/release-assets-v2.json `
+            --legal-payload (Join-Path $BundleRoot "assets\Youtube-Downloaderbs-v0.0.0-ci-legal.zip") `
+            --source-assets-root (Join-Path $BundleRoot "assets") `
+            --require-release-ready false
           if ($LASTEXITCODE -ne 0) {
               throw "Synthetic release bundle verification failed"
           }
@@ -293,6 +345,9 @@ jobs:
         env:
           EXPECTED_COMMIT: ${{ github.sha }}
           EXPECTED_ZIP: Youtube-Downloaderbs-v0.0.0-ci.zip
+          EXPECTED_LEGAL: Youtube-Downloaderbs-v0.0.0-ci-legal.zip
+          EXPECTED_ARIA2_SOURCE: Youtube-Downloaderbs-v0.0.0-ci-aria2-source.zip
+          EXPECTED_FFMPEG_SOURCE: Youtube-Downloaderbs-v0.0.0-ci-ffmpeg-source.zip
         run: |
           $ErrorActionPreference = "Stop"
           Set-StrictMode -Version Latest
@@ -326,6 +381,19 @@ jobs:
               }
           }
 
+          function Assert-AssetRecord($Record, [string]$ExpectedName, [string]$ExpectedRole, [string]$Path) {
+              Assert-ExactKeys $Record @("name", "role", "sha256", "size") $ExpectedName
+              if ($Record.role -cne $ExpectedRole) {
+                  throw "$ExpectedName role is invalid"
+              }
+              $fileRecord = [PSCustomObject]@{
+                  name = $Record.name
+                  sha256 = $Record.sha256
+                  size = $Record.size
+              }
+              Assert-Record $fileRecord $ExpectedName $Path
+          }
+
           $workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
           $bundle = [IO.Path]::GetFullPath((Join-Path $workspace "release-bundle"))
           if (-not $bundle.StartsWith($workspace + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
@@ -350,7 +418,10 @@ jobs:
               "RELEASE_NOTES.md",
               "assets/SHA256SUMS.txt",
               "assets/Youtube.Downloaderbs.exe",
-              "assets/$env:EXPECTED_ZIP"
+              "assets/$env:EXPECTED_ZIP",
+              "assets/$env:EXPECTED_LEGAL",
+              "assets/$env:EXPECTED_ARIA2_SOURCE",
+              "assets/$env:EXPECTED_FFMPEG_SOURCE"
           ) | Sort-Object
           if (@(Compare-Object $relativeFiles $expectedFiles).Count -ne 0) {
               throw "Release bundle file layout is invalid"
@@ -359,10 +430,11 @@ jobs:
           $manifest = Get-Content -LiteralPath (Join-Path $bundle "RELEASE_MANIFEST.json") -Raw | ConvertFrom-Json
           Assert-ExactKeys $manifest @(
               "assets", "bundle_format", "checksum_file", "control_commit",
-              "prerelease", "release_notes", "release_tag", "schema_version",
-              "source_commit"
+              "legal_compliance_certified", "prerelease", "release_blockers",
+              "release_notes", "release_ready", "release_tag", "schema_version",
+              "source_availability_certified", "source_commit"
           ) "Release manifest"
-          if ([int]$manifest.schema_version -ne 1 -or $manifest.bundle_format -cne "s9h-release-bundle-v1") {
+          if ([int]$manifest.schema_version -ne 2 -or $manifest.bundle_format -cne "s9h-release-bundle-v2") {
               throw "Release manifest contract is invalid"
           }
           if ($manifest.release_tag -cne "v0.0.0-ci" -or -not [bool]$manifest.prerelease) {
@@ -371,17 +443,29 @@ jobs:
           if ($manifest.source_commit -cne $env:EXPECTED_COMMIT -or $manifest.control_commit -cne $env:EXPECTED_COMMIT) {
               throw "Release manifest commit metadata is invalid"
           }
+          if ([bool]$manifest.release_ready -or [bool]$manifest.legal_compliance_certified -or [bool]$manifest.source_availability_certified) {
+              throw "Synthetic release bundle readiness is invalid"
+          }
+          if (@($manifest.release_blockers).Count -le 0) {
+              throw "Synthetic release bundle blockers are missing"
+          }
           $assets = @($manifest.assets)
-          if ($assets.Count -ne 2) {
+          if ($assets.Count -ne 5) {
               throw "Release manifest asset count is invalid"
           }
-          $expectedAssetNames = @("Youtube.Downloaderbs.exe", $env:EXPECTED_ZIP) | Sort-Object
+          $expectedRoles = @{}
+          $expectedRoles["Youtube.Downloaderbs.exe"] = "application-executable"
+          $expectedRoles[$env:EXPECTED_ZIP] = "portable-package"
+          $expectedRoles[$env:EXPECTED_LEGAL] = "legal-payload"
+          $expectedRoles[$env:EXPECTED_ARIA2_SOURCE] = "aria2-source"
+          $expectedRoles[$env:EXPECTED_FFMPEG_SOURCE] = "ffmpeg-source"
+          $expectedAssetNames = @($expectedRoles.Keys | Sort-Object)
           $assetNames = @($assets | ForEach-Object { [string]$_.name })
           if (@(Compare-Object $assetNames $expectedAssetNames -SyncWindow 0).Count -ne 0) {
               throw "Release manifest assets are not exact and sorted"
           }
           foreach ($asset in $assets) {
-              Assert-Record $asset ([string]$asset.name) (Join-Path $bundle "assets\$($asset.name)")
+              Assert-AssetRecord $asset ([string]$asset.name) $expectedRoles[[string]$asset.name] (Join-Path $bundle "assets\$($asset.name)")
           }
           Assert-Record $manifest.checksum_file "SHA256SUMS.txt" (Join-Path $bundle "assets\SHA256SUMS.txt")
           Assert-Record $manifest.release_notes "RELEASE_NOTES.md" (Join-Path $bundle "RELEASE_NOTES.md")
@@ -396,7 +480,7 @@ jobs:
           }
           $checksumLines = @($checksumText.TrimEnd("`n").Split("`n"))
           $expectedChecksumLines = @($assets | Sort-Object name | ForEach-Object { "$($_.sha256)  $($_.name)" })
-          if ($checksumLines.Count -ne 2 -or @(Compare-Object $checksumLines $expectedChecksumLines -SyncWindow 0).Count -ne 0) {
+          if ($checksumLines.Count -ne 5 -or @(Compare-Object $checksumLines $expectedChecksumLines -SyncWindow 0).Count -ne 0) {
               throw "Checksum file content is invalid"
           }
           if ((Get-Item -LiteralPath (Join-Path $bundle "assets\Youtube.Downloaderbs.exe")).Length -le 0) {
@@ -405,4 +489,9 @@ jobs:
           if ((Get-Item -LiteralPath (Join-Path $bundle "assets\$env:EXPECTED_ZIP")).Length -le 0) {
               throw "Synthetic ZIP fixture is empty"
           }
-          Write-Host "Synthetic release bundle handoff verified"
+          foreach ($requiredArchive in @($env:EXPECTED_LEGAL, $env:EXPECTED_ARIA2_SOURCE, $env:EXPECTED_FFMPEG_SOURCE)) {
+              if ((Get-Item -LiteralPath (Join-Path $bundle "assets\$requiredArchive")).Length -le 0) {
+                  throw "Synthetic required archive is empty: $requiredArchive"
+              }
+          }
+          Write-Host "Synthetic release bundle v2 handoff verified"

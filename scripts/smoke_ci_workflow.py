@@ -193,12 +193,23 @@ def validate_workflow(workflow: str) -> None:
         'b"MZ synthetic CI fixture; this file is not executable.\\n"',
         'zipfile.ZipInfo("SYNTHETIC.txt", date_time=(1980, 1, 1, 0, 0, 0))',
         'b"# Synthetic CI release\\n\\nArtifact handoff verification only.\\n"',
+        "python scripts/prepare_release_legal_payload.py create",
+        '"SYNTHETIC_SOURCE_FIXTURE.txt"',
+        '"SOURCE_MANIFEST.json"',
+        'b"synthetic fixture\\n"',
+        'b"not a real source kit\\n"',
+        'b"not for distribution\\n"',
         "python scripts/prepare_release_bundle.py create",
         "python scripts/prepare_release_bundle.py verify",
         "--tag v0.0.0-ci",
         "--source-commit $Commit",
         "--control-commit $Commit",
         "--prerelease true",
+        "--policy legal/release-policy.json",
+        "--asset-contract legal/release-assets-v2.json",
+        "--legal-payload",
+        "--source-assets-root",
+        "--require-release-ready false",
     ):
         _require(required in create_text, f"synthetic bundle producer is missing: {required}")
     upload_ref = _action_ref(upload_step, "actions/upload-artifact")
@@ -265,11 +276,21 @@ def validate_workflow(workflow: str) -> None:
     )
     verifier_text = "\n".join(verifier)
     for required in (
-        "Synthetic release bundle handoff verified",
+        "Synthetic release bundle v2 handoff verified",
         "v0.0.0-ci",
         "${{ github.sha }}",
         "Get-FileHash",
         "ConvertFrom-Json",
+        "s9h-release-bundle-v2",
+        "release_ready",
+        "legal_compliance_certified",
+        "source_availability_certified",
+        "legal-payload",
+        "aria2-source",
+        "ffmpeg-source",
+        "assets/$env:EXPECTED_LEGAL",
+        "assets/$env:EXPECTED_ARIA2_SOURCE",
+        "assets/$env:EXPECTED_FFMPEG_SOURCE",
         "SHA256SUMS.txt",
         "ReparsePoint",
     ):
@@ -513,6 +534,35 @@ def _test_negative_mutations(workflow: str) -> None:
                 "      - name: Create and verify synthetic release bundle",
             ),
             "pip install",
+        ),
+        (
+            "missing legal payload generation",
+            _replace_once(
+                workflow,
+                "python scripts/prepare_release_legal_payload.py create",
+                "python scripts/prepare_release_legal_payload.py verify",
+            ),
+            "synthetic bundle producer",
+        ),
+        (
+            "missing synthetic source fixture",
+            _replace_once(workflow, '"SYNTHETIC_SOURCE_FIXTURE.txt"', '"SOURCE.txt"'),
+            "synthetic bundle producer",
+        ),
+        (
+            "missing structural readiness flag",
+            _replace_once(workflow, "            --require-release-ready false\n", ""),
+            "require-release-ready",
+        ),
+        (
+            "bundle v1 consumer",
+            _replace_once(workflow, "s9h-release-bundle-v2", "s9h-release-bundle-v1"),
+            "handoff verifier",
+        ),
+        (
+            "consumer omits aria2 source",
+            _replace_once(workflow, '              "assets/$env:EXPECTED_ARIA2_SOURCE",\n', ""),
+            "handoff verifier",
         ),
         (
             "shallow checkout",

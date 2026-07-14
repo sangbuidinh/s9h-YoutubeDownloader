@@ -359,3 +359,9 @@ FFmpeg/ffprobe Corresponding Source remains unverified, and aria2 source-distrib
 The exact pinned FFmpeg and aria2 binary packages were audited without executing them. Exact core source refs were resolved where the package evidence permitted, but core source is not represented as the full source required for the distributed static packages. External static-component sources and build-recipe gaps remain explicit. The result is **source correspondence partially identified**, **source kit not ready**, and **no compliance certification**.
 
 [`legal/source-correspondence.json`](legal/source-correspondence.json) records the audit findings. [`legal/source-kit-requirements.json`](legal/source-kit-requirements.json) defines the prerequisites for Phase 6B2B. The audit confirms that all four workflows remain fail-closed; Phase 6B2A does not enable publishing, source kits and legal payloads remain absent, and existing releases are not retroactively certified.
+
+## Phase 6B2B1 release legal payload
+
+The contract in `legal/release-assets-v2.json` defines `s9h-release-legal-payload-v1` and `s9h-release-bundle-v2` without changing the project license status. It states that portable packages will include verified legal materials, and standalone EXE releases require a companion legal ZIP. The contract also states that legal materials do not replace source-distribution obligations.
+
+The aria2 and FFmpeg source asset names are defined but assets are not ready. Release bundle v2 requires both source assets, the current release policy remains fail-closed, publishing remains disabled, and existing releases are not retroactively certified. Phase 6B2B2 remains required.

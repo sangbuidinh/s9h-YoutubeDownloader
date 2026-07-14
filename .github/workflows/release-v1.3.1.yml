@@ -243,6 +243,20 @@ jobs:
         shell: pwsh
         working-directory: source
         run: .\scripts\build_release_v1_3_1.ps1 -PreparePinnedRuntime
+      - name: Prepare and verify release legal payload
+        shell: pwsh
+        working-directory: source
+        run: |
+          python ..\control\scripts\prepare_release_legal_payload.py create `
+            --control-root ..\control `
+            --portable-zip release/assets/Youtube-Downloaderbs-v1.3.1.zip `
+            --output-zip release/assets/Youtube-Downloaderbs-v1.3.1-legal.zip `
+            --tag v1.3.1 `
+            --source-commit "${{ steps.release-metadata.outputs.source-commit }}" `
+            --control-commit "${{ steps.release-metadata.outputs.control-commit }}"
+          if ($LASTEXITCODE -ne 0) {
+              throw "Release legal payload preparation failed"
+          }
       - name: Create and verify release bundle
         shell: pwsh
         working-directory: source
@@ -253,7 +267,11 @@ jobs:
             --tag v1.3.1 `
             --source-commit "${{ steps.release-metadata.outputs.source-commit }}" `
             --control-commit "${{ steps.release-metadata.outputs.control-commit }}" `
-            --prerelease false
+            --prerelease false `
+            --policy ..\control\legal\release-policy.json `
+            --asset-contract ..\control\legal\release-assets-v2.json `
+            --legal-payload release/assets/Youtube-Downloaderbs-v1.3.1-legal.zip `
+            --source-assets-root release/source-assets
           if ($LASTEXITCODE -ne 0) {
               throw "Release bundle creation failed"
           }
@@ -263,7 +281,12 @@ jobs:
             --tag v1.3.1 `
             --source-commit "${{ steps.release-metadata.outputs.source-commit }}" `
             --control-commit "${{ steps.release-metadata.outputs.control-commit }}" `
-            --prerelease false
+            --prerelease false `
+            --policy ..\control\legal\release-policy.json `
+            --asset-contract ..\control\legal\release-assets-v2.json `
+            --legal-payload release/publish-bundle/assets/Youtube-Downloaderbs-v1.3.1-legal.zip `
+            --source-assets-root release/publish-bundle/assets `
+            --require-release-ready false
           if ($LASTEXITCODE -ne 0) {
               throw "Release bundle verification failed"
           }
@@ -339,6 +362,9 @@ jobs:
           EXPECTED_SOURCE_COMMIT: ${{ needs.build.outputs.source-commit }}
           EXPECTED_CONTROL_COMMIT: ${{ needs.build.outputs.control-commit }}
           EXPECTED_ZIP: Youtube-Downloaderbs-v1.3.1.zip
+          EXPECTED_LEGAL: Youtube-Downloaderbs-v1.3.1-legal.zip
+          EXPECTED_ARIA2_SOURCE: Youtube-Downloaderbs-v1.3.1-aria2-source.zip
+          EXPECTED_FFMPEG_SOURCE: Youtube-Downloaderbs-v1.3.1-ffmpeg-source.zip
         run: |
           $ErrorActionPreference = "Stop"
           Set-StrictMode -Version Latest
@@ -372,6 +398,19 @@ jobs:
               }
           }
 
+          function Assert-AssetRecord($Record, [string]$ExpectedName, [string]$ExpectedRole, [string]$Path) {
+              Assert-ExactKeys $Record @("name", "role", "sha256", "size") $ExpectedName
+              if ($Record.role -cne $ExpectedRole) {
+                  throw "$ExpectedName role is invalid"
+              }
+              $fileRecord = [PSCustomObject]@{
+                  name = $Record.name
+                  sha256 = $Record.sha256
+                  size = $Record.size
+              }
+              Assert-Record $fileRecord $ExpectedName $Path
+          }
+
           $workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
           $bundle = [IO.Path]::GetFullPath((Join-Path $workspace "release-bundle"))
           if (-not $bundle.StartsWith($workspace + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
@@ -396,7 +435,10 @@ jobs:
               "RELEASE_NOTES.md",
               "assets/SHA256SUMS.txt",
               "assets/Youtube.Downloaderbs.exe",
-              "assets/$env:EXPECTED_ZIP"
+              "assets/$env:EXPECTED_ZIP",
+              "assets/$env:EXPECTED_LEGAL",
+              "assets/$env:EXPECTED_ARIA2_SOURCE",
+              "assets/$env:EXPECTED_FFMPEG_SOURCE"
           ) | Sort-Object
           if (@(Compare-Object $relativeFiles $expectedFiles).Count -ne 0) {
               throw "Release bundle file layout is invalid"
@@ -406,10 +448,11 @@ jobs:
           $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
           Assert-ExactKeys $manifest @(
               "assets", "bundle_format", "checksum_file", "control_commit",
-              "prerelease", "release_notes", "release_tag", "schema_version",
-              "source_commit"
+              "legal_compliance_certified", "prerelease", "release_blockers",
+              "release_notes", "release_ready", "release_tag", "schema_version",
+              "source_availability_certified", "source_commit"
           ) "Release manifest"
-          if ([int]$manifest.schema_version -ne 1 -or $manifest.bundle_format -cne "s9h-release-bundle-v1") {
+          if ([int]$manifest.schema_version -ne 2 -or $manifest.bundle_format -cne "s9h-release-bundle-v2") {
               throw "Release manifest contract is invalid"
           }
           if ($manifest.release_tag -cne $env:EXPECTED_TAG) {
@@ -422,17 +465,29 @@ jobs:
           if ($manifest.source_commit -cne $env:EXPECTED_SOURCE_COMMIT -or $manifest.control_commit -cne $env:EXPECTED_CONTROL_COMMIT) {
               throw "Release manifest commit metadata is invalid"
           }
+          if ([bool]$manifest.release_ready -or [bool]$manifest.legal_compliance_certified -or [bool]$manifest.source_availability_certified) {
+              throw "Release manifest readiness is invalid"
+          }
+          if (@($manifest.release_blockers).Count -le 0) {
+              throw "Release manifest blockers are missing"
+          }
           $assets = @($manifest.assets)
-          if ($assets.Count -ne 2) {
+          if ($assets.Count -ne 5) {
               throw "Release manifest asset count is invalid"
           }
-          $expectedAssetNames = @("Youtube.Downloaderbs.exe", $env:EXPECTED_ZIP) | Sort-Object
+          $expectedRoles = @{}
+          $expectedRoles["Youtube.Downloaderbs.exe"] = "application-executable"
+          $expectedRoles[$env:EXPECTED_ZIP] = "portable-package"
+          $expectedRoles[$env:EXPECTED_LEGAL] = "legal-payload"
+          $expectedRoles[$env:EXPECTED_ARIA2_SOURCE] = "aria2-source"
+          $expectedRoles[$env:EXPECTED_FFMPEG_SOURCE] = "ffmpeg-source"
+          $expectedAssetNames = @($expectedRoles.Keys | Sort-Object)
           $assetNames = @($assets | ForEach-Object { [string]$_.name })
           if (@(Compare-Object $assetNames $expectedAssetNames -SyncWindow 0).Count -ne 0) {
               throw "Release manifest assets are not exact and sorted"
           }
           foreach ($asset in $assets) {
-              Assert-Record $asset ([string]$asset.name) (Join-Path $bundle "assets\$($asset.name)")
+              Assert-AssetRecord $asset ([string]$asset.name) $expectedRoles[[string]$asset.name] (Join-Path $bundle "assets\$($asset.name)")
           }
           Assert-Record $manifest.checksum_file "SHA256SUMS.txt" (Join-Path $bundle "assets\SHA256SUMS.txt")
           Assert-Record $manifest.release_notes "RELEASE_NOTES.md" (Join-Path $bundle "RELEASE_NOTES.md")
@@ -448,7 +503,7 @@ jobs:
           }
           $checksumLines = @($checksumText.TrimEnd("`n").Split("`n"))
           $expectedChecksumLines = @($assets | Sort-Object name | ForEach-Object { "$($_.sha256)  $($_.name)" })
-          if ($checksumLines.Count -ne 2 -or @(Compare-Object $checksumLines $expectedChecksumLines -SyncWindow 0).Count -ne 0) {
+          if ($checksumLines.Count -ne 5 -or @(Compare-Object $checksumLines $expectedChecksumLines -SyncWindow 0).Count -ne 0) {
               throw "Checksum file content is invalid"
           }
           if ((Get-Item -LiteralPath (Join-Path $bundle "assets\Youtube.Downloaderbs.exe")).Length -le 0) {
@@ -457,7 +512,22 @@ jobs:
           if ((Get-Item -LiteralPath (Join-Path $bundle "assets\$env:EXPECTED_ZIP")).Length -le 0) {
               throw "Portable ZIP asset is empty"
           }
-          Write-Host "Release bundle handoff verified"
+          foreach ($requiredArchive in @($env:EXPECTED_LEGAL, $env:EXPECTED_ARIA2_SOURCE, $env:EXPECTED_FFMPEG_SOURCE)) {
+              if ((Get-Item -LiteralPath (Join-Path $bundle "assets\$requiredArchive")).Length -le 0) {
+                  throw "Required release archive is empty: $requiredArchive"
+              }
+          }
+
+          $requireReleaseReady = $true # --require-release-ready true
+          if ($requireReleaseReady -and (
+              -not [bool]$manifest.release_ready -or
+              -not [bool]$manifest.legal_compliance_certified -or
+              -not [bool]$manifest.source_availability_certified -or
+              @($manifest.release_blockers).Count -ne 0
+          )) {
+              throw "release bundle is not approved for publishing"
+          }
+          Write-Host "Release bundle v2 handoff verified"
       - name: Confirm release absence immediately before publishing
         shell: pwsh
         env:
@@ -494,5 +564,8 @@ jobs:
           files: |
             release-bundle/assets/Youtube.Downloaderbs.exe
             release-bundle/assets/Youtube-Downloaderbs-v1.3.1.zip
+            release-bundle/assets/Youtube-Downloaderbs-v1.3.1-legal.zip
+            release-bundle/assets/Youtube-Downloaderbs-v1.3.1-aria2-source.zip
+            release-bundle/assets/Youtube-Downloaderbs-v1.3.1-ffmpeg-source.zip
             release-bundle/assets/SHA256SUMS.txt
             release-bundle/RELEASE_MANIFEST.json

@@ -23,6 +23,7 @@ def main() -> int:
     _run_inventory_mutations()
     _run_phase6b1_mutations()
     _run_phase6b2a_mutations()
+    _run_phase6b2b1_mutations()
     _run_license_mutations()
     _run_notice_mutations()
     _run_claim_and_hygiene_mutations()
@@ -54,6 +55,11 @@ def _verify_positive_repository() -> None:
     correspondence, source_kits = verifier.source_correspondence.verify_repository(REPO_ROOT)
     _assert(correspondence["corresponding_source_complete"] is False, "source completion changed")
     _assert(all(kit["status"] == "blocked" for kit in source_kits["kits"]), "source kit is not blocked")
+    release_assets = verifier.release_payload.load_asset_contract(
+        REPO_ROOT / verifier.release_payload.CONTRACT_PATH
+    )
+    _assert(release_assets["release_readiness"] == "blocked", "release readiness changed")
+    _assert(release_assets["source_kits_ready"] is False, "source kits were marked ready")
 
     for component in components:
         data = (REPO_ROOT / component["local_license_path"]).read_bytes()
@@ -84,6 +90,7 @@ def _run_checkout_policy_tests() -> None:
         ("missing .gitattributes", _missing_gitattributes, "regular file"),
         ("missing built inventory rule", _missing_built_inventory_rule, "checkout rules"),
         ("missing components rule", _missing_components_rule, "checkout rules"),
+        ("missing release assets rule", _missing_release_assets_rule, "checkout rules"),
         ("missing release policy rule", _missing_release_policy_rule, "checkout rules"),
         ("missing source correspondence rule", _missing_source_correspondence_rule, "checkout rules"),
         ("missing source kit rule", _missing_source_kit_rule, "checkout rules"),
@@ -136,6 +143,7 @@ def _verify_windows_checkout_simulation() -> None:
 
         for relative in (
             "legal/built-artifact-inventory.json",
+            "legal/release-assets-v2.json",
             "legal/release-policy.json",
             "legal/source-correspondence.json",
             "legal/source-kit-requirements.json",
@@ -164,6 +172,7 @@ def _assert_effective_attributes(root: Path) -> None:
         ".gitattributes",
         "legal/built-artifact-inventory.json",
         "legal/components.json",
+        "legal/release-assets-v2.json",
         "legal/release-policy.json",
         "legal/source-correspondence.json",
         "legal/source-kit-requirements.json",
@@ -175,6 +184,8 @@ def _assert_effective_attributes(root: Path) -> None:
         "legal/components.json: eol: lf",
         "legal/built-artifact-inventory.json: text: set",
         "legal/built-artifact-inventory.json: eol: lf",
+        "legal/release-assets-v2.json: text: set",
+        "legal/release-assets-v2.json: eol: lf",
         "legal/release-policy.json: text: set",
         "legal/release-policy.json: eol: lf",
         "legal/source-correspondence.json: text: set",
@@ -223,6 +234,26 @@ def _run_phase6b2a_mutations() -> None:
         "source documentation reference removed",
         _remove_source_documentation_reference,
         "legal/source-correspondence.json",
+    )
+
+
+def _run_phase6b2b1_mutations() -> None:
+    _expect_failure("missing release-assets contract", _missing_release_assets, "release-assets-v2.json")
+    _expect_failure("wrong bundle format", _wrong_bundle_format, "asset contract")
+    _expect_failure("wrong legal payload format", _wrong_legal_payload_format, "asset contract")
+    _expect_failure("release readiness ready", _release_readiness_ready, "asset contract")
+    _expect_failure("source kits ready", _source_kits_ready, "asset contract")
+    _expect_failure("missing source asset template", _missing_source_asset_template, "asset contract")
+    _expect_failure("source asset status ready", _source_asset_status_ready, "asset contract")
+    _expect_failure(
+        "docs claim publishing enabled",
+        _add_publishing_enabled_claim,
+        "unsupported project claim",
+    )
+    _expect_failure(
+        "docs claim complete Corresponding Source",
+        _add_complete_corresponding_source_claim,
+        "unsupported project claim",
     )
 
 
@@ -280,6 +311,7 @@ def _expect_failure(
             verifier.LegalVerificationError,
             verifier.built_inventory.InventoryError,
             verifier.release_gate.ReleaseLegalGateError,
+            verifier.release_payload.LegalPayloadError,
             verifier.source_correspondence.SourceCorrespondenceError,
             OSError,
             UnicodeError,
@@ -357,6 +389,13 @@ def _missing_built_inventory_rule(root: Path) -> None:
     )
 
 
+def _missing_release_assets_rule(root: Path) -> None:
+    _rewrite_gitattributes(
+        root,
+        lambda data: data.replace(b"/legal/release-assets-v2.json text eol=lf\n", b""),
+    )
+
+
 def _missing_release_policy_rule(root: Path) -> None:
     _rewrite_gitattributes(
         root,
@@ -384,6 +423,44 @@ def _missing_source_correspondence(root: Path) -> None:
 
 def _missing_source_kit_requirements(root: Path) -> None:
     (root / verifier.source_correspondence.KIT_PATH).unlink()
+
+
+def _missing_release_assets(root: Path) -> None:
+    (root / verifier.release_payload.CONTRACT_PATH).unlink()
+
+
+def _mutate_release_assets(root: Path, mutation: Callable[[dict], None]) -> None:
+    path = root / verifier.release_payload.CONTRACT_PATH
+    document = json.loads(path.read_text(encoding="utf-8"))
+    mutation(document)
+    path.write_bytes((json.dumps(document, indent=2, ensure_ascii=True) + "\n").encode("utf-8"))
+
+
+def _wrong_bundle_format(root: Path) -> None:
+    _mutate_release_assets(root, lambda document: document.update(bundle_format="s9h-release-bundle-v1"))
+
+
+def _wrong_legal_payload_format(root: Path) -> None:
+    _mutate_release_assets(root, lambda document: document.update(legal_payload_format="invalid"))
+
+
+def _release_readiness_ready(root: Path) -> None:
+    _mutate_release_assets(root, lambda document: document.update(release_readiness="ready"))
+
+
+def _source_kits_ready(root: Path) -> None:
+    _mutate_release_assets(root, lambda document: document.update(source_kits_ready=True))
+
+
+def _missing_source_asset_template(root: Path) -> None:
+    _mutate_release_assets(root, lambda document: document["required_source_asset_templates"].pop())
+
+
+def _source_asset_status_ready(root: Path) -> None:
+    _mutate_release_assets(
+        root,
+        lambda document: document["required_source_asset_templates"][0].update(status="ready"),
+    )
 
 
 def _mutate_source_json(root: Path, relative: str, mutation: Callable[[dict], None]) -> None:
@@ -653,6 +730,14 @@ def _add_release_ready_claim(root: Path) -> None:
 
 def _add_source_complete_claim(root: Path) -> None:
     _append_notice(root, "The source availability is " + "complete.")
+
+
+def _add_publishing_enabled_claim(root: Path) -> None:
+    _append_notice(root, "Publishing " + "enabled.")
+
+
+def _add_complete_corresponding_source_claim(root: Path) -> None:
+    _append_notice(root, "Complete " + "Corresponding Source.")
 
 
 def _add_exhaustive_inventory_claim(root: Path) -> None:
