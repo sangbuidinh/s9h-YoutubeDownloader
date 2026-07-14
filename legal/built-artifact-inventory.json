@@ -1,0 +1,370 @@
+{
+  "schema_version": 1,
+  "inventory_kind": "controlled-pyinstaller-onefile",
+  "source_commit": "988c07f9d3e099b3ff157e33d880c0bad73ad112",
+  "target_platform": "windows-x86_64",
+  "python_version": "3.11.9",
+  "pyinstaller_version": "6.21.0",
+  "executable": {
+    "name": "Youtube Downloaderbs.exe",
+    "size": 13686966,
+    "sha256": "901ca6e57bcc1d9a1a5696b1d3c1aee91e72d790497d4e3ebeaef1e127951b0b"
+  },
+  "archive": {
+    "member_count": 955,
+    "canonical_member_list_sha256": "36c6344e87a865f8453ced3dd23d30e16204fc1529e7f5cefccb8146efb66c55",
+    "native_member_count": 20
+  },
+  "native_members": [
+    {
+      "name": "_bz2.pyd",
+      "size": 84760,
+      "sha256": "00b8ca9a338d2b47285c9e56d6d893db2a999b47216756f18439997fb80a56e3",
+      "kind": "pyd",
+      "version_evidence": [
+        "observed CArchive member _bz2.pyd",
+        "PE fixed file version 3.11.9150.1013"
+      ],
+      "license_mapping": "unresolved-external-code-in-python-extension",
+      "status": "unresolved"
+    },
+    {
+      "name": "_ctypes.pyd",
+      "size": 124696,
+      "sha256": "c148292328f0aab7863af82f54f613961e7cb95b7215f7a81cafaf45bd4c42b7",
+      "kind": "pyd",
+      "version_evidence": [
+        "observed CArchive member _ctypes.pyd",
+        "PE fixed file version 3.11.9150.1013"
+      ],
+      "license_mapping": "libffi",
+      "status": "partially-identified"
+    },
+    {
+      "name": "_decimal.pyd",
+      "size": 255768,
+      "sha256": "980a63f2b39cf16910f44384398e25f24482346a482addb00de42555b17d4278",
+      "kind": "pyd",
+      "version_evidence": [
+        "observed CArchive member _decimal.pyd",
+        "PE fixed file version 3.11.9150.1013"
+      ],
+      "license_mapping": "unresolved-external-code-in-python-extension",
+      "status": "unresolved"
+    },
+    {
+      "name": "_hashlib.pyd",
+      "size": 65304,
+      "sha256": "87dd0c858620287454fd6d31d52b6a48eddbb2a08e09e8b2d9fdb0b92200d766",
+      "kind": "pyd",
+      "version_evidence": [
+        "observed CArchive member _hashlib.pyd",
+        "PE fixed file version 3.11.9150.1013"
+      ],
+      "license_mapping": "openssl",
+      "status": "partially-identified"
+    },
+    {
+      "name": "_lzma.pyd",
+      "size": 159512,
+      "sha256": "f5e01b516c2c23035f7703e23569dec26c5616c05a929b2580ae474a5c6722c5",
+      "kind": "pyd",
+      "version_evidence": [
+        "observed CArchive member _lzma.pyd",
+        "PE fixed file version 3.11.9150.1013"
+      ],
+      "license_mapping": "unresolved-external-code-in-python-extension",
+      "status": "unresolved"
+    },
+    {
+      "name": "_queue.pyd",
+      "size": 32024,
+      "sha256": "3f8e7e6aa13b417acc78b63434fb1144e6319a010a9fc376c54d6e69b638fe4c",
+      "kind": "pyd",
+      "version_evidence": [
+        "controlled build Python 3.11.9",
+        "observed CArchive member _queue.pyd",
+        "PE fixed file version 3.11.9150.1013"
+      ],
+      "license_mapping": "cpython",
+      "status": "identified"
+    },
+    {
+      "name": "_socket.pyd",
+      "size": 79640,
+      "sha256": "a19e3c7c03ef1b5625790b1c9c42594909311ab6df540fbf43c6aa93300ab166",
+      "kind": "pyd",
+      "version_evidence": [
+        "controlled build Python 3.11.9",
+        "observed CArchive member _socket.pyd",
+        "PE fixed file version 3.11.9150.1013"
+      ],
+      "license_mapping": "cpython",
+      "status": "identified"
+    },
+    {
+      "name": "_sqlite3.pyd",
+      "size": 120600,
+      "sha256": "ff6a2a2f38b21b7784f97d604c99961d8c07ef455f7908110a4e893835d42b76",
+      "kind": "pyd",
+      "version_evidence": [
+        "observed CArchive member _sqlite3.pyd",
+        "PE fixed file version 3.11.9150.1013"
+      ],
+      "license_mapping": "sqlite",
+      "status": "partially-identified"
+    },
+    {
+      "name": "_ssl.pyd",
+      "size": 178456,
+      "sha256": "ba5388d6a6557d431e086734a3323621dc447f63ba299b0a815e5837cf869678",
+      "kind": "pyd",
+      "version_evidence": [
+        "observed CArchive member _ssl.pyd",
+        "PE fixed file version 3.11.9150.1013"
+      ],
+      "license_mapping": "openssl",
+      "status": "partially-identified"
+    },
+    {
+      "name": "_tkinter.pyd",
+      "size": 64280,
+      "sha256": "6f7bdc2f60a1795b58ec7015ec262d6b234aa8d0f022185de0f52bac4adab449",
+      "kind": "pyd",
+      "version_evidence": [
+        "observed CArchive member _tkinter.pyd",
+        "PE fixed file version 3.11.9150.1013"
+      ],
+      "license_mapping": "tcl-tk",
+      "status": "partially-identified"
+    },
+    {
+      "name": "libcrypto-3.dll",
+      "size": 5191960,
+      "sha256": "05fe080eab7fc535c51e10c1bd76a2f3e6217f9c91a25034774588881c3f99de",
+      "kind": "dll",
+      "version_evidence": [
+        "observed CArchive member libcrypto-3.dll",
+        "PE fixed file version 3.0.13.0"
+      ],
+      "license_mapping": "openssl",
+      "status": "partially-identified"
+    },
+    {
+      "name": "libffi-8.dll",
+      "size": 39696,
+      "sha256": "eff52743773eb550fcc6ce3efc37c85724502233b6b002a35496d828bd7b280a",
+      "kind": "dll",
+      "version_evidence": [
+        "observed CArchive member libffi-8.dll"
+      ],
+      "license_mapping": "libffi",
+      "status": "partially-identified"
+    },
+    {
+      "name": "libssl-3.dll",
+      "size": 787224,
+      "sha256": "2e9fbcd8f7fdc13a5179533239811456554f2b3aa2fb10e1b17be0df81c79006",
+      "kind": "dll",
+      "version_evidence": [
+        "observed CArchive member libssl-3.dll",
+        "PE fixed file version 3.0.13.0"
+      ],
+      "license_mapping": "openssl",
+      "status": "partially-identified"
+    },
+    {
+      "name": "python311.dll",
+      "size": 5800216,
+      "sha256": "0817a2a657a24c0d5fbb60df56960f42fc66b3039d522ec952dab83e2d869364",
+      "kind": "dll",
+      "version_evidence": [
+        "controlled build Python 3.11.9",
+        "observed CArchive member python311.dll",
+        "PE fixed file version 3.11.9150.1013"
+      ],
+      "license_mapping": "cpython",
+      "status": "identified"
+    },
+    {
+      "name": "select.pyd",
+      "size": 30488,
+      "sha256": "bae0974390945520eb99ab32486c6a964691f8f4a028ac408d98fa8fb0db7d90",
+      "kind": "pyd",
+      "version_evidence": [
+        "controlled build Python 3.11.9",
+        "observed CArchive member select.pyd",
+        "PE fixed file version 3.11.9150.1013"
+      ],
+      "license_mapping": "cpython",
+      "status": "identified"
+    },
+    {
+      "name": "sqlite3.dll",
+      "size": 1540888,
+      "sha256": "314bba62f4a1628b986afc94c09dc29cdaf08210eae469440fbf46bcdb86d3fd",
+      "kind": "dll",
+      "version_evidence": [
+        "observed CArchive member sqlite3.dll",
+        "PE fixed file version 3.45.1.0"
+      ],
+      "license_mapping": "sqlite",
+      "status": "partially-identified"
+    },
+    {
+      "name": "tcl86t.dll",
+      "size": 1871128,
+      "sha256": "4e699ff2d6d147d0586c8c77be5a18f20ca0758f432d7b0f489223f2fa4dd221",
+      "kind": "dll",
+      "version_evidence": [
+        "observed CArchive member tcl86t.dll",
+        "PE fixed file version 8.6.2.12"
+      ],
+      "license_mapping": "tcl-tk",
+      "status": "partially-identified"
+    },
+    {
+      "name": "tk86t.dll",
+      "size": 1546520,
+      "sha256": "b6af038120f2b8644c7ce1e11917f410009848287622135d7e386f90d28a831c",
+      "kind": "dll",
+      "version_evidence": [
+        "observed CArchive member tk86t.dll",
+        "PE fixed file version 8.6.2.12"
+      ],
+      "license_mapping": "tcl-tk",
+      "status": "partially-identified"
+    },
+    {
+      "name": "unicodedata.pyd",
+      "size": 1140504,
+      "sha256": "37c68617fa02a2cadced17ef724e2d450ef12a8a37215da789a4679fde1c5c02",
+      "kind": "pyd",
+      "version_evidence": [
+        "controlled build Python 3.11.9",
+        "observed CArchive member unicodedata.pyd",
+        "PE fixed file version 3.11.9150.1013"
+      ],
+      "license_mapping": "cpython",
+      "status": "identified"
+    },
+    {
+      "name": "VCRUNTIME140.dll",
+      "size": 119192,
+      "sha256": "4d292623516f65c80482081e62d5dadb759dc16e851de5db24c3cbb57b87db83",
+      "kind": "dll",
+      "version_evidence": [
+        "observed CArchive member VCRUNTIME140.dll",
+        "PE fixed file version 14.38.33126.1"
+      ],
+      "license_mapping": "microsoft-vc-runtime",
+      "status": "partially-identified"
+    }
+  ],
+  "detected_components": [
+    {
+      "id": "cpython",
+      "name": "CPython runtime",
+      "version": "3.11.9",
+      "evidence": [
+        "controlled build Python 3.11.9",
+        "observed CArchive member _queue.pyd",
+        "observed CArchive member _socket.pyd",
+        "observed CArchive member python311.dll",
+        "observed CArchive member select.pyd",
+        "observed CArchive member unicodedata.pyd"
+      ],
+      "license_files": [
+        "legal/licenses/Python-3.11.9-LICENSE.txt"
+      ],
+      "status": "identified"
+    },
+    {
+      "id": "libffi",
+      "name": "libffi runtime",
+      "version": "unverified",
+      "evidence": [
+        "observed CArchive member _ctypes.pyd",
+        "observed CArchive member libffi-8.dll"
+      ],
+      "license_files": [],
+      "status": "partially-identified"
+    },
+    {
+      "id": "microsoft-vc-runtime",
+      "name": "Microsoft Visual C runtime",
+      "version": "unverified",
+      "evidence": [
+        "observed CArchive member VCRUNTIME140.dll"
+      ],
+      "license_files": [],
+      "status": "partially-identified"
+    },
+    {
+      "id": "openssl",
+      "name": "OpenSSL runtime",
+      "version": "unverified",
+      "evidence": [
+        "observed CArchive member _hashlib.pyd",
+        "observed CArchive member _ssl.pyd",
+        "observed CArchive member libcrypto-3.dll",
+        "observed CArchive member libssl-3.dll"
+      ],
+      "license_files": [],
+      "status": "partially-identified"
+    },
+    {
+      "id": "pyinstaller-bootloader",
+      "name": "PyInstaller bootloader",
+      "version": "6.21.0",
+      "evidence": [
+        "controlled build PyInstaller 6.21.0",
+        "outer PE contains a readable PyInstaller CArchive"
+      ],
+      "license_files": [
+        "legal/licenses/PyInstaller-6.21.0-COPYING.txt"
+      ],
+      "status": "identified"
+    },
+    {
+      "id": "sqlite",
+      "name": "SQLite runtime",
+      "version": "unverified",
+      "evidence": [
+        "observed CArchive member _sqlite3.pyd",
+        "observed CArchive member sqlite3.dll"
+      ],
+      "license_files": [],
+      "status": "partially-identified"
+    },
+    {
+      "id": "tcl-tk",
+      "name": "Tcl/Tk runtime",
+      "version": "unverified",
+      "evidence": [
+        "observed CArchive member _tkinter.pyd",
+        "observed CArchive member tcl86t.dll",
+        "observed CArchive member tk86t.dll"
+      ],
+      "license_files": [
+        "legal/licenses/Tcl-Tk-license.terms"
+      ],
+      "status": "partially-identified"
+    },
+    {
+      "id": "zlib",
+      "name": "zlib dependency status",
+      "version": "unverified",
+      "evidence": [
+        "no separately named zlib native CArchive member was observed; outer PE and operating-system dependencies were not resolved"
+      ],
+      "license_files": [],
+      "status": "unresolved"
+    }
+  ],
+  "unresolved_native_members": [
+    "_bz2.pyd",
+    "_decimal.pyd",
+    "_lzma.pyd"
+  ]
+}

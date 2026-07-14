@@ -9,6 +9,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import inventory_built_executable as built_inventory
+import verify_release_legal_gate as release_gate
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -152,7 +155,9 @@ ALL_LICENSE_PATHS = tuple(
 GITATTRIBUTES_PATH = ".gitattributes"
 GITATTRIBUTES_LINES = (
     "/.gitattributes text eol=lf",
+    "/legal/built-artifact-inventory.json text eol=lf",
     "/legal/components.json text eol=lf",
+    "/legal/release-policy.json text eol=lf",
     "/legal/licenses/** -text",
 )
 GITATTRIBUTES_BYTES = ("\n".join(GITATTRIBUTES_LINES) + "\n").encode("utf-8")
@@ -186,6 +191,13 @@ FORBIDDEN_CLAIMS = tuple(
         ("certified", "compliant"),
         ("all", "third-party", "dependencies"),
         ("complete", "dependency", "inventory"),
+        ("exhaustive", "binary", "inventory"),
+        ("release", "ready"),
+        ("ready", "for", "release"),
+        ("approved", "to", "publish"),
+        ("source", "availability", "complete"),
+        ("source", "availability", "is", "complete"),
+        ("corresponding", "source", "is", "complete"),
         ("project", "is", "open", "source"),
         ("mit", "licensed", "project"),
     )
@@ -217,7 +229,14 @@ class LegalVerificationError(AssertionError):
 def main() -> int:
     try:
         verify_repository(REPO_ROOT)
-    except (LegalVerificationError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except (
+        LegalVerificationError,
+        built_inventory.InventoryError,
+        release_gate.ReleaseLegalGateError,
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+    ) as exc:
         print(f"legal notices verification failed: {exc}", file=sys.stderr)
         return 1
     print("legal notices verified")
@@ -228,12 +247,19 @@ def verify_repository(root: Path) -> dict[str, Any]:
     root = Path(root)
     _verify_checkout_policy(root)
     inventory, inventory_text = _verify_inventory(root)
+    artifact_path = root / "legal/built-artifact-inventory.json"
+    policy_path = root / "legal/release-policy.json"
+    _require(artifact_path.is_file(), "required file is missing: legal/built-artifact-inventory.json")
+    _require(policy_path.is_file(), "required file is missing: legal/release-policy.json")
+    artifact_inventory = built_inventory.load_inventory(artifact_path)
+    release_policy = release_gate.load_policy(policy_path)
     _verify_license_files(root, inventory)
     notices = _read_authored_text(root, "THIRD_PARTY_NOTICES.md")
     legal_readme = _read_authored_text(root, "legal/README.md")
     product_readme = _read_authored_text(root, "README.md")
     _verify_notices(notices, inventory)
     _verify_readmes(product_readme, legal_readme)
+    _verify_phase6b1_artifacts(artifact_inventory, release_policy)
     _verify_sources_of_truth(root, inventory)
     _verify_project_claims_and_hygiene(
         {
@@ -241,6 +267,10 @@ def verify_repository(root: Path) -> dict[str, Any]:
             "THIRD_PARTY_NOTICES.md": notices,
             "legal/README.md": legal_readme,
             "legal/components.json": inventory_text,
+            "legal/built-artifact-inventory.json": (
+                root / "legal/built-artifact-inventory.json"
+            ).read_text(encoding="utf-8"),
+            "legal/release-policy.json": (root / "legal/release-policy.json").read_text(encoding="utf-8"),
         }
     )
     _verify_no_project_license(root)
@@ -282,6 +312,9 @@ def _verify_checkout_policy(root: Path) -> None:
     _require(attributes[GITATTRIBUTES_PATH]["eol"] == "lf", ".gitattributes eol attribute must be lf")
     _require(attributes["legal/components.json"]["text"] == "set", "components JSON text attribute must be set")
     _require(attributes["legal/components.json"]["eol"] == "lf", "components JSON eol attribute must be lf")
+    for relative in ("legal/built-artifact-inventory.json", "legal/release-policy.json"):
+        _require(attributes[relative]["text"] == "set", f"{relative} text attribute must be set")
+        _require(attributes[relative]["eol"] == "lf", f"{relative} eol attribute must be lf")
     for relative in ALL_LICENSE_PATHS:
         _require(attributes[relative]["text"] == "unset", f"{relative} text attribute must be unset")
 
@@ -305,7 +338,9 @@ def _verify_attribute_text_hygiene(text: str) -> None:
 def _expected_checkout_attributes() -> dict[str, dict[str, str]]:
     attributes = {
         GITATTRIBUTES_PATH: {"text": "set", "eol": "lf"},
+        "legal/built-artifact-inventory.json": {"text": "set", "eol": "lf"},
         "legal/components.json": {"text": "set", "eol": "lf"},
+        "legal/release-policy.json": {"text": "set", "eol": "lf"},
     }
     attributes.update({relative: {"text": "unset", "eol": "unspecified"} for relative in ALL_LICENSE_PATHS})
     return attributes
@@ -332,7 +367,13 @@ def _read_git_checkout_attributes(root: Path) -> dict[str, dict[str, str]] | Non
     if top_level != root.resolve():
         return None
 
-    paths = (GITATTRIBUTES_PATH, "legal/components.json", *ALL_LICENSE_PATHS)
+    paths = (
+        GITATTRIBUTES_PATH,
+        "legal/built-artifact-inventory.json",
+        "legal/components.json",
+        "legal/release-policy.json",
+        *ALL_LICENSE_PATHS,
+    )
     result = subprocess.run(
         [git, "-C", str(root), "check-attr", "-z", "text", "eol", "--", *paths],
         capture_output=True,
@@ -371,7 +412,7 @@ def _verify_inventory(root: Path) -> tuple[dict[str, Any], str]:
     _require(inventory["project_license_status"] == "not-selected", "project license status is invalid")
     _require(inventory["legal_compliance_certified"] is False, "legal compliance must not be certified")
     _require(
-        inventory["release_integration_status"] == "deferred-to-phase-6b",
+        inventory["release_integration_status"] == "blocked-pending-phase-6b2",
         "release integration status is invalid",
     )
     _require(raw == canonical_inventory_bytes(inventory), "inventory JSON is not deterministic")
@@ -448,7 +489,7 @@ def _verify_notices(notices: str, inventory: dict[str, Any]) -> None:
         "## Scope and limitations",
         "not a project license",
         "not legal advice",
-        "pending Phase 6B",
+        "pending Phase 6B2",
         "## Distributed runtime tools",
         "## Packaged application runtime",
         "## GPL source-availability warning",
@@ -477,7 +518,15 @@ def _verify_readmes(product_readme: str, legal_readme: str) -> None:
         "[Legal Materials](legal/README.md)",
         "No project license has been selected",
         "not a grant of permission",
-        "pending Phase 6B",
+        "blocked pending Phase 6B2",
+        "## Phase 6B1 controlled build inventory",
+        "legal/built-artifact-inventory.json",
+        "## Release gate",
+        "legal/release-policy.json",
+        "before dependency installation, runtime acquisition, and application build",
+        "Existing releases are not retroactively certified",
+        "## Source availability status",
+        "verified source kits and equivalent release access",
     ):
         _require(required in product_readme, f"product README missing legal statement: {required}")
     _require(
@@ -490,6 +539,8 @@ def _verify_readmes(product_readme: str, legal_readme: str) -> None:
         "## Project licensing status",
         "No project license is selected in Phase 6A",
         "requires-built-artifact-inventory",
+        "## Phase 6B1 controlled build inventory",
+        "legal/built-artifact-inventory.json",
         "OpenSSL",
         "SQLite",
         "zlib",
@@ -499,15 +550,46 @@ def _verify_readmes(product_readme: str, legal_readme: str) -> None:
         "## Source and binary correspondence",
         "v1.2.7",
         "## FFmpeg-specific warning",
-        "## Phase 6B requirements",
-        "controlled real build",
+        "## Release gate",
+        "legal/release-policy.json",
+        "before dependency installation, release runtime acquisition, and application build",
+        "## Source availability status",
+        "## Phase 6B2 requirements",
+        "verified source kits",
         "portable ZIP",
         "standalone EXE",
         "source availability or source-offer",
         "release bundle schema",
-        "release workflow gates",
+        "release gate",
     ):
         _require(required in legal_readme, f"legal README missing status or requirement: {required}")
+
+
+def _verify_phase6b1_artifacts(
+    artifact_inventory: dict[str, Any], release_policy: dict[str, Any]
+) -> None:
+    _require(
+        artifact_inventory["source_commit"] == built_inventory.BASELINE_COMMIT,
+        "built-artifact inventory source commit changed",
+    )
+    _require(artifact_inventory["python_version"] == "3.11.9", "built-artifact Python changed")
+    _require(artifact_inventory["pyinstaller_version"] == "6.21.0", "built-artifact PyInstaller changed")
+    _require(artifact_inventory["target_platform"] == "windows-x86_64", "built-artifact platform changed")
+    native = artifact_inventory["native_members"]
+    _require(bool(native), "built-artifact native member inventory is empty")
+    _require(
+        artifact_inventory["unresolved_native_members"]
+        == [record["name"] for record in native if record["status"] == "unresolved"],
+        "unresolved native members are not retained",
+    )
+    _require(
+        tuple(release["tag"] for release in release_policy["releases"]) == release_gate.EXPECTED_TAGS,
+        "release policy tags changed",
+    )
+    _require(all(release["status"] == "blocked" for release in release_policy["releases"]), "release policy is not blocked")
+    _require(release_policy["legal_compliance_certified"] is False, "legal compliance was certified")
+    _require(release_policy["source_availability_certified"] is False, "source availability was certified")
+    _require(release_policy["release_payload_integrated"] is False, "release payload was marked integrated")
 
 
 def _verify_sources_of_truth(root: Path, inventory: dict[str, Any]) -> None:

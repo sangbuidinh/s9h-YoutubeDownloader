@@ -6,9 +6,11 @@ No project license is selected in Phase 6A. This directory does not grant rights
 
 ## Inventory scope
 
-The machine-readable inventory covers known direct runtime components, known build-time components, and a conservative Tcl/Tk notice. Phase 6A does not build the standalone executable, so it does not claim an exhaustive binary-level dependency inventory.
+`legal/components.json` covers known direct runtime components, known build-time components, and a conservative Tcl/Tk notice. Records that still require further resolution retain `requires-built-artifact-inventory`; versions and copyright years are not inferred without evidence.
 
-Embedded or collected components that still require built-artifact inventory include OpenSSL, SQLite, zlib, libffi, Tcl/Tk subcomponents, and Microsoft runtime components where redistributable terms apply. Their status is `requires-built-artifact-inventory`; no versions or copyright years are inferred here.
+## Phase 6B1 controlled build inventory
+
+`legal/built-artifact-inventory.json` records a controlled Windows x64 PyInstaller build from one exact source commit. This snapshot does not prove future binaries are identical. OpenSSL, SQLite, zlib, libffi, Tcl/Tk subcomponents, Microsoft runtime components, and every observed native archive member are represented conservatively; unresolved members remain explicit. No executable or extracted binary is committed.
 
 ## Source and binary correspondence
 
@@ -27,15 +29,21 @@ Version-specific build scripts remain the source of truth for the binary version
 
 Gyan identifies its static builds as GPLv3. FFmpeg license configuration varies with enabled components. Source-distribution obligations are not resolved merely by copying the GPL text. A conclusion about redistribution requires review of the exact Gyan archive, configuration, incorporated libraries, and Corresponding Source.
 
-## Phase 6B requirements
+## Release gate
 
-Phase 6B must complete all of the following before release notices are declared complete:
+`legal/release-policy.json` intentionally blocks all four current version workflows. The gate executes before dependency installation, release runtime acquisition, and application build. Existing releases are not retroactively certified.
 
-- produce a controlled real build;
-- inspect an executable-level component inventory;
-- identify exact embedded Tcl/Tk, OpenSSL, SQLite, zlib, libffi, and other collected components;
+## Source availability status
+
+FFmpeg/ffprobe Corresponding Source remains unverified. aria2 source-distribution integration remains incomplete. Neither a copied license file nor an upstream link is represented as sufficient. Phase 6B2 must provide verified source kits and equivalent access alongside the applicable releases.
+
+## Phase 6B2 requirements
+
+Phase 6B2 must complete all of the following before the release gate can be reconsidered:
+
+- resolve or preserve explicit uncertainty for embedded Tcl/Tk, OpenSSL, SQLite, zlib, libffi, and other collected components;
 - inject notices into the portable ZIP;
 - define companion notice assets for the standalone EXE;
-- decide and implement source availability or source-offer handling;
+- provide verified source kits and implement source availability or source-offer handling;
 - update the release bundle schema;
-- add final release workflow gates.
+- update the release gate only after its prerequisites are verified.

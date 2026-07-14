@@ -340,4 +340,16 @@ VERSION      Current application version
 
 No project license has been selected. Public availability of this repository is not a grant of permission to reproduce, redistribute, or create derivative works from the original project code or assets.
 
-Third-party software retains its own license terms. See [Third-Party Notices](THIRD_PARTY_NOTICES.md) and [Legal Materials](legal/README.md) for the current known-direct-component inventory and preserved license texts. Release-package notice integration and source-distribution verification remain pending Phase 6B.
+Third-party software retains its own license terms. See [Third-Party Notices](THIRD_PARTY_NOTICES.md) and [Legal Materials](legal/README.md) for the current known-direct-component inventory and preserved license texts. Release-package notice integration and source-distribution verification remain blocked pending Phase 6B2.
+
+## Phase 6B1 controlled build inventory
+
+A controlled Windows x64 PyInstaller build was inspected. [`legal/built-artifact-inventory.json`](legal/built-artifact-inventory.json) is a snapshot of that one exact controlled build; it does not prove that future binaries are identical. Unresolved native members remain explicit, and no binary is committed with the inventory.
+
+## Release gate
+
+[`legal/release-policy.json`](legal/release-policy.json) intentionally blocks all current version workflows until Phase 6B2. The gate runs before dependency installation, runtime acquisition, and application build. Existing releases are not retroactively certified by this technical control.
+
+## Source availability status
+
+FFmpeg/ffprobe Corresponding Source remains unverified, and aria2 source-distribution integration remains incomplete. Copying a license file or linking an upstream repository is not represented as sufficient. Phase 6B2 must provide verified source kits and equivalent release access before publishing is enabled.

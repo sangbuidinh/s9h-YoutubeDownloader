@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "policy_mode": "fail-closed",
+  "legal_compliance_certified": false,
+  "source_availability_certified": false,
+  "release_payload_integrated": false,
+  "releases": [
+    {
+      "tag": "v1.2.7-rc.1",
+      "status": "blocked",
+      "reason_codes": [
+        "historical-runtime-correspondence-not-certified",
+        "release-legal-payload-not-integrated"
+      ],
+      "required_phase": "6B2"
+    },
+    {
+      "tag": "v1.3.0",
+      "status": "blocked",
+      "reason_codes": [
+        "aria2-source-availability-not-integrated",
+        "ffmpeg-corresponding-source-not-certified",
+        "release-legal-payload-not-integrated"
+      ],
+      "required_phase": "6B2"
+    },
+    {
+      "tag": "v1.3.0-rc.1",
+      "status": "blocked",
+      "reason_codes": [
+        "aria2-source-availability-not-integrated",
+        "ffmpeg-corresponding-source-not-certified",
+        "historical-runtime-correspondence-not-certified",
+        "release-legal-payload-not-integrated"
+      ],
+      "required_phase": "6B2"
+    },
+    {
+      "tag": "v1.3.1",
+      "status": "blocked",
+      "reason_codes": [
+        "aria2-source-availability-not-integrated",
+        "ffmpeg-corresponding-source-not-certified",
+        "release-legal-payload-not-integrated"
+      ],
+      "required_phase": "6B2"
+    }
+  ]
+}

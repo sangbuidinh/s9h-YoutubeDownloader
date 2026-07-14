@@ -329,8 +329,14 @@ def _validate_action_placement(path: str, workflow: str) -> None:
         _validate_download_inputs(consumer, "${{ needs.windows-smoke.outputs.artifact-id }}", "CI consumer")
         return
 
-    build = "\n".join(_mapping_block(lines, "build", 2))
-    publish = "\n".join(_mapping_block(lines, "publish", 2))
+    build_block = _mapping_block(lines, "build", 2)
+    publish_block = _mapping_block(lines, "publish", 2)
+    _require(
+        _scalar_value(publish_block, "needs", 4) == "build",
+        f"{path} publish job must need build",
+    )
+    build = "\n".join(build_block)
+    publish = "\n".join(publish_block)
     _require(build.count("actions/upload-artifact@") == 1, f"{path} build upload action count")
     _require("actions/download-artifact@" not in build, f"{path} build must not download")
     _require("softprops/action-gh-release@" not in build, f"{path} build must not publish")
@@ -411,11 +417,18 @@ def _validate_dependency_install(
     setup_steps = _action_steps(steps, "actions/setup-python")
     checkout_steps = _action_steps(steps, "actions/checkout")
     _require(len(setup_steps) == 1, f"{path} must set up Python exactly once")
+    python_verification = _named_step(steps, "Verify pinned Python version")
+    legal_gate = _named_step(steps, "Enforce fail-closed release legal gate")
+    _validate_release_legal_gate(path, tag, steps, legal_gate)
     build_steps = [step for step in steps if build_command in "\n".join(step)]
     _require(len(build_steps) == 1, f"{path} build step is ambiguous")
     _require(
-        steps.index(setup_steps[0]) < steps.index(installer) < steps.index(build_steps[0]),
-        f"{path} installer must run after setup-python and before build",
+        steps.index(setup_steps[0])
+        < steps.index(python_verification)
+        < steps.index(legal_gate)
+        < steps.index(installer)
+        < steps.index(build_steps[0]),
+        f"{path} legal gate and installer order is invalid",
     )
 
     if path == LEGACY_WORKFLOW:
@@ -466,6 +479,8 @@ def _validate_dependency_install(
     _require(
         steps.index(lock_checkout)
         < steps.index(setup_steps[0])
+        < steps.index(python_verification)
+        < steps.index(legal_gate)
         < steps.index(installer)
         < steps.index(tag_checkout)
         < steps.index(verification)
@@ -473,6 +488,40 @@ def _validate_dependency_install(
         < steps.index(build_steps[0]),
         f"{path} fixed-tag dependency installation order is invalid",
     )
+
+
+def _validate_release_legal_gate(
+    path: str,
+    tag: str,
+    steps: list[list[str]],
+    gate_step: list[str],
+) -> None:
+    prefix = "" if path == LEGACY_WORKFLOW else "control/"
+    gate_text = "\n".join(gate_step)
+    for required in (
+        f"python {prefix}scripts/verify_release_legal_gate.py",
+        f"--policy {prefix}legal/release-policy.json",
+        f"--tag {tag}",
+    ):
+        _require(required in gate_text, f"{path} legal gate is missing: {required}")
+    job_text = "\n".join("\n".join(step) for step in steps)
+    _require(job_text.count("verify_release_legal_gate.py") == 1, f"{path} legal gate count changed")
+    _require(job_text.count("release-policy.json") == 1, f"{path} release policy path count changed")
+    _require(
+        re.search(r"(?m)^\s+(?:continue-on-error|if|env)\s*:", gate_text) is None,
+        f"{path} legal gate contains a YAML bypass",
+    )
+    for forbidden in (
+        "||",
+        "; exit 0",
+        "continue-on-error",
+        "SilentlyContinue",
+        "-ErrorAction Ignore",
+        "2>$null",
+        "--allow",
+        "ALLOW_RELEASE",
+    ):
+        _require(forbidden not in gate_text, f"{path} legal gate contains a bypass: {forbidden}")
 
 
 def _verify_no_sensitive_literals(path: str, workflow: str) -> None:
@@ -498,6 +547,84 @@ def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None
     release_sha = inventory["actions"]["softprops/action-gh-release"]["commit"]
 
     mutations = []
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] = _remove_named_step(mutated[release], "Enforce fail-closed release legal gate")
+    mutations.append(("missing release legal gate", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] = _move_named_step_after(
+        mutated[release],
+        "Enforce fail-closed release legal gate",
+        "Install locked build dependencies",
+    )
+    mutations.append(("legal gate after dependency installation", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] = _move_named_step_after(
+        mutated[release],
+        "Enforce fail-closed release legal gate",
+        "Build and validate checksum-pinned assets",
+    )
+    mutations.append(("legal gate after runtime acquisition and build", mutated))
+
+    for label, old, new in (
+        (
+            "wrong legal gate tag",
+            "--policy control/legal/release-policy.json `\n            --tag v1.3.1",
+            "--policy control/legal/release-policy.json `\n            --tag v1.3.0",
+        ),
+        (
+            "wrong legal gate policy",
+            "--policy control/legal/release-policy.json `\n            --tag v1.3.1",
+            "--policy source/legal/release-policy.json `\n            --tag v1.3.1",
+        ),
+        (
+            "legal gate continue-on-error",
+            "      - name: Enforce fail-closed release legal gate\n",
+            "      - name: Enforce fail-closed release legal gate\n        continue-on-error: true\n",
+        ),
+        (
+            "legal gate if false",
+            "      - name: Enforce fail-closed release legal gate\n",
+            "      - name: Enforce fail-closed release legal gate\n        if: false\n",
+        ),
+        (
+            "legal gate environment bypass",
+            "      - name: Enforce fail-closed release legal gate\n",
+            "      - name: Enforce fail-closed release legal gate\n        env:\n          ALLOW_RELEASE: 1\n",
+        ),
+        (
+            "legal gate shell suppression",
+            "--policy control/legal/release-policy.json `\n            --tag v1.3.1",
+            "--policy control/legal/release-policy.json `\n            --tag v1.3.1 || exit 0",
+        ),
+        (
+            "legal gate PowerShell suppression",
+            "        run: |\n          python control/scripts/verify_release_legal_gate.py",
+            "        run: |\n          $ErrorActionPreference = \"SilentlyContinue\"\n          python control/scripts/verify_release_legal_gate.py",
+        ),
+        (
+            "legal gate allow argument",
+            "--policy control/legal/release-policy.json `\n            --tag v1.3.1",
+            "--policy control/legal/release-policy.json `\n            --tag v1.3.1 `\n            --allow",
+        ),
+    ):
+        mutated = copy.deepcopy(documents)
+        mutated[release] = _replace_once(mutated[release], old, new)
+        mutations.append((label, mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] = _move_named_step_after(
+        mutated[release],
+        "Enforce fail-closed release legal gate",
+        "Validate immutable build outputs",
+    )
+    mutations.append(("legal gate only in publish job", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] = _replace_once(mutated[release], "    needs: build\n", "")
+    mutations.append(("publish no longer needs build", mutated))
 
     mutated = copy.deepcopy(documents)
     mutated[ci] = _replace_once(
