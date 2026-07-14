@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "target_phase": "6B2B",
+  "release_gate_reconsideration_allowed": false,
+  "legal_compliance_certified": false,
+  "kits": [
+    {
+      "id": "aria2",
+      "binary_package_sha256": "67d015301eef0b612191212d564c5bb0a14b5b9c4796b76454276a4d28d9b288",
+      "required_outputs": [
+        "binary-to-source-manifest",
+        "complete-source-archive",
+        "independent-source-asset-checksums",
+        "source-asset-license-and-notice-set"
+      ],
+      "required_source_items": [
+        "configuration-options",
+        "core-source:aria2@02f2d0d8472b3c38c29b4dba8c75ebd5fdd2899a",
+        "external-source:c-ares",
+        "external-source:expat",
+        "external-source:gmp",
+        "external-source:libssh2",
+        "external-source:sqlite",
+        "external-source:zlib",
+        "licenses-and-notices",
+        "local-modifications-or-explicit-no-modification-evidence",
+        "source-archive-manifest",
+        "windows-build-scripts-and-toolchain-details"
+      ],
+      "required_build_evidence": [
+        "binary-rebuild-mapping",
+        "complete-build-orchestration-script",
+        "exact-configuration-or-configure-command",
+        "local-modifications-or-explicit-no-modification-evidence",
+        "toolchain-and-package-versions"
+      ],
+      "required_distribution_controls": [
+        "binary-to-source-mapping-published",
+        "immutable-exact-source-refs",
+        "release-notes-identify-source-asset-names",
+        "release-verifier-checks-all-source-assets",
+        "retention-policy-requires-owner-legal-review",
+        "source-assets-independently-checksummed",
+        "source-downloadable-from-same-release-location-as-binary"
+      ],
+      "status": "blocked",
+      "blockers": [
+        "External-component source archives are not assembled.",
+        "Exact Windows compiler and toolchain versions are not identified.",
+        "Full build commands and patch or no-modification evidence are absent.",
+        "Release source assets and binary-to-source mapping are not integrated."
+      ]
+    },
+    {
+      "id": "ffmpeg",
+      "binary_package_sha256": "db580001caa24ac104c8cb856cd113a87b0a443f7bdf47d8c12b1d740584a2ec",
+      "required_outputs": [
+        "binary-to-source-manifest",
+        "complete-source-archive",
+        "independent-source-asset-checksums",
+        "source-asset-license-and-notice-set"
+      ],
+      "required_source_items": [
+        "build-and-configuration-scripts",
+        "core-source:ffmpeg@38b88335f99e76ed89ff3c93f877fdefce736c13",
+        "exact-configure-command",
+        "external-source:amf",
+        "external-source:avisynth",
+        "external-source:bzlib",
+        "external-source:cairo",
+        "external-source:cuda",
+        "external-source:cuda-llvm",
+        "external-source:cuvid",
+        "external-source:ffnvcodec",
+        "external-source:gmp",
+        "external-source:gnutls",
+        "external-source:iconv",
+        "external-source:libaom",
+        "external-source:libass",
+        "external-source:libfontconfig",
+        "external-source:libfreetype",
+        "external-source:libfribidi",
+        "external-source:libgme",
+        "external-source:libgsm",
+        "external-source:libharfbuzz",
+        "external-source:libmfx",
+        "external-source:libmp3lame",
+        "external-source:libopencore-amrnb",
+        "external-source:libopencore-amrwb",
+        "external-source:libopenjpeg",
+        "external-source:libopenmpt",
+        "external-source:libopus",
+        "external-source:librubberband",
+        "external-source:libspeex",
+        "external-source:libsrt",
+        "external-source:libssh",
+        "external-source:libtheora",
+        "external-source:libvidstab",
+        "external-source:libvmaf",
+        "external-source:libvo-amrwbenc",
+        "external-source:libvorbis",
+        "external-source:libvpl",
+        "external-source:libvpx",
+        "external-source:libwebp",
+        "external-source:libx264",
+        "external-source:libx265",
+        "external-source:libxml2",
+        "external-source:libxvid",
+        "external-source:libzimg",
+        "external-source:libzmq",
+        "external-source:lzma",
+        "external-source:nvdec",
+        "external-source:nvenc",
+        "external-source:openal",
+        "external-source:sdl2",
+        "external-source:zlib",
+        "licenses-and-notices",
+        "local-modifications-or-explicit-no-modification-evidence",
+        "source-archive-manifest",
+        "toolchain-and-package-information"
+      ],
+      "required_build_evidence": [
+        "binary-rebuild-mapping",
+        "complete-build-orchestration-script",
+        "exact-configuration-or-configure-command",
+        "local-modifications-or-explicit-no-modification-evidence",
+        "toolchain-and-package-versions"
+      ],
+      "required_distribution_controls": [
+        "binary-to-source-mapping-published",
+        "immutable-exact-source-refs",
+        "release-notes-identify-source-asset-names",
+        "release-verifier-checks-all-source-assets",
+        "retention-policy-requires-owner-legal-review",
+        "source-assets-independently-checksummed",
+        "source-downloadable-from-same-release-location-as-binary"
+      ],
+      "status": "blocked",
+      "blockers": [
+        "External-library versions and immutable source refs are unresolved.",
+        "External-component source archives are not assembled.",
+        "Provider build orchestration, exact configure command, toolchain versions, and patch evidence are incomplete.",
+        "Release source assets and binary-to-source mapping are not integrated."
+      ]
+    }
+  ]
+}

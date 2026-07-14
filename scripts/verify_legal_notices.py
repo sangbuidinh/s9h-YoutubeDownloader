@@ -11,6 +11,7 @@ from typing import Any
 
 import inventory_built_executable as built_inventory
 import verify_release_legal_gate as release_gate
+import verify_source_correspondence as source_correspondence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -158,6 +159,8 @@ GITATTRIBUTES_LINES = (
     "/legal/built-artifact-inventory.json text eol=lf",
     "/legal/components.json text eol=lf",
     "/legal/release-policy.json text eol=lf",
+    "/legal/source-correspondence.json text eol=lf",
+    "/legal/source-kit-requirements.json text eol=lf",
     "/legal/licenses/** -text",
 )
 GITATTRIBUTES_BYTES = ("\n".join(GITATTRIBUTES_LINES) + "\n").encode("utf-8")
@@ -233,6 +236,7 @@ def main() -> int:
         LegalVerificationError,
         built_inventory.InventoryError,
         release_gate.ReleaseLegalGateError,
+        source_correspondence.SourceCorrespondenceError,
         OSError,
         UnicodeError,
         json.JSONDecodeError,
@@ -261,6 +265,8 @@ def verify_repository(root: Path) -> dict[str, Any]:
     _verify_readmes(product_readme, legal_readme)
     _verify_phase6b1_artifacts(artifact_inventory, release_policy)
     _verify_sources_of_truth(root, inventory)
+    correspondence, source_kits = source_correspondence.verify_repository(root)
+    _verify_phase6b2a_artifacts(correspondence, source_kits)
     _verify_project_claims_and_hygiene(
         {
             "README.md": product_readme,
@@ -271,6 +277,12 @@ def verify_repository(root: Path) -> dict[str, Any]:
                 root / "legal/built-artifact-inventory.json"
             ).read_text(encoding="utf-8"),
             "legal/release-policy.json": (root / "legal/release-policy.json").read_text(encoding="utf-8"),
+            "legal/source-correspondence.json": (
+                root / "legal/source-correspondence.json"
+            ).read_text(encoding="utf-8"),
+            "legal/source-kit-requirements.json": (
+                root / "legal/source-kit-requirements.json"
+            ).read_text(encoding="utf-8"),
         }
     )
     _verify_no_project_license(root)
@@ -315,6 +327,9 @@ def _verify_checkout_policy(root: Path) -> None:
     for relative in ("legal/built-artifact-inventory.json", "legal/release-policy.json"):
         _require(attributes[relative]["text"] == "set", f"{relative} text attribute must be set")
         _require(attributes[relative]["eol"] == "lf", f"{relative} eol attribute must be lf")
+    for relative in ("legal/source-correspondence.json", "legal/source-kit-requirements.json"):
+        _require(attributes[relative]["text"] == "set", f"{relative} text attribute must be set")
+        _require(attributes[relative]["eol"] == "lf", f"{relative} eol attribute must be lf")
     for relative in ALL_LICENSE_PATHS:
         _require(attributes[relative]["text"] == "unset", f"{relative} text attribute must be unset")
 
@@ -341,6 +356,8 @@ def _expected_checkout_attributes() -> dict[str, dict[str, str]]:
         "legal/built-artifact-inventory.json": {"text": "set", "eol": "lf"},
         "legal/components.json": {"text": "set", "eol": "lf"},
         "legal/release-policy.json": {"text": "set", "eol": "lf"},
+        "legal/source-correspondence.json": {"text": "set", "eol": "lf"},
+        "legal/source-kit-requirements.json": {"text": "set", "eol": "lf"},
     }
     attributes.update({relative: {"text": "unset", "eol": "unspecified"} for relative in ALL_LICENSE_PATHS})
     return attributes
@@ -372,6 +389,8 @@ def _read_git_checkout_attributes(root: Path) -> dict[str, dict[str, str]] | Non
         "legal/built-artifact-inventory.json",
         "legal/components.json",
         "legal/release-policy.json",
+        "legal/source-correspondence.json",
+        "legal/source-kit-requirements.json",
         *ALL_LICENSE_PATHS,
     )
     result = subprocess.run(
@@ -527,6 +546,12 @@ def _verify_readmes(product_readme: str, legal_readme: str) -> None:
         "Existing releases are not retroactively certified",
         "## Source availability status",
         "verified source kits and equivalent release access",
+        "## Phase 6B2A source correspondence audit",
+        "legal/source-correspondence.json",
+        "legal/source-kit-requirements.json",
+        "source correspondence partially identified",
+        "source kit not ready",
+        "no compliance certification",
     ):
         _require(required in product_readme, f"product README missing legal statement: {required}")
     _require(
@@ -561,6 +586,12 @@ def _verify_readmes(product_readme: str, legal_readme: str) -> None:
         "source availability or source-offer",
         "release bundle schema",
         "release gate",
+        "## Phase 6B2A source correspondence audit",
+        "legal/source-correspondence.json",
+        "legal/source-kit-requirements.json",
+        "source correspondence partially identified",
+        "source kit not ready",
+        "no compliance certification",
     ):
         _require(required in legal_readme, f"legal README missing status or requirement: {required}")
 
@@ -590,6 +621,43 @@ def _verify_phase6b1_artifacts(
     _require(release_policy["legal_compliance_certified"] is False, "legal compliance was certified")
     _require(release_policy["source_availability_certified"] is False, "source availability was certified")
     _require(release_policy["release_payload_integrated"] is False, "release payload was marked integrated")
+
+
+def _verify_phase6b2a_artifacts(
+    correspondence: dict[str, Any], source_kits: dict[str, Any]
+) -> None:
+    _require(
+        correspondence["baseline_commit"] == source_correspondence.BASELINE_COMMIT,
+        "source correspondence baseline changed",
+    )
+    _require(
+        correspondence["corresponding_source_complete"] is False,
+        "Corresponding Source was marked complete",
+    )
+    _require(
+        correspondence["legal_compliance_certified"] is False,
+        "source correspondence certified legal compliance",
+    )
+    _require(
+        correspondence["release_gate_status"] == "fail-closed",
+        "source correspondence release gate changed",
+    )
+    _require(
+        [package["id"] for package in correspondence["packages"]] == ["aria2", "ffmpeg"],
+        "source correspondence package set changed",
+    )
+    _require(
+        source_kits["release_gate_reconsideration_allowed"] is False,
+        "source kit allowed release-gate reconsideration",
+    )
+    _require(
+        source_kits["legal_compliance_certified"] is False,
+        "source kit certified legal compliance",
+    )
+    _require(
+        all(kit["status"] == "blocked" for kit in source_kits["kits"]),
+        "source kit is not blocked",
+    )
 
 
 def _verify_sources_of_truth(root: Path, inventory: dict[str, Any]) -> None:

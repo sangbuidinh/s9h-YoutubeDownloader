@@ -22,6 +22,7 @@ def main() -> int:
     _run_checkout_policy_tests()
     _run_inventory_mutations()
     _run_phase6b1_mutations()
+    _run_phase6b2a_mutations()
     _run_license_mutations()
     _run_notice_mutations()
     _run_claim_and_hygiene_mutations()
@@ -50,6 +51,9 @@ def _verify_positive_repository() -> None:
     release_policy = verifier.release_gate.load_policy(REPO_ROOT / "legal/release-policy.json")
     _assert(bool(artifact_inventory["unresolved_native_members"]), "unresolved native members disappeared")
     _assert(len(release_policy["releases"]) == 4, "release policy tag count changed")
+    correspondence, source_kits = verifier.source_correspondence.verify_repository(REPO_ROOT)
+    _assert(correspondence["corresponding_source_complete"] is False, "source completion changed")
+    _assert(all(kit["status"] == "blocked" for kit in source_kits["kits"]), "source kit is not blocked")
 
     for component in components:
         data = (REPO_ROOT / component["local_license_path"]).read_bytes()
@@ -81,6 +85,8 @@ def _run_checkout_policy_tests() -> None:
         ("missing built inventory rule", _missing_built_inventory_rule, "checkout rules"),
         ("missing components rule", _missing_components_rule, "checkout rules"),
         ("missing release policy rule", _missing_release_policy_rule, "checkout rules"),
+        ("missing source correspondence rule", _missing_source_correspondence_rule, "checkout rules"),
+        ("missing source kit rule", _missing_source_kit_rule, "checkout rules"),
         ("missing license rule", _missing_license_rule, "checkout rules"),
         ("components eol=crlf", _components_eol_crlf, "checkout rules"),
         ("components missing eol=lf", _components_missing_eol, "checkout rules"),
@@ -128,7 +134,12 @@ def _verify_windows_checkout_simulation() -> None:
         _assert(b"\n" in inventory and b"\r" not in inventory, "components JSON is not LF-only after checkout")
         _assert(inventory == _git_blob(source, commit, "legal/components.json"), "components JSON blob mismatch")
 
-        for relative in ("legal/built-artifact-inventory.json", "legal/release-policy.json"):
+        for relative in (
+            "legal/built-artifact-inventory.json",
+            "legal/release-policy.json",
+            "legal/source-correspondence.json",
+            "legal/source-kit-requirements.json",
+        ):
             data = (checkout / relative).read_bytes()
             _assert(b"\n" in data and b"\r" not in data, f"{relative} is not LF-only after checkout")
             _assert(data == _git_blob(source, commit, relative), f"{relative} blob mismatch")
@@ -154,6 +165,8 @@ def _assert_effective_attributes(root: Path) -> None:
         "legal/built-artifact-inventory.json",
         "legal/components.json",
         "legal/release-policy.json",
+        "legal/source-correspondence.json",
+        "legal/source-kit-requirements.json",
     )
     required = {
         ".gitattributes: text: set",
@@ -164,6 +177,10 @@ def _assert_effective_attributes(root: Path) -> None:
         "legal/built-artifact-inventory.json: eol: lf",
         "legal/release-policy.json: text: set",
         "legal/release-policy.json: eol: lf",
+        "legal/source-correspondence.json: text: set",
+        "legal/source-correspondence.json: eol: lf",
+        "legal/source-kit-requirements.json: text: set",
+        "legal/source-kit-requirements.json: eol: lf",
     }
     _assert(required.issubset(set(output.splitlines())), "effective text/eol attributes changed")
     for relative in verifier.ALL_LICENSE_PATHS:
@@ -194,6 +211,19 @@ def _run_phase6b1_mutations() -> None:
     _expect_failure("release-ready claim", _add_release_ready_claim, "unsupported project claim")
     _expect_failure("source-complete claim", _add_source_complete_claim, "unsupported project claim")
     _expect_failure("exhaustive inventory claim", _add_exhaustive_inventory_claim, "unsupported project claim")
+
+
+def _run_phase6b2a_mutations() -> None:
+    _expect_failure("missing source correspondence", _missing_source_correspondence, "required regular file")
+    _expect_failure("missing source kit requirements", _missing_source_kit_requirements, "required regular file")
+    _expect_failure("source kit unblocked", _unblock_source_kit, "must remain blocked")
+    _expect_failure("source gate enabled", _enable_source_gate, "fail-closed")
+    _expect_failure("source completion enabled", _mark_source_complete, "must remain incomplete")
+    _expect_failure(
+        "source documentation reference removed",
+        _remove_source_documentation_reference,
+        "legal/source-correspondence.json",
+    )
 
 
 def _run_license_mutations() -> None:
@@ -250,6 +280,7 @@ def _expect_failure(
             verifier.LegalVerificationError,
             verifier.built_inventory.InventoryError,
             verifier.release_gate.ReleaseLegalGateError,
+            verifier.source_correspondence.SourceCorrespondenceError,
             OSError,
             UnicodeError,
             json.JSONDecodeError,
@@ -330,6 +361,68 @@ def _missing_release_policy_rule(root: Path) -> None:
     _rewrite_gitattributes(
         root,
         lambda data: data.replace(b"/legal/release-policy.json text eol=lf\n", b""),
+    )
+
+
+def _missing_source_correspondence_rule(root: Path) -> None:
+    _rewrite_gitattributes(
+        root,
+        lambda data: data.replace(b"/legal/source-correspondence.json text eol=lf\n", b""),
+    )
+
+
+def _missing_source_kit_rule(root: Path) -> None:
+    _rewrite_gitattributes(
+        root,
+        lambda data: data.replace(b"/legal/source-kit-requirements.json text eol=lf\n", b""),
+    )
+
+
+def _missing_source_correspondence(root: Path) -> None:
+    (root / verifier.source_correspondence.CORRESPONDENCE_PATH).unlink()
+
+
+def _missing_source_kit_requirements(root: Path) -> None:
+    (root / verifier.source_correspondence.KIT_PATH).unlink()
+
+
+def _mutate_source_json(root: Path, relative: str, mutation: Callable[[dict], None]) -> None:
+    path = root / relative
+    document = json.loads(path.read_text(encoding="utf-8"))
+    mutation(document)
+    path.write_bytes(verifier.source_correspondence.canonical_json_bytes(document))
+
+
+def _unblock_source_kit(root: Path) -> None:
+    _mutate_source_json(
+        root,
+        verifier.source_correspondence.KIT_PATH,
+        lambda document: document["kits"][0].update(status="ready"),
+    )
+
+
+def _enable_source_gate(root: Path) -> None:
+    _mutate_source_json(
+        root,
+        verifier.source_correspondence.CORRESPONDENCE_PATH,
+        lambda document: document.update(release_gate_status="open"),
+    )
+
+
+def _mark_source_complete(root: Path) -> None:
+    _mutate_source_json(
+        root,
+        verifier.source_correspondence.CORRESPONDENCE_PATH,
+        lambda document: document.update(corresponding_source_complete=True),
+    )
+
+
+def _remove_source_documentation_reference(root: Path) -> None:
+    path = root / "README.md"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("legal/source-correspondence.json", "source-audit.json"),
+        encoding="utf-8",
+        newline="\n",
     )
 
 

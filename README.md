@@ -353,3 +353,9 @@ A controlled Windows x64 PyInstaller build was inspected. [`legal/built-artifact
 ## Source availability status
 
 FFmpeg/ffprobe Corresponding Source remains unverified, and aria2 source-distribution integration remains incomplete. Copying a license file or linking an upstream repository is not represented as sufficient. Phase 6B2 must provide verified source kits and equivalent release access before publishing is enabled.
+
+## Phase 6B2A source correspondence audit
+
+The exact pinned FFmpeg and aria2 binary packages were audited without executing them. Exact core source refs were resolved where the package evidence permitted, but core source is not represented as the full source required for the distributed static packages. External static-component sources and build-recipe gaps remain explicit. The result is **source correspondence partially identified**, **source kit not ready**, and **no compliance certification**.
+
+[`legal/source-correspondence.json`](legal/source-correspondence.json) records the audit findings. [`legal/source-kit-requirements.json`](legal/source-kit-requirements.json) defines the prerequisites for Phase 6B2B. The audit confirms that all four workflows remain fail-closed; Phase 6B2A does not enable publishing, source kits and legal payloads remain absent, and existing releases are not retroactively certified.
