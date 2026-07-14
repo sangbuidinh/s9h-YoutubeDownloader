@@ -155,6 +155,12 @@ def _test_bundle_mutations(bundle, root: Path) -> None:
         ("extra file", lambda target: (target / "extra.txt").write_bytes(b"extra")),
         ("asset tamper", lambda target: _append(target / "assets" / bundle.EXE_NAME)),
         ("notes tamper", lambda target: _append(target / bundle.NOTES_NAME)),
+        ("stale release notes checksum", lambda target: _set_notes_checksum(target, "0" * 64)),
+        ("missing release notes checksum", _remove_notes_checksum),
+        ("duplicate release notes checksum", _duplicate_notes_checksum),
+        ("malformed release notes checksum", _malform_notes_checksum),
+        ("wrong release notes filename", _rename_notes_checksum_target),
+        ("checksum/manifest mismatch", lambda target: _set_notes_checksum_from_asset(target, bundle.EXE_NAME)),
         ("checksum tamper", lambda target: _append(target / "assets" / bundle.CHECKSUM_NAME)),
         ("v1 manifest", lambda target: _manifest_field(target, "schema_version", 1)),
         ("manifest format", lambda target: _manifest_field(target, "bundle_format", "wrong")),
@@ -273,12 +279,14 @@ def _release_fixture(root: Path, tag: str) -> dict[str, Path | str]:
     (assets / "Youtube.Downloaderbs.exe").write_bytes(b"MZsynthetic non-executable fixture\n")
     portable = assets / f"Youtube-Downloaderbs-{tag}.zip"
     _write_zip(portable, {"README.txt": b"synthetic portable package\n"})
-    (release / "RELEASE_NOTES.md").write_bytes(b"# Synthetic release fixture\n")
+    notes = release / "RELEASE_NOTES.md"
+    _write_release_notes(notes, portable)
     legal = assets / _legal_name(tag)
     legal_builder.create_release_legal_payload(
         control_root=REPO_ROOT,
         portable_zip=portable,
         output_zip=legal,
+        release_notes=notes,
         tag=tag,
         source_commit=SOURCE_COMMIT,
         control_commit=CONTROL_COMMIT,
@@ -440,10 +448,90 @@ def _validate_generated_files(root: Path, tag: str, prerelease: bool) -> None:
         "asset roles",
     )
     _require("timestamp" not in manifest_bytes.decode().casefold(), "manifest timestamp")
+    portable_name = f"Youtube-Downloaderbs-{tag}.zip"
+    recorded, _, _ = legal_builder.verifier.parse_release_notes_checksum(
+        (root / "RELEASE_NOTES.md").read_bytes(),
+        portable_name,
+    )
+    portable_record = next(item for item in manifest["assets"] if item["role"] == "portable-package")
+    _require(recorded == portable_record["sha256"], "release notes/manifest portable checksum")
 
 
 def _source_path(fixture, tag: str, component: str) -> Path:
     return Path(fixture["sources"]) / _source_name(tag, component)
+
+
+def _write_release_notes(path: Path, portable: Path) -> None:
+    path.write_bytes(
+        (
+            "# Synthetic release fixture\n\n"
+            "## Build checksums\n\n"
+            f"- `Youtube.Downloaderbs.exe`: `{'a' * 64}`\n"
+            f"- `{portable.name}`: `{legal_builder.verifier.sha256_file(portable)}`\n"
+        ).encode("ascii")
+    )
+
+
+def _set_notes_checksum(root: Path, checksum: str) -> None:
+    notes = root / "RELEASE_NOTES.md"
+    portable_name = _portable_name_from_manifest(root)
+    _, start, end = legal_builder.verifier.parse_release_notes_checksum(notes.read_bytes(), portable_name)
+    raw = notes.read_bytes()
+    notes.write_bytes(raw[:start] + checksum.encode("ascii") + raw[end:])
+    _sync_notes_record(root)
+
+
+def _remove_notes_checksum(root: Path) -> None:
+    notes = root / "RELEASE_NOTES.md"
+    portable_name = _portable_name_from_manifest(root).encode("ascii")
+    notes.write_bytes(
+        b"".join(line for line in notes.read_bytes().splitlines(keepends=True) if portable_name not in line)
+    )
+    _sync_notes_record(root)
+
+
+def _duplicate_notes_checksum(root: Path) -> None:
+    notes = root / "RELEASE_NOTES.md"
+    portable_name = _portable_name_from_manifest(root)
+    checksum, _, _ = legal_builder.verifier.parse_release_notes_checksum(notes.read_bytes(), portable_name)
+    notes.write_bytes(notes.read_bytes() + f"- `{portable_name}`: `{checksum}`\n".encode("ascii"))
+    _sync_notes_record(root)
+
+
+def _malform_notes_checksum(root: Path) -> None:
+    notes = root / "RELEASE_NOTES.md"
+    portable_name = _portable_name_from_manifest(root)
+    _, start, end = legal_builder.verifier.parse_release_notes_checksum(notes.read_bytes(), portable_name)
+    raw = notes.read_bytes()
+    notes.write_bytes(raw[:start] + b"f" * 63 + raw[end:])
+    _sync_notes_record(root)
+
+
+def _rename_notes_checksum_target(root: Path) -> None:
+    notes = root / "RELEASE_NOTES.md"
+    portable_name = _portable_name_from_manifest(root)
+    notes.write_bytes(notes.read_bytes().replace(portable_name.encode("ascii"), b"different.zip"))
+    _sync_notes_record(root)
+
+
+def _set_notes_checksum_from_asset(root: Path, asset_name: str) -> None:
+    checksum = next(item["sha256"] for item in _manifest(root)["assets"] if item["name"] == asset_name)
+    _set_notes_checksum(root, checksum)
+
+
+def _portable_name_from_manifest(root: Path) -> str:
+    return next(item["name"] for item in _manifest(root)["assets"] if item["role"] == "portable-package")
+
+
+def _sync_notes_record(root: Path) -> None:
+    notes = root / "RELEASE_NOTES.md"
+    manifest = _manifest(root)
+    manifest["release_notes"] = {
+        "name": "RELEASE_NOTES.md",
+        "size": notes.stat().st_size,
+        "sha256": legal_builder.verifier.sha256_file(notes),
+    }
+    _write_manifest(root, manifest)
 
 
 def _legal_name(tag: str) -> str:

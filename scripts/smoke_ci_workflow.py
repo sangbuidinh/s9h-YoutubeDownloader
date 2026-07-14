@@ -192,8 +192,17 @@ def validate_workflow(workflow: str) -> None:
         '$env:RUNNER_TEMP',
         'b"MZ synthetic CI fixture; this file is not executable.\\n"',
         'zipfile.ZipInfo("SYNTHETIC.txt", date_time=(1980, 1, 1, 0, 0, 0))',
-        'b"# Synthetic CI release\\n\\nArtifact handoff verification only.\\n"',
+        "import hashlib",
+        "portable_hash = hashlib.sha256(archive.read_bytes()).hexdigest()",
+        '"# Synthetic CI release\\n\\n"',
+        'f"- `{archive.name}`: `{portable_hash}`\\n"',
         "python scripts/prepare_release_legal_payload.py create",
+        "python scripts/prepare_release_legal_payload.py verify",
+        "--release-notes $SyntheticReleaseNotes",
+        "$PreInjectionHash",
+        "$PostInjectionHash",
+        "$SyntheticNotesText.Contains($PostInjectionHash)",
+        "$SyntheticNotesText.Contains($PreInjectionHash)",
         '"SYNTHETIC_SOURCE_FIXTURE.txt"',
         '"SOURCE_MANIFEST.json"',
         'b"synthetic fixture\\n"',
@@ -210,8 +219,21 @@ def validate_workflow(workflow: str) -> None:
         "--legal-payload",
         "--source-assets-root",
         "--require-release-ready false",
+        "--require-release-ready true 2>&1",
+        "$PSNativeCommandUseErrorActionPreference = $false",
+        "$PSNativeCommandUseErrorActionPreference = $PreviousNativePreference",
+        "$PublishReadyExitCode -ne 1",
+        "release bundle is not approved for publishing",
     ):
         _require(required in create_text, f"synthetic bundle producer is missing: {required}")
+    _require(
+        create_text.count("--release-notes $SyntheticReleaseNotes") == 2,
+        "synthetic legal payload commands must use release notes exactly twice",
+    )
+    _require(
+        create_text.count("python scripts/prepare_release_bundle.py verify") == 2,
+        "synthetic bundle must run structural and publish-ready verification",
+    )
     upload_ref = _action_ref(upload_step, "actions/upload-artifact")
     _require_safe_action_ref("actions/upload-artifact", upload_ref)
     for required in (
@@ -541,6 +563,34 @@ def _test_negative_mutations(workflow: str) -> None:
                 workflow,
                 "python scripts/prepare_release_legal_payload.py create",
                 "python scripts/prepare_release_legal_payload.py verify",
+            ),
+            "synthetic bundle producer",
+        ),
+        (
+            "missing legal payload verification",
+            _replace_once(
+                workflow,
+                "python scripts/prepare_release_legal_payload.py verify",
+                "python scripts/prepare_release_legal_payload.py inspect",
+            ),
+            "synthetic bundle producer",
+        ),
+        (
+            "missing release-notes legal input",
+            _replace_once(
+                workflow,
+                "            --output-zip $LegalPayload `\n"
+                "            --release-notes $SyntheticReleaseNotes `\n",
+                "            --output-zip $LegalPayload `\n",
+            ),
+            "release notes exactly twice",
+        ),
+        (
+            "publish-ready verifier disabled",
+            _replace_once(
+                workflow,
+                "              --require-release-ready true 2>&1",
+                "              --require-release-ready false 2>&1",
             ),
             "synthetic bundle producer",
         ),

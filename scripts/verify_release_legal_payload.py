@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import stat
 import sys
@@ -15,6 +16,7 @@ CONTRACT_PATH = "legal/release-assets-v2.json"
 PAYLOAD_FORMAT = "s9h-release-legal-payload-v1"
 BUNDLE_FORMAT = "s9h-release-bundle-v2"
 MANIFEST_PATH = "legal/LEGAL_MANIFEST.json"
+RELEASE_NOTES_NAME = "RELEASE_NOTES.md"
 FIXED_ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 FIXED_FILE_MODE = 0o100644 << 16
 TAG_PATTERN = re.compile(
@@ -108,6 +110,7 @@ def main() -> int:
     parser.add_argument("--control-root", required=True, type=Path)
     parser.add_argument("--portable-zip", required=True, type=Path)
     parser.add_argument("--legal-zip", required=True, type=Path)
+    parser.add_argument("--release-notes", required=True, type=Path)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--control-commit", required=True)
@@ -117,6 +120,7 @@ def main() -> int:
             control_root=args.control_root,
             portable_zip=args.portable_zip,
             legal_zip=args.legal_zip,
+            release_notes=args.release_notes,
             tag=args.tag,
             source_commit=args.source_commit,
             control_commit=args.control_commit,
@@ -133,6 +137,7 @@ def verify_release_legal_payload(
     control_root: Path,
     portable_zip: Path,
     legal_zip: Path,
+    release_notes: Path,
     tag: str,
     source_commit: str,
     control_commit: str,
@@ -141,6 +146,7 @@ def verify_release_legal_payload(
     control_root = require_regular_directory(control_root, "control root")
     contract = load_asset_contract(control_root / CONTRACT_PATH)
     expected = expected_payload_bytes(control_root)
+    verify_release_notes_checksum(release_notes, portable_zip)
     legal_entries = read_zip_entries(legal_zip, "legal payload ZIP", deterministic=True)
     portable_entries = read_zip_entries(portable_zip, "portable ZIP", deterministic=True)
 
@@ -171,6 +177,99 @@ def verify_release_legal_payload(
     _verify_legal_paths(expected_names)
     _require(contract["legal_payload_files"] == list(LEGAL_PAYLOAD_FILES), "legal payload contract files changed")
     return manifest
+
+
+def verify_release_notes_checksum(release_notes: Path, portable_zip: Path) -> str:
+    portable_zip = portable_zip.expanduser().resolve(strict=False)
+    release_notes = require_release_notes_path(release_notes, portable_zip)
+    recorded, _, _ = parse_release_notes_checksum(
+        release_notes.read_bytes(),
+        portable_zip.name,
+    )
+    actual = sha256_file(portable_zip)
+    if recorded != actual:
+        raise LegalPayloadError("release notes portable ZIP checksum does not match")
+    return recorded
+
+
+def require_release_notes_path(release_notes: Path, portable_zip: Path) -> Path:
+    portable_zip = portable_zip.expanduser().resolve(strict=False)
+    release_root = portable_zip.parent.parent.resolve(strict=False)
+    expected = release_root / RELEASE_NOTES_NAME
+    candidate = Path(os.path.abspath(release_notes.expanduser()))
+    if candidate != expected:
+        raise LegalPayloadError("release notes path is outside the allowed release root")
+    if _is_reparse(release_root) or _is_reparse(candidate):
+        raise LegalPayloadError("release notes uses a reparse point")
+    if not candidate.is_file():
+        raise LegalPayloadError("release notes is unavailable")
+    return candidate
+
+
+def parse_release_notes_checksum(raw: bytes, portable_name: str) -> tuple[str, int, int]:
+    if not isinstance(portable_name, str) or Path(portable_name).name != portable_name:
+        raise LegalPayloadError("portable ZIP filename is invalid")
+    text, content, content_offset = _validate_release_notes_bytes(raw)
+    _verify_text_hygiene(text, "release notes")
+
+    filename = portable_name.encode("ascii")
+    filename_pattern = re.compile(
+        rb"(?<![0-9A-Za-z_.-])" + re.escape(filename) + rb"(?![0-9A-Za-z_.-])"
+    )
+    hash_pattern = re.compile(rb"(?<![0-9A-Fa-f])[0-9A-Fa-f]{64}(?![0-9A-Fa-f])")
+    candidates: list[tuple[int, bytes]] = []
+    offset = 0
+    for line in content.splitlines(keepends=True):
+        body = line.rstrip(b"\r\n")
+        filename_matches = list(filename_pattern.finditer(body))
+        if filename_matches:
+            if len(filename_matches) != 1:
+                raise LegalPayloadError("release notes portable checksum line is malformed")
+            candidates.append((offset, body))
+        offset += len(line)
+
+    if not candidates:
+        raise LegalPayloadError("release notes portable checksum is missing")
+    if len(candidates) != 1:
+        raise LegalPayloadError("release notes portable checksum is duplicated")
+    line_offset, line = candidates[0]
+    hash_matches = list(hash_pattern.finditer(line))
+    if len(hash_matches) != 1:
+        raise LegalPayloadError("release notes portable checksum line is malformed")
+    checksum = hash_matches[0].group(0).decode("ascii").lower()
+    start = content_offset + line_offset + hash_matches[0].start()
+    end = content_offset + line_offset + hash_matches[0].end()
+    return checksum, start, end
+
+
+def replace_release_notes_checksum(
+    raw: bytes,
+    portable_name: str,
+    expected_checksum: str,
+    replacement_checksum: str,
+) -> bytes:
+    for value, label in (
+        (expected_checksum, "expected release notes checksum"),
+        (replacement_checksum, "replacement release notes checksum"),
+    ):
+        if not isinstance(value, str) or not SHA256_PATTERN.fullmatch(value.lower()):
+            raise LegalPayloadError(f"{label} is invalid")
+    recorded, start, end = parse_release_notes_checksum(raw, portable_name)
+    if recorded != expected_checksum.lower():
+        raise LegalPayloadError("release notes checksum does not match the original portable ZIP")
+    updated = raw[:start] + replacement_checksum.lower().encode("ascii") + raw[end:]
+    final, _, _ = parse_release_notes_checksum(updated, portable_name)
+    if final != replacement_checksum.lower():
+        raise LegalPayloadError("release notes checksum update failed")
+    return updated
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def load_asset_contract(path: Path) -> dict[str, Any]:
@@ -370,6 +469,31 @@ def _load_manifest(raw: bytes) -> object:
         raise LegalPayloadError("legal manifest is not canonical")
     _verify_text_hygiene(raw.decode("utf-8"), "legal manifest")
     return manifest
+
+
+def _validate_release_notes_bytes(raw: bytes) -> tuple[str, bytes, int]:
+    bom = b"\xef\xbb\xbf"
+    content_offset = len(bom) if raw.startswith(bom) else 0
+    content = raw[content_offset:]
+    if not content or b"\0" in content:
+        raise LegalPayloadError("release notes content is invalid")
+
+    if b"\r\n" in content:
+        without_crlf = content.replace(b"\r\n", b"")
+        if b"\r" in without_crlf or b"\n" in without_crlf:
+            raise LegalPayloadError("release notes line endings are mixed")
+        newline = b"\r\n"
+    else:
+        if b"\r" in content:
+            raise LegalPayloadError("release notes contain a bare CR")
+        newline = b"\n"
+    if not content.endswith(newline) or content.endswith(newline + newline):
+        raise LegalPayloadError("release notes must have exactly one final newline")
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise LegalPayloadError("release notes are not valid UTF-8") from exc
+    return text, content, content_offset
 
 
 def _read_canonical_text_file(path: Path, label: str) -> bytes:

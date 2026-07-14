@@ -184,6 +184,7 @@ jobs:
 
           @'
           from pathlib import Path
+          import hashlib
           import sys
           import zipfile
 
@@ -227,8 +228,15 @@ jobs:
                       source_info.create_system = 3
                       source_info.external_attr = 0o100644 << 16
                       handle.writestr(source_info, data)
+          portable_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
           (release_root / "RELEASE_NOTES.md").write_bytes(
-              b"# Synthetic CI release\n\nArtifact handoff verification only.\n"
+              (
+                  "# Synthetic CI release\n\n"
+                  "Artifact handoff verification only.\n\n"
+                  "## Build checksums\n\n"
+                  f"- `Youtube.Downloaderbs.exe`: `{'a' * 64}`\n"
+                  f"- `{archive.name}`: `{portable_hash}`\n"
+              ).encode("ascii")
           )
           '@ | python - $ReleaseRoot $SourceAssetsRoot
           if ($LASTEXITCODE -ne 0) {
@@ -239,16 +247,40 @@ jobs:
           if ($Commit -cnotmatch "^[0-9a-f]{40}$") {
               throw "Current CI commit is invalid"
           }
+          $SyntheticReleaseNotes = Join-Path $ReleaseRoot "RELEASE_NOTES.md"
+          $SyntheticPortable = Join-Path $ReleaseRoot "assets\Youtube-Downloaderbs-v0.0.0-ci.zip"
+          $PreInjectionHash = (Get-FileHash -LiteralPath $SyntheticPortable -Algorithm SHA256).Hash.ToLowerInvariant()
 
           python scripts/prepare_release_legal_payload.py create `
             --control-root . `
-            --portable-zip (Join-Path $ReleaseRoot "assets\Youtube-Downloaderbs-v0.0.0-ci.zip") `
+            --portable-zip $SyntheticPortable `
             --output-zip $LegalPayload `
+            --release-notes $SyntheticReleaseNotes `
             --tag v0.0.0-ci `
             --source-commit $Commit `
             --control-commit $Commit
           if ($LASTEXITCODE -ne 0) {
               throw "Synthetic release legal payload creation failed"
+          }
+
+          python scripts/prepare_release_legal_payload.py verify `
+            --control-root . `
+            --portable-zip $SyntheticPortable `
+            --legal-zip $LegalPayload `
+            --release-notes $SyntheticReleaseNotes `
+            --tag v0.0.0-ci `
+            --source-commit $Commit `
+            --control-commit $Commit
+          if ($LASTEXITCODE -ne 0) {
+              throw "Synthetic release legal payload verification failed"
+          }
+          $PostInjectionHash = (Get-FileHash -LiteralPath $SyntheticPortable -Algorithm SHA256).Hash.ToLowerInvariant()
+          $SyntheticNotesText = [IO.File]::ReadAllText($SyntheticReleaseNotes)
+          if ($PreInjectionHash -eq $PostInjectionHash) {
+              throw "Synthetic portable ZIP checksum did not change after legal injection"
+          }
+          if (-not $SyntheticNotesText.Contains($PostInjectionHash) -or $SyntheticNotesText.Contains($PreInjectionHash)) {
+              throw "Synthetic release notes checksum was not synchronized"
           }
 
           python scripts/prepare_release_bundle.py create `
@@ -279,6 +311,31 @@ jobs:
             --require-release-ready false
           if ($LASTEXITCODE -ne 0) {
               throw "Synthetic release bundle verification failed"
+          }
+
+          $PreviousNativePreference = $PSNativeCommandUseErrorActionPreference
+          try {
+            $PSNativeCommandUseErrorActionPreference = $false
+            $PublishReadyOutput = @(
+              & python scripts/prepare_release_bundle.py verify `
+                --bundle-root $BundleRoot `
+                --tag v0.0.0-ci `
+                --source-commit $Commit `
+                --control-commit $Commit `
+                --prerelease true `
+                --policy legal/release-policy.json `
+                --asset-contract legal/release-assets-v2.json `
+                --legal-payload (Join-Path $BundleRoot "assets\Youtube-Downloaderbs-v0.0.0-ci-legal.zip") `
+                --source-assets-root (Join-Path $BundleRoot "assets") `
+                --require-release-ready true 2>&1
+            )
+            $PublishReadyExitCode = $LASTEXITCODE
+          }
+          finally {
+            $PSNativeCommandUseErrorActionPreference = $PreviousNativePreference
+          }
+          if ($PublishReadyExitCode -ne 1 -or ($PublishReadyOutput | Out-String) -notmatch "release bundle is not approved for publishing") {
+              throw "Synthetic publish-ready verification did not remain fail-closed"
           }
 
       - name: Upload synthetic release bundle

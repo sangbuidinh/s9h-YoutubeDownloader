@@ -145,6 +145,7 @@ def create_bundle(
         control_root=control["control_root"],
         portable_zip=source_files[names["portable-package"]],
         legal_zip=source_files[names["legal-payload"]],
+        release_notes=source_files[NOTES_NAME],
         tag=tag,
         source_commit=source_commit,
         control_commit=control_commit,
@@ -241,6 +242,11 @@ def verify_bundle(
         names=names,
         release_blockers=control["release_blockers"],
     )
+    _verify_release_notes_portable_checksum(
+        bundle_root,
+        manifest,
+        names["portable-package"],
+    )
 
     assets = manifest["assets"]
     checksum_path = bundle_root / "assets" / CHECKSUM_NAME
@@ -263,6 +269,7 @@ def verify_bundle(
         control_root=control["control_root"],
         portable_zip=assets_root / names["portable-package"],
         legal_zip=legal_payload_path,
+        release_notes=bundle_root / NOTES_NAME,
         tag=tag,
         source_commit=source_commit,
         control_commit=control_commit,
@@ -286,6 +293,27 @@ def verify_bundle(
             and manifest["release_blockers"] == []
         ):
             raise BundleError("release bundle is not approved for publishing")
+
+
+def _verify_release_notes_portable_checksum(
+    bundle_root: Path,
+    manifest: dict[str, Any],
+    portable_name: str,
+) -> None:
+    notes_path = bundle_root / NOTES_NAME
+    recorded, _, _ = legal_payload.parse_release_notes_checksum(
+        notes_path.read_bytes(),
+        portable_name,
+    )
+    matches = [
+        item for item in manifest["assets"]
+        if item["role"] == "portable-package" and item["name"] == portable_name
+    ]
+    if len(matches) != 1:
+        raise BundleError("portable package asset record is invalid")
+    actual = _sha256(bundle_root / "assets" / portable_name)
+    if recorded != matches[0]["sha256"] or recorded != actual:
+        raise BundleError("release notes portable checksum does not match the release asset")
 
 
 def _load_control_state(policy_path: Path, asset_contract_path: Path, tag: str) -> dict[str, Any]:

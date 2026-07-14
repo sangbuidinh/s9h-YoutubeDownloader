@@ -89,11 +89,24 @@ jobs:
             --control-root . `
             --portable-zip release/assets/Youtube-Downloaderbs-v1.2.7-rc.1.zip `
             --output-zip release/assets/Youtube-Downloaderbs-v1.2.7-rc.1-legal.zip `
+            --release-notes release/RELEASE_NOTES.md `
             --tag v1.2.7-rc.1 `
             --source-commit "${{ steps.release-metadata.outputs.source-commit }}" `
             --control-commit "${{ steps.release-metadata.outputs.control-commit }}"
           if ($LASTEXITCODE -ne 0) {
               throw "Release legal payload preparation failed"
+          }
+
+          python scripts/prepare_release_legal_payload.py verify `
+            --control-root . `
+            --portable-zip release/assets/Youtube-Downloaderbs-v1.2.7-rc.1.zip `
+            --legal-zip release/assets/Youtube-Downloaderbs-v1.2.7-rc.1-legal.zip `
+            --release-notes release/RELEASE_NOTES.md `
+            --tag v1.2.7-rc.1 `
+            --source-commit "${{ steps.release-metadata.outputs.source-commit }}" `
+            --control-commit "${{ steps.release-metadata.outputs.control-commit }}"
+          if ($LASTEXITCODE -ne 0) {
+              throw "Release legal payload verification failed"
           }
       - name: Create and verify release bundle
         shell: pwsh
@@ -185,6 +198,26 @@ jobs:
           Write-Host "Workflow control commit: $env:CONTROL_COMMIT"
           Write-Host "Release bundle artifact ID: $env:ARTIFACT_ID"
           Write-Host "Release bundle artifact digest: $env:ARTIFACT_DIGEST"
+      - name: Check out publish workflow controls
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.build.outputs.control-commit }}
+          path: control
+          persist-credentials: false
+      - name: Set up publish Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11.9"
+      - name: Verify publish Python version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python --version
+          $VersionOutput = (& python --version 2>&1 | Out-String).Trim()
+          if ($VersionOutput -ne "Python 3.11.9") {
+              throw "Unexpected Python version: $VersionOutput"
+          }
+          Write-Host "Pinned publish Python verified: $VersionOutput"
       - name: Download release bundle by artifact ID
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -355,16 +388,25 @@ jobs:
               }
           }
 
-          $requireReleaseReady = $true # --require-release-ready true
-          if ($requireReleaseReady -and (
-              -not [bool]$manifest.release_ready -or
-              -not [bool]$manifest.legal_compliance_certified -or
-              -not [bool]$manifest.source_availability_certified -or
-              @($manifest.release_blockers).Count -ne 0
-          )) {
+          Write-Host "Release bundle v2 handoff verified"
+      - name: Enforce publish-ready release bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python control/scripts/prepare_release_bundle.py verify `
+            --bundle-root release-bundle `
+            --tag v1.2.7-rc.1 `
+            --source-commit "${{ needs.build.outputs.source-commit }}" `
+            --control-commit "${{ needs.build.outputs.control-commit }}" `
+            --prerelease true `
+            --policy control/legal/release-policy.json `
+            --asset-contract control/legal/release-assets-v2.json `
+            --legal-payload release-bundle/assets/Youtube-Downloaderbs-v1.2.7-rc.1-legal.zip `
+            --source-assets-root release-bundle/assets `
+            --require-release-ready true
+          if ($LASTEXITCODE -ne 0) {
               throw "release bundle is not approved for publishing"
           }
-          Write-Host "Release bundle v2 handoff verified"
       - name: Confirm release absence immediately before publishing
         shell: pwsh
         env:
