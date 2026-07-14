@@ -365,3 +365,7 @@ The exact pinned FFmpeg and aria2 binary packages were audited without executing
 The contract in `legal/release-assets-v2.json` defines `s9h-release-legal-payload-v1` and `s9h-release-bundle-v2` without changing the project license status. It states that portable packages will include verified legal materials, and standalone EXE releases require a companion legal ZIP. The contract also states that legal materials do not replace source-distribution obligations.
 
 The aria2 and FFmpeg source asset names are defined but assets are not ready. Release bundle v2 requires both source assets, the current release policy remains fail-closed, publishing remains disabled, and existing releases are not retroactively certified. Phase 6B2B2 remains required.
+
+## Phase 6B2B2A source-kit feasibility
+
+[`legal/source-input-inventory.json`](legal/source-input-inventory.json) is an evidence-only source input inventory; unresolved does not mean absent, and identified does not mean complete. No source kit was assembled, the release remains blocked, and existing releases are not retroactively certified. See the [feasibility report](docs/source-kit-feasibility.md) for the recorded gaps.

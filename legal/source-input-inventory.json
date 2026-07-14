@@ -1,0 +1,1624 @@
+{
+  "schema_version": 1,
+  "target_phase": "6B2B2A",
+  "baseline_commit": "89df08602591184dc6501240e5d50738197f8db4",
+  "inventory_scope": "pinned-gpl-runtime-source-kit-input-feasibility",
+  "release_gate_reconsideration_allowed": false,
+  "legal_compliance_certified": false,
+  "source_assets_created": false,
+  "packages": [
+    {
+      "id": "aria2",
+      "binary_package_sha256": "67d015301eef0b612191212d564c5bb0a14b5b9c4796b76454276a4d28d9b288",
+      "core_source": {
+        "repository": "aria2/aria2",
+        "commit": "02f2d0d8472b3c38c29b4dba8c75ebd5fdd2899a",
+        "archive_sha256": "f0839604196b45959f72f766fdfa9df5eae6c292d48020c6475ca7eacd5d15e7",
+        "license_path": "COPYING",
+        "evidence": [
+          {
+            "kind": "repository-commit-and-archive",
+            "authority": "verified source correspondence",
+            "locator": "legal/source-correspondence.json#packages/aria2/core_source",
+            "claim": "Core repository aria2/aria2 is identified by commit 02f2d0d8472b3c38c29b4dba8c75ebd5fdd2899a and archive SHA-256 f0839604196b45959f72f766fdfa9df5eae6c292d48020c6475ca7eacd5d15e7.",
+            "status": "verified"
+          }
+        ],
+        "status": "verified",
+        "blockers": []
+      },
+      "external_components": [
+        {
+          "id": "c-ares",
+          "linkage": "static",
+          "provider_version": "1.19.1",
+          "version_status": "provider-identified",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "aria2 project Windows release",
+              "locator": "legal/source-correspondence.json#packages/aria2/external_components/c-ares",
+              "claim": "Provider metadata identifies c-ares version 1.19.1 with static linkage.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-version-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "expat",
+          "linkage": "static",
+          "provider_version": "2.5.0",
+          "version_status": "provider-identified",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "aria2 project Windows release",
+              "locator": "legal/source-correspondence.json#packages/aria2/external_components/expat",
+              "claim": "Provider metadata identifies expat version 2.5.0 with static linkage.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-version-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "gmp",
+          "linkage": "static",
+          "provider_version": "6.3.0",
+          "version_status": "provider-identified",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "aria2 project Windows release",
+              "locator": "legal/source-correspondence.json#packages/aria2/external_components/gmp",
+              "claim": "Provider metadata identifies gmp version 6.3.0 with static linkage.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-version-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libssh2",
+          "linkage": "static",
+          "provider_version": "1.11.0",
+          "version_status": "provider-identified",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "aria2 project Windows release",
+              "locator": "legal/source-correspondence.json#packages/aria2/external_components/libssh2",
+              "claim": "Provider metadata identifies libssh2 version 1.11.0 with static linkage.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-version-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "sqlite",
+          "linkage": "static",
+          "provider_version": "3.43.1",
+          "version_status": "provider-identified",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "aria2 project Windows release",
+              "locator": "legal/source-correspondence.json#packages/aria2/external_components/sqlite",
+              "claim": "Provider metadata identifies sqlite version 3.43.1 with static linkage.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-version-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "zlib",
+          "linkage": "static",
+          "provider_version": "1.3",
+          "version_status": "provider-identified",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "aria2 project Windows release",
+              "locator": "legal/source-correspondence.json#packages/aria2/external_components/zlib",
+              "claim": "Provider metadata identifies zlib version 1.3 with static linkage.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-version-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        }
+      ],
+      "toolchain": {
+        "host": "Ubuntu Linux",
+        "compiler": "mingw-w64",
+        "compiler_version": "unresolved",
+        "supporting_tools": [],
+        "evidence": [
+          {
+            "kind": "provider-package-metadata",
+            "authority": "aria2 project Windows release",
+            "locator": "legal/source-correspondence.json#packages/aria2/provider/configuration_evidence",
+            "claim": "Provider metadata identifies an Ubuntu Linux mingw-w64 static cross-build but not exact toolchain versions.",
+            "status": "partial"
+          }
+        ],
+        "status": "partial",
+        "blockers": [
+          "Exact compiler and supporting tool versions are unresolved."
+        ]
+      },
+      "build_orchestration": {
+        "provider_repository": "unresolved",
+        "immutable_ref": "unresolved",
+        "exact_configuration": "unresolved",
+        "patch_status": "unresolved",
+        "reproducible_entrypoint": "unresolved",
+        "evidence": [
+          {
+            "kind": "provider-package-metadata",
+            "authority": "aria2 project Windows release",
+            "locator": "legal/source-correspondence.json#packages/aria2/provider/configuration_evidence",
+            "claim": "Provider metadata records partial configuration characteristics but not complete immutable build orchestration.",
+            "status": "partial"
+          }
+        ],
+        "status": "partial",
+        "blockers": [
+          "Complete build orchestration at an immutable ref is unresolved.",
+          "Exact configuration and reproducible entrypoint are unresolved.",
+          "Patch or explicit no-modification evidence is unresolved."
+        ]
+      },
+      "package_status": "blocked",
+      "blockers": [
+        "Complete Windows build commands and patch or no-modification evidence are absent.",
+        "Exact Windows compiler and toolchain versions are not identified.",
+        "Exact compiler and toolchain versions are not identified by package metadata.",
+        "External-component source archives are not assembled.",
+        "Full build commands and patch or no-modification evidence are absent.",
+        "Release source assets and binary-to-source mapping are not integrated.",
+        "Source archives for statically linked external components are not assembled."
+      ]
+    },
+    {
+      "id": "ffmpeg",
+      "binary_package_sha256": "db580001caa24ac104c8cb856cd113a87b0a443f7bdf47d8c12b1d740584a2ec",
+      "core_source": {
+        "repository": "FFmpeg/FFmpeg",
+        "commit": "38b88335f99e76ed89ff3c93f877fdefce736c13",
+        "archive_sha256": "c3453fbfc7ca25423f4984a83ceda01949d458a8bc04f9d68fab7c392f75b3ab",
+        "license_path": "COPYING.GPLv3",
+        "evidence": [
+          {
+            "kind": "repository-commit-and-archive",
+            "authority": "verified source correspondence",
+            "locator": "legal/source-correspondence.json#packages/ffmpeg/core_source",
+            "claim": "Core repository FFmpeg/FFmpeg is identified by commit 38b88335f99e76ed89ff3c93f877fdefce736c13 and archive SHA-256 c3453fbfc7ca25423f4984a83ceda01949d458a8bc04f9d68fab7c392f75b3ab.",
+            "status": "verified"
+          }
+        ],
+        "status": "verified",
+        "blockers": []
+      },
+      "external_components": [
+        {
+          "id": "amf",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/amf",
+              "claim": "Provider metadata identifies component amf with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "avisynth",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/avisynth",
+              "claim": "Provider metadata identifies component avisynth with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "bzlib",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/bzlib",
+              "claim": "Provider metadata identifies component bzlib with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "cairo",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/cairo",
+              "claim": "Provider metadata identifies component cairo with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "cuda",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/cuda",
+              "claim": "Provider metadata identifies component cuda with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "cuda-llvm",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/cuda-llvm",
+              "claim": "Provider metadata identifies component cuda_llvm with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "cuvid",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/cuvid",
+              "claim": "Provider metadata identifies component cuvid with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "d3d11va",
+          "linkage": "system",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/d3d11va",
+              "claim": "Provider metadata identifies component d3d11va with system linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "system-component-candidate",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "d3d12va",
+          "linkage": "system",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/d3d12va",
+              "claim": "Provider metadata identifies component d3d12va with system linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "system-component-candidate",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "dxva2",
+          "linkage": "system",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/dxva2",
+              "claim": "Provider metadata identifies component dxva2 with system linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "system-component-candidate",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "ffnvcodec",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/ffnvcodec",
+              "claim": "Provider metadata identifies component ffnvcodec with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "gmp",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/gmp",
+              "claim": "Provider metadata identifies component gmp with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "gnutls",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/gnutls",
+              "claim": "Provider metadata identifies component gnutls with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "iconv",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/iconv",
+              "claim": "Provider metadata identifies component iconv with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libaom",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libaom",
+              "claim": "Provider metadata identifies component libaom with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libass",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libass",
+              "claim": "Provider metadata identifies component libass with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libfontconfig",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libfontconfig",
+              "claim": "Provider metadata identifies component libfontconfig with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libfreetype",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libfreetype",
+              "claim": "Provider metadata identifies component libfreetype with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libfribidi",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libfribidi",
+              "claim": "Provider metadata identifies component libfribidi with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libgme",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libgme",
+              "claim": "Provider metadata identifies component libgme with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libgsm",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libgsm",
+              "claim": "Provider metadata identifies component libgsm with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libharfbuzz",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libharfbuzz",
+              "claim": "Provider metadata identifies component libharfbuzz with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libmfx",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libmfx",
+              "claim": "Provider metadata identifies component libmfx with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libmp3lame",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libmp3lame",
+              "claim": "Provider metadata identifies component libmp3lame with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libopencore-amrnb",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libopencore-amrnb",
+              "claim": "Provider metadata identifies component libopencore_amrnb with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libopencore-amrwb",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libopencore-amrwb",
+              "claim": "Provider metadata identifies component libopencore_amrwb with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libopenjpeg",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libopenjpeg",
+              "claim": "Provider metadata identifies component libopenjpeg with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libopenmpt",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libopenmpt",
+              "claim": "Provider metadata identifies component libopenmpt with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libopus",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libopus",
+              "claim": "Provider metadata identifies component libopus with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "librubberband",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/librubberband",
+              "claim": "Provider metadata identifies component librubberband with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libspeex",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libspeex",
+              "claim": "Provider metadata identifies component libspeex with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libsrt",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libsrt",
+              "claim": "Provider metadata identifies component libsrt with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libssh",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libssh",
+              "claim": "Provider metadata identifies component libssh with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libtheora",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libtheora",
+              "claim": "Provider metadata identifies component libtheora with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libvidstab",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvidstab",
+              "claim": "Provider metadata identifies component libvidstab with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libvmaf",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvmaf",
+              "claim": "Provider metadata identifies component libvmaf with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libvo-amrwbenc",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvo-amrwbenc",
+              "claim": "Provider metadata identifies component libvo_amrwbenc with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libvorbis",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvorbis",
+              "claim": "Provider metadata identifies component libvorbis with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libvpl",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvpl",
+              "claim": "Provider metadata identifies component libvpl with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libvpx",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvpx",
+              "claim": "Provider metadata identifies component libvpx with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libwebp",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libwebp",
+              "claim": "Provider metadata identifies component libwebp with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libx264",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libx264",
+              "claim": "Provider metadata identifies component libx264 with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libx265",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libx265",
+              "claim": "Provider metadata identifies component libx265 with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libxml2",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libxml2",
+              "claim": "Provider metadata identifies component libxml2 with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libxvid",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libxvid",
+              "claim": "Provider metadata identifies component libxvid with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libzimg",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libzimg",
+              "claim": "Provider metadata identifies component libzimg with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "libzmq",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libzmq",
+              "claim": "Provider metadata identifies component libzmq with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "lzma",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/lzma",
+              "claim": "Provider metadata identifies component lzma with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "mediafoundation",
+          "linkage": "system",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/mediafoundation",
+              "claim": "Provider metadata identifies component mediafoundation with system linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "system-component-candidate",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "nvdec",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/nvdec",
+              "claim": "Provider metadata identifies component nvdec with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "nvenc",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/nvenc",
+              "claim": "Provider metadata identifies component nvenc with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "openal",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/openal",
+              "claim": "Provider metadata identifies component openal with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "sdl2",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/sdl2",
+              "claim": "Provider metadata identifies component sdl2 with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "vaapi",
+          "linkage": "system",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/vaapi",
+              "claim": "Provider metadata identifies component vaapi with system linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "system-component-candidate",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        },
+        {
+          "id": "zlib",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/zlib",
+              "claim": "Provider metadata identifies component zlib with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact immutable upstream source ref is unresolved.",
+            "Independent source archive SHA-256 is unresolved.",
+            "Official upstream repository is unresolved."
+          ]
+        }
+      ],
+      "toolchain": {
+        "host": "unresolved",
+        "compiler": "unresolved",
+        "compiler_version": "unresolved",
+        "supporting_tools": [],
+        "evidence": [
+          {
+            "kind": "provider-package-metadata",
+            "authority": "Gyan FFmpeg builds",
+            "locator": "legal/source-correspondence.json#packages/ffmpeg/provider/configuration_evidence",
+            "claim": "Provider metadata identifies a 64-bit static GPLv3 build but does not identify the host, compiler, or tool versions.",
+            "status": "partial"
+          }
+        ],
+        "status": "unresolved",
+        "blockers": [
+          "Build host, compiler, compiler version, and supporting tool versions are unresolved."
+        ]
+      },
+      "build_orchestration": {
+        "provider_repository": "unresolved",
+        "immutable_ref": "unresolved",
+        "exact_configuration": "unresolved",
+        "patch_status": "unresolved",
+        "reproducible_entrypoint": "unresolved",
+        "evidence": [
+          {
+            "kind": "provider-package-metadata",
+            "authority": "Gyan FFmpeg builds",
+            "locator": "legal/source-correspondence.json#packages/ffmpeg/provider/configuration_evidence",
+            "claim": "Provider metadata records partial configuration characteristics but not complete immutable build orchestration.",
+            "status": "partial"
+          }
+        ],
+        "status": "partial",
+        "blockers": [
+          "Complete build orchestration at an immutable ref is unresolved.",
+          "Exact configuration and reproducible entrypoint are unresolved.",
+          "Patch or explicit no-modification evidence is unresolved."
+        ]
+      },
+      "package_status": "blocked",
+      "blockers": [
+        "Complete provider build scripts, exact configure command, toolchain versions, and patch evidence are absent.",
+        "Core FFmpeg source alone is not complete Corresponding Source for the static package.",
+        "External-component source archives are not assembled.",
+        "External-library versions and immutable source refs are not identified by package metadata.",
+        "External-library versions and immutable source refs are unresolved.",
+        "Provider build orchestration, exact configure command, toolchain versions, and patch evidence are incomplete.",
+        "Release source assets and binary-to-source mapping are not integrated.",
+        "Source archives for evidenced non-system static components are not assembled."
+      ]
+    }
+  ]
+}
