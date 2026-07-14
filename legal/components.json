@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "inventory_scope": "known-direct-components",
+  "project_license_status": "not-selected",
+  "legal_compliance_certified": false,
+  "release_integration_status": "deferred-to-phase-6b",
+  "components": [
+    {
+      "id": "aria2",
+      "name": "aria2",
+      "version": "1.37.0",
+      "role": "external executable in portable ZIP",
+      "distribution_paths": [
+        "data/bin/aria2c.exe"
+      ],
+      "upstream_repository": "aria2/aria2",
+      "upstream_ref": "release-1.37.0",
+      "upstream_license_path": "COPYING",
+      "upstream_license_blob_sha1": "d159169d1050894d3ea3b98e1c965c4058208fe1",
+      "license_label": "GNU General Public License, Version 2, as present in the upstream COPYING file",
+      "local_license_path": "legal/licenses/aria2-1.37.0-GPLv2.txt",
+      "notice_status": "verified-license-text",
+      "source_distribution_status": "not-certified",
+      "notes": [
+        "Distributor source-offer handling has not been certified in Phase 6A.",
+        "The license label records the upstream COPYING file without selecting an only or or-later SPDX variant."
+      ]
+    },
+    {
+      "id": "deno",
+      "name": "Deno",
+      "version": "2.7.14",
+      "role": "external executable in portable ZIP",
+      "distribution_paths": [
+        "data/bin/deno.exe"
+      ],
+      "upstream_repository": "denoland/deno",
+      "upstream_ref": "v2.7.14",
+      "upstream_license_path": "LICENSE.md",
+      "upstream_license_blob_sha1": "b641c75c0b04ccfddcb1145d2554ab49b6ca9411",
+      "license_label": "MIT",
+      "local_license_path": "legal/licenses/Deno-2.7.14-MIT.txt",
+      "notice_status": "verified-license-text",
+      "source_distribution_status": "not-assessed",
+      "notes": [
+        "Phase 6A records the direct runtime and preserves its selected upstream license text."
+      ]
+    },
+    {
+      "id": "ffmpeg",
+      "name": "FFmpeg and ffprobe",
+      "version": "8.1.2",
+      "role": "external executables from the Gyan essentials static Windows build in portable ZIP",
+      "distribution_paths": [
+        "data/bin/ffmpeg.exe",
+        "data/bin/ffprobe.exe"
+      ],
+      "upstream_repository": "FFmpeg/FFmpeg",
+      "upstream_ref": "n8.1.2",
+      "upstream_license_path": "COPYING.GPLv3",
+      "upstream_license_blob_sha1": "94a9ed024d3859793618152ea559a168bbcbb5e2",
+      "license_label": "GPLv3 static build, as identified by the Gyan build distributor",
+      "local_license_path": "legal/licenses/FFmpeg-8.1.2-GPLv3.txt",
+      "notice_status": "verified-license-text",
+      "source_distribution_status": "not-certified",
+      "notes": [
+        "Binary package identified by current release scripts: ffmpeg-8.1.2-essentials_build.zip.",
+        "The recorded upstream FFmpeg source ref and build-provider information do not by themselves certify that complete Corresponding Source for the distributed static binary and all incorporated libraries is available."
+      ]
+    },
+    {
+      "id": "pyinstaller",
+      "name": "PyInstaller",
+      "version": "6.21.0",
+      "role": "build tool with bootloader and related files embedded in the standalone executable",
+      "distribution_paths": [
+        "Youtube.Downloaderbs.exe"
+      ],
+      "upstream_repository": "pyinstaller/pyinstaller",
+      "upstream_ref": "v6.21.0",
+      "upstream_license_path": "COPYING.txt",
+      "upstream_license_blob_sha1": "51bf4bd138e68f0ccafce4fbf7723842dceaa1d1",
+      "license_label": "GPL-2.0-or-later with the PyInstaller bootloader exception; runtime hooks described as Apache-2.0",
+      "local_license_path": "legal/licenses/PyInstaller-6.21.0-COPYING.txt",
+      "notice_status": "verified-license-text",
+      "source_distribution_status": "requires-built-artifact-inventory",
+      "notes": [
+        "Apache-2.0 runtime-hook license text is stored at legal/licenses/Apache-2.0.txt; canonical source https://www.apache.org/licenses/LICENSE-2.0.txt; expected SHA-256 cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30.",
+        "PyInstaller is GPL-2.0-or-later.",
+        "PyInstaller's bootloader exception permits distribution of the compiled bootloader embedded with another program without imposing GPL restrictions solely from that embedding.",
+        "Runtime hooks are described by PyInstaller as Apache-2.0 licensed.",
+        "The bootloader exception does not license the project's original source."
+      ]
+    },
+    {
+      "id": "python",
+      "name": "Python",
+      "version": "3.11.9",
+      "role": "runtime embedded in the PyInstaller-built standalone executable",
+      "distribution_paths": [
+        "Youtube.Downloaderbs.exe"
+      ],
+      "upstream_repository": "python/cpython",
+      "upstream_ref": "v3.11.9",
+      "upstream_license_path": "LICENSE",
+      "upstream_license_blob_sha1": "f26bcf4d2de6eb136e31006ca3ab447d5e488adf",
+      "license_label": "Python Software Foundation License Version 2 and incorporated notices contained in the complete upstream LICENSE file",
+      "local_license_path": "legal/licenses/Python-3.11.9-LICENSE.txt",
+      "notice_status": "verified-license-text",
+      "source_distribution_status": "requires-built-artifact-inventory",
+      "notes": [
+        "Phase 6B must inspect the executable for components collected with the Python runtime."
+      ]
+    },
+    {
+      "id": "tcl-tk",
+      "name": "Tcl/Tk",
+      "version": "not-verified",
+      "role": "conservative notice for Tcl/Tk runtime material that may be embedded through Tkinter",
+      "distribution_paths": [
+        "Youtube.Downloaderbs.exe"
+      ],
+      "upstream_repository": "tcltk/tcl",
+      "upstream_ref": "core-8-6-13",
+      "upstream_license_path": "license.terms",
+      "upstream_license_blob_sha1": "d8049cd9e7ca055f7e584a76f88861a294b30c9c",
+      "license_label": "Tcl upstream license terms preserved as a conservative notice",
+      "local_license_path": "legal/licenses/Tcl-Tk-license.terms",
+      "notice_status": "conservative-notice",
+      "source_distribution_status": "requires-built-artifact-inventory",
+      "notes": [
+        "Exact embedded Tcl/Tk version was not verified in Phase 6A.",
+        "The selected upstream ref is a conservative notice source and is not asserted to match every executable produced by every workflow."
+      ]
+    },
+    {
+      "id": "yt-dlp",
+      "name": "yt-dlp",
+      "version": "2026.03.17",
+      "role": "external executable in portable ZIP",
+      "distribution_paths": [
+        "data/bin/yt-dlp.exe"
+      ],
+      "upstream_repository": "yt-dlp/yt-dlp",
+      "upstream_ref": "2026.03.17",
+      "upstream_license_path": "LICENSE",
+      "upstream_license_blob_sha1": "68a49daad8ff7e35068f2b7a97d643aab440eaec",
+      "license_label": "The Unlicense / public-domain dedication",
+      "local_license_path": "legal/licenses/yt-dlp-2026.03.17-UNLICENSE.txt",
+      "notice_status": "verified-license-text",
+      "source_distribution_status": "not-assessed",
+      "notes": [
+        "Phase 6A records the direct runtime and preserves its selected upstream license text."
+      ]
+    }
+  ]
+}

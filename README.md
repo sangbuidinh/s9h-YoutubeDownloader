@@ -336,6 +336,8 @@ VERSION      Current application version
 - [Release notes for v1.3.1](docs/release_notes_v1.3.1.md)
 - [Historical Phase 3H.8 one-video lookahead note](docs/history/phase-3h8-one-video-lookahead.md)
 
-## License
+## License and third-party software
 
-A project license and bundled third-party notices are being prepared. Review the upstream licenses of bundled runtime components before redistributing modified packages.
+No project license has been selected. Public availability of this repository is not a grant of permission to reproduce, redistribute, or create derivative works from the original project code or assets.
+
+Third-party software retains its own license terms. See [Third-Party Notices](THIRD_PARTY_NOTICES.md) and [Legal Materials](legal/README.md) for the current known-direct-component inventory and preserved license texts. Release-package notice integration and source-distribution verification remain pending Phase 6B.
