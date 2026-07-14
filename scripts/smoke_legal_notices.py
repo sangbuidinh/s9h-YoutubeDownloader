@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -18,6 +19,7 @@ Mutation = Callable[[Path], None]
 
 def main() -> int:
     _verify_positive_repository()
+    _run_checkout_policy_tests()
     _run_inventory_mutations()
     _run_license_mutations()
     _run_notice_mutations()
@@ -28,6 +30,11 @@ def main() -> int:
 
 def _verify_positive_repository() -> None:
     inventory = verifier.verify_repository(REPO_ROOT)
+    _assert(
+        (REPO_ROOT / verifier.GITATTRIBUTES_PATH).read_bytes() == verifier.GITATTRIBUTES_BYTES,
+        ".gitattributes policy changed",
+    )
+    _assert_effective_attributes(REPO_ROOT)
     components = inventory["components"]
     _assert(len(components) == 7, "known direct component count changed")
     _assert(
@@ -57,6 +64,83 @@ def _verify_positive_repository() -> None:
         not any((REPO_ROOT / name).exists() for name in verifier.ROOT_PROJECT_LICENSE_FILES),
         "project license file exists",
     )
+
+
+def _run_checkout_policy_tests() -> None:
+    _verify_temporary_git_worktree()
+    _verify_windows_checkout_simulation()
+    mutations = (
+        ("missing .gitattributes", _missing_gitattributes, "regular file"),
+        ("missing components rule", _missing_components_rule, "checkout rules"),
+        ("missing license rule", _missing_license_rule, "checkout rules"),
+        ("components eol=crlf", _components_eol_crlf, "checkout rules"),
+        ("components missing eol=lf", _components_missing_eol, "checkout rules"),
+        ("components marked -text", _components_binary, "checkout rules"),
+        ("licenses marked text", _licenses_text, "checkout rules"),
+        ("licenses marked text eol=lf", _licenses_text_lf, "checkout rules"),
+        ("narrow license rule", _narrow_license_rule, "checkout rules"),
+        ("later license override", _later_license_override, "checkout rules"),
+        ("catch-all components override", _catch_all_override, "checkout rules"),
+        ("CRLF .gitattributes", _crlf_gitattributes, "LF line endings"),
+        ("BOM .gitattributes", _bom_gitattributes, "UTF-8 BOM"),
+        ("malformed attribute syntax", _malformed_gitattributes, "malformed attribute syntax"),
+        ("local absolute attribute path", _local_attribute_path, "local absolute path"),
+    )
+    for label, mutation, expected_message in mutations:
+        _expect_failure(label, mutation, expected_message, initialize_git=True)
+
+
+def _verify_temporary_git_worktree() -> None:
+    with tempfile.TemporaryDirectory(prefix="legal-policy-git-") as temp:
+        root = Path(temp) / "repo"
+        _copy_fixture(root)
+        _initialize_git_repository(root, commit=False)
+        verifier.verify_repository(root)
+        _assert_effective_attributes(root)
+
+
+def _verify_windows_checkout_simulation() -> None:
+    with tempfile.TemporaryDirectory(prefix="legal-policy-checkout-") as temp:
+        temp_root = Path(temp)
+        source = temp_root / "source"
+        checkout = temp_root / "checkout"
+        _copy_fixture(source)
+        commit = _initialize_git_repository(source, commit=True)
+        _run_git_command("clone", "--no-local", "--no-checkout", str(source), str(checkout))
+        _git(checkout, "config", "core.autocrlf", "true")
+        _git(checkout, "config", "core.eol", "native")
+        _git(checkout, "checkout", "--detach", commit)
+
+        policy = (checkout / verifier.GITATTRIBUTES_PATH).read_bytes()
+        _assert(b"\r" not in policy, ".gitattributes changed line endings in Windows-style checkout")
+        _assert(policy == _git_blob(source, commit, verifier.GITATTRIBUTES_PATH), ".gitattributes blob mismatch")
+
+        inventory = (checkout / "legal/components.json").read_bytes()
+        _assert(b"\n" in inventory and b"\r" not in inventory, "components JSON is not LF-only after checkout")
+        _assert(inventory == _git_blob(source, commit, "legal/components.json"), "components JSON blob mismatch")
+
+        preserved = 0
+        for relative in verifier.ALL_LICENSE_PATHS:
+            data = (checkout / relative).read_bytes()
+            _assert(data == _git_blob(source, commit, relative), f"license checkout changed bytes: {relative}")
+            preserved += 1
+        _assert(preserved == 8, "license checkout preservation count changed")
+        verifier.verify_repository(checkout)
+        _assert_effective_attributes(checkout)
+
+
+def _assert_effective_attributes(root: Path) -> None:
+    output = _git(root, "check-attr", "text", "eol", "--", ".gitattributes", "legal/components.json")
+    required = {
+        ".gitattributes: text: set",
+        ".gitattributes: eol: lf",
+        "legal/components.json: text: set",
+        "legal/components.json: eol: lf",
+    }
+    _assert(required.issubset(set(output.splitlines())), "effective text/eol attributes changed")
+    for relative in verifier.ALL_LICENSE_PATHS:
+        output = _git(root, "check-attr", "text", "--", relative)
+        _assert(output == f"{relative}: text: unset", f"license text attribute changed: {relative}")
 
 
 def _run_inventory_mutations() -> None:
@@ -109,11 +193,19 @@ def _run_claim_and_hygiene_mutations() -> None:
     _expect_failure("secret-like token", _add_secret_token, "secret-like value")
 
 
-def _expect_failure(label: str, mutation: Mutation, expected_message: str | None = None) -> None:
+def _expect_failure(
+    label: str,
+    mutation: Mutation,
+    expected_message: str | None = None,
+    *,
+    initialize_git: bool = False,
+) -> None:
     with tempfile.TemporaryDirectory(prefix="legal-notices-smoke-") as temp:
         root = Path(temp) / "repo"
         _copy_fixture(root)
         mutation(root)
+        if initialize_git:
+            _initialize_git_repository(root, commit=False)
         try:
             verifier.verify_repository(root)
         except (verifier.LegalVerificationError, OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -125,6 +217,7 @@ def _expect_failure(label: str, mutation: Mutation, expected_message: str | None
 
 def _copy_fixture(root: Path) -> None:
     root.mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / verifier.GITATTRIBUTES_PATH, root / verifier.GITATTRIBUTES_PATH)
     for relative in ("README.md", "THIRD_PARTY_NOTICES.md", "VERSION"):
         shutil.copy2(REPO_ROOT / relative, root / relative)
     shutil.copytree(REPO_ROOT / "legal", root / "legal")
@@ -136,6 +229,101 @@ def _copy_fixture(root: Path) -> None:
     (root / "scripts").mkdir()
     for name in ("build_release_v1_3_0.ps1", "build_release_v1_3_1.ps1"):
         shutil.copy2(REPO_ROOT / "scripts" / name, root / "scripts" / name)
+
+
+def _initialize_git_repository(root: Path, *, commit: bool) -> str:
+    _git(root, "init")
+    _git(root, "config", "user.name", "Legal Smoke")
+    _git(root, "config", "user.email", "legal-smoke@example.invalid")
+    if not commit:
+        return ""
+    _git(root, "add", "--all")
+    _git(root, "commit", "-m", "Create legal fixture")
+    return _git(root, "rev-parse", "HEAD")
+
+
+def _git(root: Path, *args: str) -> str:
+    result = _run_git_command("-C", str(root), *args)
+    return result.stdout.decode("utf-8", errors="replace").strip()
+
+
+def _git_blob(root: Path, commit: str, relative: str) -> bytes:
+    return _run_git_command("-C", str(root), "show", f"{commit}:{relative}").stdout
+
+
+def _run_git_command(*args: str) -> subprocess.CompletedProcess[bytes]:
+    git = shutil.which("git")
+    _assert(git is not None, "Git is required for legal checkout smoke tests")
+    result = subprocess.run([git, *args], capture_output=True, check=False)
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        raise AssertionError(f"Git command failed ({' '.join(args)}): {stderr}")
+    return result
+
+
+def _rewrite_gitattributes(root: Path, transform: Callable[[bytes], bytes]) -> None:
+    path = root / verifier.GITATTRIBUTES_PATH
+    path.write_bytes(transform(path.read_bytes()))
+
+
+def _missing_gitattributes(root: Path) -> None:
+    (root / verifier.GITATTRIBUTES_PATH).unlink()
+
+
+def _missing_components_rule(root: Path) -> None:
+    _rewrite_gitattributes(root, lambda data: data.replace(b"/legal/components.json text eol=lf\n", b""))
+
+
+def _missing_license_rule(root: Path) -> None:
+    _rewrite_gitattributes(root, lambda data: data.replace(b"/legal/licenses/** -text\n", b""))
+
+
+def _components_eol_crlf(root: Path) -> None:
+    _rewrite_gitattributes(root, lambda data: data.replace(b"components.json text eol=lf", b"components.json text eol=crlf"))
+
+
+def _components_missing_eol(root: Path) -> None:
+    _rewrite_gitattributes(root, lambda data: data.replace(b"components.json text eol=lf", b"components.json text"))
+
+
+def _components_binary(root: Path) -> None:
+    _rewrite_gitattributes(root, lambda data: data.replace(b"components.json text eol=lf", b"components.json -text"))
+
+
+def _licenses_text(root: Path) -> None:
+    _rewrite_gitattributes(root, lambda data: data.replace(b"/legal/licenses/** -text", b"/legal/licenses/** text"))
+
+
+def _licenses_text_lf(root: Path) -> None:
+    _rewrite_gitattributes(root, lambda data: data.replace(b"/legal/licenses/** -text", b"/legal/licenses/** text eol=lf"))
+
+
+def _narrow_license_rule(root: Path) -> None:
+    _rewrite_gitattributes(root, lambda data: data.replace(b"/legal/licenses/** -text", b"/legal/licenses/*.txt -text"))
+
+
+def _later_license_override(root: Path) -> None:
+    _rewrite_gitattributes(root, lambda data: data + b"/legal/licenses/** text\n")
+
+
+def _catch_all_override(root: Path) -> None:
+    _rewrite_gitattributes(root, lambda data: data + b"* text eol=crlf\n")
+
+
+def _crlf_gitattributes(root: Path) -> None:
+    _rewrite_gitattributes(root, lambda data: data.replace(b"\n", b"\r\n"))
+
+
+def _bom_gitattributes(root: Path) -> None:
+    _rewrite_gitattributes(root, lambda data: b"\xef\xbb\xbf" + data)
+
+
+def _malformed_gitattributes(root: Path) -> None:
+    _rewrite_gitattributes(root, lambda data: data + b"malformed\n")
+
+
+def _local_attribute_path(root: Path) -> None:
+    _rewrite_gitattributes(root, lambda data: data + b"C:\\Users\\developer\\license.txt text\n")
 
 
 def _load_inventory(root: Path) -> dict:

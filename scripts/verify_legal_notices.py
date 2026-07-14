@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -147,6 +149,14 @@ ALL_LICENSE_PATHS = tuple(
     )
 )
 
+GITATTRIBUTES_PATH = ".gitattributes"
+GITATTRIBUTES_LINES = (
+    "/.gitattributes text eol=lf",
+    "/legal/components.json text eol=lf",
+    "/legal/licenses/** -text",
+)
+GITATTRIBUTES_BYTES = ("\n".join(GITATTRIBUTES_LINES) + "\n").encode("utf-8")
+
 NOTICE_HEADINGS = {
     "aria2": "### aria2 1.37.0",
     "deno": "### Deno 2.7.14",
@@ -216,6 +226,7 @@ def main() -> int:
 
 def verify_repository(root: Path) -> dict[str, Any]:
     root = Path(root)
+    _verify_checkout_policy(root)
     inventory, inventory_text = _verify_inventory(root)
     _verify_license_files(root, inventory)
     notices = _read_authored_text(root, "THIRD_PARTY_NOTICES.md")
@@ -243,6 +254,106 @@ def canonical_inventory_bytes(inventory: dict[str, Any]) -> bytes:
 def git_blob_sha1(data: bytes) -> str:
     header = b"blob " + str(len(data)).encode("ascii") + b"\0"
     return hashlib.sha1(header + data).hexdigest()
+
+
+def _verify_checkout_policy(root: Path) -> None:
+    path = root / GITATTRIBUTES_PATH
+    _require(
+        path.is_file() and not path.is_symlink(),
+        f"required regular file is missing: {GITATTRIBUTES_PATH}",
+    )
+    raw = path.read_bytes()
+    _require(not raw.startswith(b"\xef\xbb\xbf"), f"{GITATTRIBUTES_PATH} contains a UTF-8 BOM")
+    _require(b"\0" not in raw, f"{GITATTRIBUTES_PATH} contains NUL")
+    _require(b"\r" not in raw, f"{GITATTRIBUTES_PATH} must use LF line endings")
+    text = raw.decode("utf-8")
+    _require(text.endswith("\n") and not text.endswith("\n\n"), f"{GITATTRIBUTES_PATH} must have one final newline")
+    _verify_attribute_text_hygiene(text)
+
+    lines = tuple(text.removesuffix("\n").split("\n"))
+    _require(lines == GITATTRIBUTES_LINES, f"{GITATTRIBUTES_PATH} checkout rules are invalid")
+    _require(raw == GITATTRIBUTES_BYTES, f"{GITATTRIBUTES_PATH} bytes are not canonical")
+
+    attributes = _expected_checkout_attributes()
+    git_attributes = _read_git_checkout_attributes(root)
+    if git_attributes is not None:
+        attributes = git_attributes
+    _require(attributes[GITATTRIBUTES_PATH]["text"] == "set", ".gitattributes text attribute must be set")
+    _require(attributes[GITATTRIBUTES_PATH]["eol"] == "lf", ".gitattributes eol attribute must be lf")
+    _require(attributes["legal/components.json"]["text"] == "set", "components JSON text attribute must be set")
+    _require(attributes["legal/components.json"]["eol"] == "lf", "components JSON eol attribute must be lf")
+    for relative in ALL_LICENSE_PATHS:
+        _require(attributes[relative]["text"] == "unset", f"{relative} text attribute must be unset")
+
+
+def _verify_attribute_text_hygiene(text: str) -> None:
+    _require(LOCAL_PATH_PATTERN.search(text) is None, f"local absolute path in {GITATTRIBUTES_PATH}")
+    for pattern in SECRET_PATTERNS:
+        _require(pattern.search(text) is None, f"secret-like value in {GITATTRIBUTES_PATH}")
+    for line in text.splitlines():
+        _require(line and not line.startswith("#"), f"{GITATTRIBUTES_PATH} contains an unsupported line")
+        _require(line == line.strip() and "  " not in line, f"{GITATTRIBUTES_PATH} contains invalid whitespace")
+        fields = line.split(" ")
+        _require(len(fields) >= 2, f"{GITATTRIBUTES_PATH} contains malformed attribute syntax")
+        _require("\\" not in fields[0], f"{GITATTRIBUTES_PATH} contains a local or invalid path")
+        _require(
+            all(field in {"text", "-text", "eol=lf", "eol=crlf"} for field in fields[1:]),
+            f"{GITATTRIBUTES_PATH} contains malformed or unsupported attributes",
+        )
+
+
+def _expected_checkout_attributes() -> dict[str, dict[str, str]]:
+    attributes = {
+        GITATTRIBUTES_PATH: {"text": "set", "eol": "lf"},
+        "legal/components.json": {"text": "set", "eol": "lf"},
+    }
+    attributes.update({relative: {"text": "unset", "eol": "unspecified"} for relative in ALL_LICENSE_PATHS})
+    return attributes
+
+
+def _read_git_checkout_attributes(root: Path) -> dict[str, dict[str, str]] | None:
+    git = shutil.which("git")
+    if git is None:
+        return None
+    probe = subprocess.run(
+        [git, "-C", str(root), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if probe.returncode != 0:
+        return None
+    try:
+        top_level = Path(probe.stdout.strip()).resolve()
+    except OSError:
+        return None
+    if top_level != root.resolve():
+        return None
+
+    paths = (GITATTRIBUTES_PATH, "legal/components.json", *ALL_LICENSE_PATHS)
+    result = subprocess.run(
+        [git, "-C", str(root), "check-attr", "-z", "text", "eol", "--", *paths],
+        capture_output=True,
+        check=False,
+    )
+    _require(result.returncode == 0, "git check-attr failed for legal checkout policy")
+    fields = result.stdout.split(b"\0")
+    _require(fields[-1] == b"" and (len(fields) - 1) % 3 == 0, "git check-attr returned malformed output")
+    attributes: dict[str, dict[str, str]] = {relative: {} for relative in paths}
+    for index in range(0, len(fields) - 1, 3):
+        try:
+            relative = fields[index].decode("utf-8")
+            attribute = fields[index + 1].decode("ascii")
+            value = fields[index + 2].decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise LegalVerificationError("git check-attr returned unsupported encoding") from exc
+        _require(relative in attributes, f"git check-attr returned an unexpected path: {relative}")
+        _require(attribute in {"text", "eol"}, f"git check-attr returned an unexpected attribute: {attribute}")
+        attributes[relative][attribute] = value
+    _require(all(set(values) == {"text", "eol"} for values in attributes.values()), "git check-attr output is incomplete")
+    return attributes
 
 
 def _verify_inventory(root: Path) -> tuple[dict[str, Any], str]:
