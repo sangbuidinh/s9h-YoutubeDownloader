@@ -391,3 +391,7 @@ No provider archive hash was accepted, no source archive was committed, feasibil
 ### Phase 6B2B2A2 - FFmpeg provider toolchain and build-orchestration feasibility
 
 Phase 6B2B2A2 does not modify the conservative source-input inventory; prior component verifiers retain ownership of it. Detailed provider toolchain and orchestration research is stored in [`legal/ffmpeg-provider-build-feasibility.json`](legal/ffmpeg-provider-build-feasibility.json). No readiness status changed: exact dependency versions, compiler and supporting-tool versions, configure command, patch evidence, and reproducibility remain unresolved. No build was performed, no binary was reproduced, and no source kit was assembled. Assembly remains unauthorized and publishing remains blocked. See the [detailed feasibility matrix](docs/source-kit-feasibility.md).
+
+### Phase 6B2B2A3 - Source-kit readiness consolidation
+
+Phase 6B2B2A3 consolidates accepted evidence offline without new primary-source research. Across 61 package-scoped external inputs, 5 are verified immutable, 1 is partial, 50 remain provider-version-unresolved, and 5 require system-interface review. Both aria2 and FFmpeg remain blocked; no source asset or source kit exists, assembly must not begin, release-gate reconsideration remains prohibited, and publishing remains blocked. See [`legal/source-kit-readiness-consolidation.json`](legal/source-kit-readiness-consolidation.json) and the [detailed readiness decision](docs/source-kit-feasibility.md); the consolidation does not replace the underlying evidence.

@@ -115,3 +115,11 @@ Provider release metadata is not a build recipe. UCRT64 is not an exact compiler
 Component evidence coverage: 55/55. Provider versions complete: false. Exact toolchain complete: false. Exact configure command complete: false. Build orchestration complete: false. Patch evidence complete: false. Reproducibility complete: false. The source kit remains incomplete.
 
 No build was performed, no binary was reproduced, and no source kit was assembled. Assembly remains unauthorized, publishing remains blocked, existing releases are not retroactively certified, and this is not legal advice.
+
+## Phase 6B2B2A3 - Source-kit readiness consolidation
+
+All accepted evidence was consolidated offline and no new primary-source research occurred. `legal/source-kit-readiness-consolidation.json` records the blocked package-scoped decision; it does not replace the underlying evidence or alter prior verifier ownership.
+
+aria2 has 5 verified immutable inputs and 1 partial input and remains blocked. FFmpeg has 55/55 component-level evidence coverage, but it has 0 verified provider-selected immutable component inputs: 50 FFmpeg static inputs remain provider-version-unresolved and 5 FFmpeg system candidates require explicit final treatment. Evidence coverage is not source-kit readiness, and verified individual inputs do not make a package source kit ready.
+
+Both package-material sets remain incomplete. No source assets exist, no source kits exist, and assembly must not begin. All ten reconsideration prerequisites remain incomplete and blocking. Release-gate reconsideration remains prohibited, publishing remains blocked, existing releases are not retroactively certified, and this is not legal advice.

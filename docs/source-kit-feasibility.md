@@ -296,3 +296,67 @@ Reproducibility complete: false
 Source kit complete: false
 
 Exact dependency versions remain unresolved. Exact compiler and supporting-tool versions remain unresolved. Exact package repository snapshot remains unresolved. Patch evidence remains unresolved. Reproducibility remains unresolved. No build was performed. No binary was reproduced. No source kit was assembled. Assembly remains unauthorized. Publishing remains blocked. Existing releases are not retroactively certified. This is not legal advice.
+
+## Phase 6B2B2A3 - Source-kit readiness consolidation
+
+All accepted evidence was consolidated offline. No new primary-source research occurred. The machine-readable decision is recorded in `legal/source-kit-readiness-consolidation.json`; it does not replace the underlying evidence documents or change their ownership.
+
+aria2 has 5 verified immutable inputs and 1 partial input. Its six package-scoped inputs are five `verified-immutable-input` records (`c-ares`, `expat`, `libssh2`, `sqlite`, and `zlib`) plus `aria2/gmp` as `partial-immutable-input`. Verified individual inputs do not make a package source kit ready: exact toolchain and build orchestration remain incomplete, no source asset exists, and aria2 remains blocked.
+
+FFmpeg has 55/55 component-level evidence coverage. FFmpeg has 0 verified provider-selected immutable component inputs. The 50 FFmpeg static inputs remain `provider-version-unresolved`; the 5 FFmpeg system candidates (`d3d11va`, `d3d12va`, `dxva2`, `mediafoundation`, and `vaapi`) require explicit final treatment as `system-interface-review-required`. Evidence coverage is not source-kit readiness. Exact provider versions, toolchain, configure command, orchestration, patch evidence, and reproducibility remain incomplete, and FFmpeg remains blocked.
+
+### Package-material disposition
+
+| Package | Toolchain | Configure | Build orchestration | Patch evidence | Reproducibility | Source-asset creation | Legal/release review | Complete |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| aria2 | unresolved | not-independently-resolved | unresolved | not-independently-resolved | not-independently-resolved | not-started | blocked | false |
+| ffmpeg | unresolved | partial | partial | unresolved | unresolved | not-started | blocked | false |
+
+No package-material set is complete. Each incomplete material keeps source-asset assembly blocked.
+
+### Assembly decision
+
+The deterministic decision is `do-not-assemble`, with both aria2 and FFmpeg blocked and no package authorized. No source assets exist. No source kits exist. Assembly must not begin. The 5/61 ratio is an evidence-resolution count, not a legal sufficiency metric. Release-gate reconsideration remains prohibited and publishing remains blocked.
+
+### Ten reconsideration prerequisites
+
+Completed prerequisites: 0
+
+1. Resolve or formally disposition aria2/gmp immutable-input identity.
+2. Establish exact provider-selected versions and immutable inputs for all required FFmpeg static components.
+3. Complete explicit treatment decisions for all five FFmpeg system component candidates.
+4. Establish sufficient package build materials for aria2.
+5. Establish sufficient package build materials for FFmpeg, including toolchain, configuration, dependency orchestration and patch disposition.
+6. Define and verify source-asset assembly procedures.
+7. Create source assets only under a separately authorized phase.
+8. Verify assembled source assets against the accepted evidence.
+9. Perform explicit legal review of source availability and license obligations.
+10. Re-run release gates only after all required source-kit prerequisites are satisfied.
+
+Every prerequisite is incomplete and blocks assembly.
+
+### Status summary
+
+External inputs: 61
+
+Verified immutable inputs: 5
+
+Partial inputs: 1
+
+Provider-version-unresolved inputs: 50
+
+System-interface-review-required inputs: 5
+
+All required inputs resolved: false
+
+Source assets created: false
+
+Source kits ready: false
+
+Assembly authorized: false
+
+Release gate reconsideration allowed: false
+
+Publishing allowed: false
+
+No source assets or source kits were created. Existing releases are not retroactively certified. This consolidation does not establish legal compliance or Corresponding Source completeness. This is not legal advice.
