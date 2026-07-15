@@ -99,6 +99,40 @@ No component was promoted and the feasibility counts remain unchanged. No source
 
 The aria2 verifier owns aria2 semantics and shared gates; the FFmpeg codec batch verifier owns this 16-component evidence batch. Neither verifier weakens the general source-kit feasibility gate. Assembly remains unauthorized, publishing remains blocked, and existing releases are not retroactively certified. This is not legal advice.
 
+## Phase 6B2B2A1c — FFmpeg graphics, subtitle, text and audio-support evidence
+
+Fourteen FFmpeg support-library names were reviewed against the exact Gyan FFmpeg 8.1.2 Essentials package evidence and official upstream project authorities. Gyan identifies component names and static linkage, but exact provider dependency versions remain unresolved. Official upstream project identification does not prove provider use of a particular version, release, commit, or archive.
+
+| Component ID | Functional category | Provider version | Provider-version status | Official upstream project identified | Provider-to-upstream mapping | Resolution status | Blocker summary |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `cairo` | Graphics and 2D rendering | unresolved | unresolved | yes — Cairo | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `iconv` | Character-set conversion | unresolved | unresolved | yes — GNU libiconv | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libass` | Subtitle rendering | unresolved | unresolved | yes — libass | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libfontconfig` | Font discovery and configuration | unresolved | unresolved | yes — Fontconfig | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libfreetype` | Font rasterization | unresolved | unresolved | yes — FreeType | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libfribidi` | Bidirectional text processing | unresolved | unresolved | yes — GNU FriBidi | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libgme` | Game-music playback | unresolved | unresolved | yes — Game_Music_Emu | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libharfbuzz` | Text shaping | unresolved | unresolved | yes — HarfBuzz | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libopenmpt` | Tracker-music playback | unresolved | unresolved | yes — OpenMPT/libopenmpt | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `librubberband` | Audio time-stretching and pitch shifting | unresolved | unresolved | yes — Rubber Band Library | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libxml2` | XML processing | unresolved | unresolved | yes — libxml2 | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libzimg` | Image scaling and colorspace conversion | unresolved | unresolved | yes — zimg | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `openal` | Audio output support | unresolved | unresolved | yes — OpenAL Soft | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `sdl2` | Multimedia presentation support | unresolved | unresolved | yes — Simple DirectMedia Layer | unresolved | identified-name-only | Exact provider component version is unresolved. |
+
+The evidence totals are:
+
+- Provider versions verified: 0
+- Verified immutable inputs: 0
+- Identified-name-only inputs: 14
+- Provider source archive hashes verified: 0
+
+No component was promoted and the feasibility counts remain unchanged. No provider source archive hash was accepted, no source archive was committed, and no source kit was assembled. The exact historical recipe, exact toolchain, exact configure command, and patch set remain unresolved.
+
+The aria2 verifier owns aria2 data and shared gates. The codec verifier owns the prior 16 codec records. The support verifier owns the new 14 support records. The general feasibility verifier owns overall schema and readiness. No verifier permanently freezes unrelated future evidence.
+
+Assembly remains unauthorized, publishing remains blocked, and existing releases are not retroactively certified. This is not legal advice.
+
 ## Toolchain gaps
 
 The aria2 provider metadata identifies an Ubuntu Linux mingw-w64 static cross-build, but it does not establish exact compiler and supporting-tool versions. The FFmpeg provider metadata identifies a 64-bit static GPLv3 package, but the build host, compiler, compiler version, and supporting tools remain unresolved.

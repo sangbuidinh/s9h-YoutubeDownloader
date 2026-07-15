@@ -81,3 +81,11 @@ No source kit was assembled. Toolchain and build orchestration remain incomplete
 The exact result is **0 provider versions verified, 0 verified immutable inputs, 16 identified-name-only inputs, and 0 provider source archive hashes verified**. Feasibility counts remain unchanged. No source archive hash was accepted as a provider input, no source archive was committed, and no source kit was assembled.
 
 The aria2 verifier owns aria2 semantics and shared gates; the FFmpeg batch verifier owns this FFmpeg evidence batch. Neither weakens the general source-kit feasibility gate. The exact historical recipe, toolchain, configure command, and patch set remain unresolved. Assembly remains unauthorized, publishing remains blocked, existing releases are not retroactively certified, and this is not legal advice.
+
+## Phase 6B2B2A1c FFmpeg support primary-source research
+
+`legal/primary-source-evidence-ffmpeg-support.json` records contextual official-upstream research for 14 FFmpeg graphics, subtitle, text and audio-support libraries identified with static linkage by the exact Gyan package metadata. Exact provider dependency versions remain unresolved, upstream project identification does not prove provider use, and no component was promoted.
+
+The exact result is **0 provider versions verified, 0 verified immutable inputs, 14 identified-name-only inputs, and 0 provider source archive hashes verified**. Feasibility counts remain unchanged. No provider source archive hash was accepted, no source archive was committed, and no source kit was assembled.
+
+The aria2 verifier owns aria2 data and shared gates, the codec verifier owns the prior 16 codec records, the support verifier owns the new 14 support records, and the general feasibility verifier owns overall schema and readiness. No verifier permanently freezes unrelated future evidence. The exact historical recipe, toolchain, configure command, and patch set remain unresolved. Assembly remains unauthorized, publishing remains blocked, existing releases are not retroactively certified, and this is not legal advice.

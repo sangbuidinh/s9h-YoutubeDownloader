@@ -57,6 +57,7 @@ class Fixture:
 
 def main() -> int:
     verifier.verify_repository(ROOT)
+    _positive_unrelated_refinement()
     cases: list[tuple[str, Callable[[Fixture], None]]] = [
         ("missing component", lambda f: _primary(f, lambda d: d["components"].pop())),
         ("duplicate component", lambda f: _primary(f, lambda d: d["components"].insert(1, copy.deepcopy(d["components"][0])))),
@@ -109,7 +110,7 @@ def main() -> int:
         ("inventory archive hash inserted", lambda f: _inventory_component(f, "libaom", lambda c: c.__setitem__("source_archive_sha256", "1" * 64))),
         ("inventory status promoted", lambda f: _inventory_component(f, "libaom", lambda c: c.__setitem__("resolution_status", "verified-immutable-input"))),
         ("inventory missing blocker", lambda f: _inventory_component(f, "libaom", lambda c: c.__setitem__("blockers", []))),
-        ("changed non-batch FFmpeg record", _modify_non_batch),
+        ("changed non-batch FFmpeg structural record", _modify_non_batch_structural),
         ("changed aria2 inventory", _modify_aria2_inventory),
         ("changed aria2 primary evidence", _modify_aria2_primary),
         ("changed source correspondence", lambda f: f.mutate_json("source-correspondence", lambda d: d.__setitem__("release_gate_status", "open"))),
@@ -221,8 +222,37 @@ def _summary(fixture: Fixture, field: str, value: Any) -> None:
     _primary(fixture, lambda document: document["summary"].__setitem__(field, value))
 
 
-def _modify_non_batch(fixture: Fixture) -> None:
-    _inventory_component(fixture, "libass", lambda component: component["blockers"].append("Changed."))
+def _positive_unrelated_refinement() -> None:
+    with tempfile.TemporaryDirectory(prefix="s9h-ffmpeg-codec-boundary-") as raw:
+        fixture = Fixture(Path(raw))
+
+        def refine(component: dict[str, Any]) -> None:
+            component["evidence"].append({
+                "kind": "official-upstream-research",
+                "authority": "libass",
+                "locator": "https://github.com/libass/libass",
+                "claim": (
+                    "Official upstream identity for libass was researched "
+                    "without selecting a provider input."
+                ),
+                "status": "partial",
+            })
+            component["evidence"].sort(key=lambda item: tuple(item.values()))
+            component["blockers"] = sorted([
+                "Exact immutable upstream source ref is unresolved.",
+                "Exact provider component version is unresolved.",
+                "Independent source archive SHA-256 is unresolved.",
+            ])
+
+        _inventory_component(fixture, "libass", refine)
+        verifier.verify_repository(ROOT, overrides=fixture.paths)
+
+
+def _modify_non_batch_structural(fixture: Fixture) -> None:
+    _inventory_component(
+        fixture, "libass",
+        lambda component: component.__setitem__("provider_version", "invented"),
+    )
 
 
 def _modify_aria2_inventory(fixture: Fixture) -> None:
@@ -310,7 +340,7 @@ def _repository_archive(fixture: Fixture) -> None:
 
 
 def _introduced(fixture: Fixture, path: str) -> None:
-    fixture.introduced_paths = sorted(verifier.PHASE_PATHS) + [path]
+    fixture.introduced_paths = [path]
 
 
 if __name__ == "__main__":
