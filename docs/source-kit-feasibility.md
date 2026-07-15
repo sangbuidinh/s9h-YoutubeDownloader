@@ -133,6 +133,46 @@ The aria2 verifier owns aria2 data and shared gates. The codec verifier owns the
 
 Assembly remains unauthorized, publishing remains blocked, and existing releases are not retroactively certified. This is not legal advice.
 
+## Phase 6B2B2A1d — FFmpeg hardware acceleration and system-interface evidence
+
+Provider metadata identifies names and linkage for 14 FFmpeg hardware, vendor SDK, toolkit and system-interface components. Exact toolkit, SDK and system-interface versions remain unresolved. Official vendor documentation does not prove historical provider version, provider incorporation, or an exact immutable input.
+
+| Component ID | Linkage | Component nature | Official authority | Provider version | Provider-version status | Provider-to-official mapping | Source-kit treatment | Resolution status | Blocker summary |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `amf` | static | vendor-sdk | Advanced Micro Devices, Inc. | unresolved | unresolved | unresolved | sdk-or-header-input-requires-version-resolution | identified-name-only | Exact provider component or SDK version is unresolved. |
+| `cuda` | static | toolkit-interface | NVIDIA Corporation | unresolved | unresolved | unresolved | provider-label-needs-build-recipe | identified-name-only | Exact provider component or SDK version is unresolved. |
+| `cuda-llvm` | static | toolkit-interface | LLVM Project | unresolved | unresolved | unresolved | provider-label-needs-build-recipe | identified-name-only | Exact provider component or SDK version is unresolved. |
+| `cuvid` | static | hardware-api | NVIDIA Corporation | unresolved | unresolved | unresolved | sdk-or-header-input-requires-version-resolution | identified-name-only | Exact provider component or SDK version is unresolved. |
+| `d3d11va` | system | system-api | Microsoft Corporation | unresolved | unresolved | unresolved | system-interface-documentation-only | system-component-candidate | Exact Windows SDK or system-interface version is unresolved. |
+| `d3d12va` | system | system-api | Microsoft Corporation | unresolved | unresolved | unresolved | system-interface-documentation-only | system-component-candidate | Exact Windows SDK or system-interface version is unresolved. |
+| `dxva2` | system | system-api | Microsoft Corporation | unresolved | unresolved | unresolved | system-interface-documentation-only | system-component-candidate | Exact Windows SDK or system-interface version is unresolved. |
+| `ffnvcodec` | static | header-sdk | FFmpeg project | unresolved | unresolved | unresolved | sdk-or-header-input-requires-version-resolution | identified-name-only | Exact provider component or SDK version is unresolved. |
+| `libmfx` | static | source-library | Intel Corporation | unresolved | unresolved | unresolved | source-archive-required-if-version-resolved | identified-name-only | Exact provider component or SDK version is unresolved. |
+| `libvpl` | static | source-library | Intel Corporation | unresolved | unresolved | unresolved | source-archive-required-if-version-resolved | identified-name-only | Exact provider component or SDK version is unresolved. |
+| `mediafoundation` | system | system-api | Microsoft Corporation | unresolved | unresolved | unresolved | system-interface-documentation-only | system-component-candidate | Exact Windows SDK or system-interface version is unresolved. |
+| `nvdec` | static | hardware-api | NVIDIA Corporation | unresolved | unresolved | unresolved | provider-label-needs-build-recipe | identified-name-only | Exact provider component or SDK version is unresolved. |
+| `nvenc` | static | hardware-api | NVIDIA Corporation | unresolved | unresolved | unresolved | provider-label-needs-build-recipe | identified-name-only | Exact provider component or SDK version is unresolved. |
+| `vaapi` | system | system-api | libva project | unresolved | unresolved | unresolved | system-interface-documentation-only | system-component-candidate | Exact VA-API interface and implementation version is unresolved. |
+
+The exact totals are:
+
+- Total components: 14
+- Static candidates: 9
+- System candidates: 5
+- Provider versions verified: 0
+- Verified immutable inputs: 0
+- Identified-name-only inputs: 9
+- System-component candidates: 5
+- Provider archive hashes verified: 0
+
+No static candidate was promoted, and no system candidate was declared fully resolved. Component-nature and source-kit treatment are contextual classifications only. System APIs are not automatically conventional source archives, and provider linkage text alone does not prove a separate archive was statically incorporated.
+
+No provider source archive hash was accepted. No source archive or SDK installer was committed. Feasibility counts remain unchanged, and no source kit was assembled. The exact historical recipe remains unresolved. The exact toolchain remains unresolved. The exact configure command remains unresolved. The patch set remains unresolved.
+
+The aria2 verifier owns aria2 data and shared gates. The codec verifier owns the prior 16 codec records. The support verifier owns the prior 14 support records. The hardware/system verifier owns this 14-component batch. The general feasibility verifier owns overall schema and readiness. No component verifier permanently freezes unrelated future evidence.
+
+Assembly remains unauthorized, publishing remains blocked, and existing releases are not retroactively certified. This is not legal advice.
+
 ## Toolchain gaps
 
 The aria2 provider metadata identifies an Ubuntu Linux mingw-w64 static cross-build, but it does not establish exact compiler and supporting-tool versions. The FFmpeg provider metadata identifies a 64-bit static GPLv3 package, but the build host, compiler, compiler version, and supporting tools remain unresolved.
