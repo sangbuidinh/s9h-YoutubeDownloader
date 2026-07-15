@@ -234,3 +234,65 @@ Neither package has complete build orchestration tied to an immutable provider r
 The source input inventory is evidence-only. No source archive or source kit was created, and no source kit was assembled. Phase 6B2B2A does not authorize assembly or publishing.
 
 Phase 6B2B2B is not authorized until every recorded blocker is resolved with primary-source evidence, including exact external-component identities, exact toolchain versions, complete immutable build orchestration, configuration, patch status, and source-archive manifests. A separate review and explicit authorization are required before any assembly work or release-gate reconsideration.
+
+## Phase 6B2B2A2 - FFmpeg provider toolchain and build-orchestration feasibility
+
+Phase 6B2B2A2 does not modify the conservative source-input inventory. Prior component verifiers retain ownership of the unchanged inventory. Detailed provider toolchain and orchestration research is stored in `legal/ffmpeg-provider-build-feasibility.json`; no readiness status changed. This phase does not record an exact historical recipe, claim a reproducible build, or authorize source-kit assembly.
+
+| Item | Deterministic result |
+| --- | --- |
+| Exact package identity | `8.1.2-essentials_build-www.gyan.dev`; SHA-256 `db580001caa24ac104c8cb856cd113a87b0a443f7bdf47d8c12b1d740584a2ec` |
+| FFmpeg core source | Commit `38b88335f99e76ed89ff3c93f877fdefce736c13` |
+| Provider release repository | `https://github.com/GyanD/codexffmpeg` |
+| Release tag | `8.1.2` |
+| Release metadata ref | `46465995c991fe65c5de853fa79bddec09cd6c37` (verified) |
+| Release repository role | `release-metadata-and-assets` |
+| Build scripts present at release ref | false; the immutable tree contains only the repository README and funding metadata |
+| Historical recipe identity | unresolved |
+| Exact-package README | identified; SHA-256 `9172433fb251059a58d2ff11ba8c6132e04819136ed96e809563911ff0d13816` |
+| Configuration string present | true |
+| Configure flags captured | true |
+| Configure flag count | 38 |
+| External library names present | true |
+| External library versions present | false |
+| Provider toolchain family | UCRT64 |
+| UCRT64 evidence status | provider-identified |
+| Exact host | unresolved |
+| Exact host version | unresolved |
+| Exact compiler | unresolved |
+| Exact compiler version | unresolved |
+| Exact linker and binutils | unresolved |
+| Supporting tools | unresolved |
+| Exact package repository snapshot | unresolved |
+| Exact dependency package set | unresolved |
+| Exact shell command identified | false |
+| Configure environment, paths, prefixes, working directory and wrapper | unresolved |
+| Dependency acquisition | unresolved |
+| Dependency build order | unresolved |
+| Patch set | unresolved |
+| Explicit no-patch evidence | unresolved |
+| Reproducible entrypoint | unresolved |
+| Binary-to-recipe correspondence | unresolved |
+| Final blocker | No immutable historical recipe establishes the exact toolchain, dependency inputs, command environment, build order, patch state and binary correspondence. |
+
+The exact-package README contains a 38-entry configuration matrix and external-library names, but it does not contain external-library versions. General changelog wording does not override those exact-package bytes. A release metadata repository is not automatically a build-recipe repository. A release metadata commit is not automatically a historical recipe ref. UCRT64 is not an exact compiler identity. A configuration string is not automatically an exact reproducible configure command. An absence of visible patch files is not explicit no-patch evidence.
+
+### Status summary
+
+Component evidence coverage: 55/55
+
+Provider versions complete: false
+
+Exact toolchain complete: false
+
+Exact configure command complete: false
+
+Build orchestration complete: false
+
+Patch evidence complete: false
+
+Reproducibility complete: false
+
+Source kit complete: false
+
+Exact dependency versions remain unresolved. Exact compiler and supporting-tool versions remain unresolved. Exact package repository snapshot remains unresolved. Patch evidence remains unresolved. Reproducibility remains unresolved. No build was performed. No binary was reproduced. No source kit was assembled. Assembly remains unauthorized. Publishing remains blocked. Existing releases are not retroactively certified. This is not legal advice.

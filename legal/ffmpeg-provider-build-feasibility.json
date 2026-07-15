@@ -1,0 +1,331 @@
+{
+  "schema_version": 1,
+  "target_phase": "6B2B2A2",
+  "baseline_commit": "95587c76919042b0b9d9a5b51f0f2e40e241e346",
+  "package_id": "ffmpeg",
+  "binary_package_sha256": "db580001caa24ac104c8cb856cd113a87b0a443f7bdf47d8c12b1d740584a2ec",
+  "provider_release_identity": "8.1.2-essentials_build-www.gyan.dev",
+  "ffmpeg_core_commit": "38b88335f99e76ed89ff3c93f877fdefce736c13",
+  "evidence_scope": {
+    "official_sources_only": true,
+    "network_mode": "read-only",
+    "binary_downloads_allowed": false,
+    "source_archive_downloads_allowed": false,
+    "runtime_execution_allowed": false,
+    "build_execution_allowed": false,
+    "provider_package_scope": "exact-package-only",
+    "claims_boundary": "This phase records provider build feasibility and unresolved gaps; it is not a reproducible recipe and not a completed source kit."
+  },
+  "provider_repository": {
+    "official_repository": "https://github.com/GyanD/codexffmpeg",
+    "release_tag": "8.1.2",
+    "release_metadata_commit": "46465995c991fe65c5de853fa79bddec09cd6c37",
+    "release_metadata_commit_status": "verified",
+    "repository_role": "release-metadata-and-assets",
+    "build_scripts_present_at_release_ref": false,
+    "build_scripts_presence_status": "verified",
+    "historical_recipe_identity": "unresolved",
+    "historical_recipe_status": "unresolved",
+    "evidence": [
+      {
+        "kind": "release-asset-metadata",
+        "authority": "GitHub Releases API",
+        "locator": "https://api.github.com/repos/GyanD/codexffmpeg/releases/assets/459500679",
+        "claim": "The official release asset metadata identifies ffmpeg-8.1.2-essentials_build.zip with SHA-256 db580001caa24ac104c8cb856cd113a87b0a443f7bdf47d8c12b1d740584a2ec.",
+        "status": "verified"
+      },
+      {
+        "kind": "release-reference",
+        "authority": "GyanD/codexffmpeg",
+        "locator": "https://github.com/GyanD/codexffmpeg/releases/tag/8.1.2",
+        "claim": "Official tag 8.1.2 resolves to release metadata commit 46465995c991fe65c5de853fa79bddec09cd6c37, distinct from FFmpeg core commit 38b88335f99e76ed89ff3c93f877fdefce736c13.",
+        "status": "verified"
+      },
+      {
+        "kind": "release-tree-inspection",
+        "authority": "GitHub Git Data API",
+        "locator": "https://api.github.com/repos/GyanD/codexffmpeg/git/trees/5b8ba5a79b0b5aa6262e686e72b7b749ad0f91bc",
+        "claim": "The complete immutable release tree contains only README.md and .github/FUNDING.yml; no provider build script is present at this ref.",
+        "status": "verified"
+      },
+      {
+        "kind": "repository-role",
+        "authority": "GyanD/codexffmpeg",
+        "locator": "https://raw.githubusercontent.com/GyanD/codexffmpeg/46465995c991fe65c5de853fa79bddec09cd6c37/README.md",
+        "claim": "The immutable repository README states that the Releases section mirrors builds hosted at the official Gyan FFmpeg builds site.",
+        "status": "verified"
+      }
+    ],
+    "blockers": [
+      "No complete historical provider recipe is tied to the exact package.",
+      "Release metadata commit is not a historical build-recipe identity.",
+      "The immutable release tree contains no provider build scripts."
+    ]
+  },
+  "exact_package_metadata": {
+    "metadata_source": "legal/source-correspondence.json#packages/ffmpeg/binary_package/provider_metadata_files/README.txt",
+    "metadata_identity": "ffmpeg-8.1.2-essentials_build/README.txt",
+    "metadata_sha256": "9172433fb251059a58d2ff11ba8c6132e04819136ed96e809563911ff0d13816",
+    "ffmpeg_version_present": true,
+    "ffmpeg_core_commit_present": true,
+    "configuration_string_present": true,
+    "external_library_names_present": true,
+    "external_library_versions_present": false,
+    "full_configuration_claim_reconciled": "The general changelog claim is reconciled with the exact README's 38-entry configuration matrix; that matrix is not an exact configure command.",
+    "external_version_claim_reconciled": "The general changelog claim does not replace exact-package metadata; the recorded README does not contain external-library versions.",
+    "evidence": [
+      {
+        "kind": "exact-package-readme",
+        "authority": "verified source correspondence",
+        "locator": "legal/source-correspondence.json#packages/ffmpeg/binary_package/provider_metadata_files/README.txt",
+        "claim": "The exact README hash is recorded and identifies the FFmpeg version, core source reference, a 38-entry configuration matrix, and external-library names, but no configure command line or external-library versions.",
+        "status": "verified"
+      },
+      {
+        "kind": "provider-changelog-configuration",
+        "authority": "Gyan FFmpeg builds",
+        "locator": "https://www.gyan.dev/ffmpeg/builds/",
+        "claim": "Official changelog entry 030 states that package READMEs contain full configuration of internal and external elements; exact-package metadata remains authoritative for the available fields.",
+        "status": "partial"
+      },
+      {
+        "kind": "provider-changelog-external-versions",
+        "authority": "Gyan FFmpeg builds",
+        "locator": "https://www.gyan.dev/ffmpeg/builds/",
+        "claim": "Official changelog entry 040 states that new package READMEs list external-library versions, but the recorded exact-package README metadata reports no such versions.",
+        "status": "partial"
+      },
+      {
+        "kind": "release-asset-metadata",
+        "authority": "GitHub Releases API",
+        "locator": "https://api.github.com/repos/GyanD/codexffmpeg/releases/assets/459500679",
+        "claim": "Official asset metadata binds the exact essentials ZIP name and SHA-256 to release tag 8.1.2 without downloading the binary package.",
+        "status": "verified"
+      }
+    ],
+    "blockers": [
+      "Exact external-library versions are absent from the recorded exact-package README metadata.",
+      "No exact configure line, command environment, or package lock is recorded."
+    ]
+  },
+  "toolchain": {
+    "provider_toolchain_family": "UCRT64",
+    "provider_toolchain_family_status": "provider-identified",
+    "ucrt64_environment": true,
+    "ucrt64_environment_status": "provider-identified",
+    "host_os": "unresolved",
+    "host_os_version": "unresolved",
+    "compiler": "unresolved",
+    "compiler_version": "unresolved",
+    "linker": "unresolved",
+    "linker_version": "unresolved",
+    "binutils_version": "unresolved",
+    "runtime_crt": "UCRT",
+    "package_manager": "unresolved",
+    "package_repository_snapshot": "unresolved",
+    "supporting_tools": [],
+    "exact_toolchain_complete": false,
+    "evidence": [
+      {
+        "kind": "provider-changelog",
+        "authority": "Gyan FFmpeg builds",
+        "locator": "https://www.gyan.dev/ffmpeg/builds/",
+        "claim": "Official changelog entry 058 states that builds use UCRT64 toolchain and packages and require UCRT for older Windows compatibility.",
+        "status": "verified"
+      },
+      {
+        "kind": "provider-release-chronology",
+        "authority": "Gyan FFmpeg builds",
+        "locator": "https://www.gyan.dev/ffmpeg/builds/",
+        "claim": "The official builds page places release 8.1.2 after changelog entry 058, supporting UCRT64 applicability while not identifying an exact compiler or package snapshot.",
+        "status": "provider-identified"
+      }
+    ],
+    "blockers": [
+      "Build host and host version are unresolved.",
+      "Exact compiler, compiler version, linker, binutils, and supporting tool versions are unresolved.",
+      "Exact package repository snapshot and dependency package set are unresolved."
+    ]
+  },
+  "configure": {
+    "configuration_string_present": true,
+    "configuration_string_source": "ffmpeg-8.1.2-essentials_build/README.txt#release-essentials-build-configuration",
+    "configuration_string_sha256": "a181d439987d57ae45533de6f64c0226621911542b9b0ae5e824b6202e890d68",
+    "configure_flags_captured": true,
+    "configure_flags_count": 38,
+    "exact_shell_command_identified": false,
+    "environment_variables_identified": false,
+    "include_paths_identified": false,
+    "library_paths_identified": false,
+    "dependency_prefixes_identified": false,
+    "configure_working_directory_identified": false,
+    "command_wrapper_identified": false,
+    "exact_configuration_complete": false,
+    "evidence": [
+      {
+        "kind": "exact-package-readme",
+        "authority": "verified source correspondence",
+        "locator": "legal/source-correspondence.json#packages/ffmpeg/binary_package/provider_metadata_files/README.txt",
+        "claim": "The exact README contains a 38-entry release-essentials configuration matrix; those entries are not an exact shell command.",
+        "status": "verified"
+      },
+      {
+        "kind": "provider-changelog-configuration",
+        "authority": "Gyan FFmpeg builds",
+        "locator": "https://www.gyan.dev/ffmpeg/builds/",
+        "claim": "General changelog configuration wording does not establish command invocation, environment, paths, dependency prefixes, working directory, or wrapper behavior for the exact package.",
+        "status": "partial"
+      },
+      {
+        "kind": "provider-changelog-external-versions",
+        "authority": "Gyan FFmpeg builds",
+        "locator": "https://www.gyan.dev/ffmpeg/builds/",
+        "claim": "General changelog wording about external-library versions does not establish exact dependency inputs or a configure command for the exact package.",
+        "status": "partial"
+      }
+    ],
+    "blockers": [
+      "Configuration entries are captured, but no command-line invocation or shell wrapper is recorded.",
+      "Dependency prefixes, working directory, and command wrapper are unresolved.",
+      "Environment variables, include paths, and library paths are unresolved.",
+      "Exact shell configure command is unresolved."
+    ]
+  },
+  "build_orchestration": {
+    "environment_bootstrap_identified": false,
+    "package_repository_snapshot_identified": false,
+    "dependency_acquisition_identified": false,
+    "dependency_versions_identified": false,
+    "dependency_build_order_identified": false,
+    "ffmpeg_checkout_step_identified": false,
+    "ffmpeg_configure_step_identified": false,
+    "ffmpeg_build_step_identified": false,
+    "packaging_step_identified": false,
+    "checksum_generation_step_identified": false,
+    "complete_historical_recipe_identified": false,
+    "immutable_recipe_ref": "unresolved",
+    "reproducible_entrypoint": "unresolved",
+    "status": "partial",
+    "evidence": [
+      {
+        "kind": "provider-package-metadata",
+        "authority": "verified source correspondence",
+        "locator": "legal/source-correspondence.json#packages/ffmpeg/provider/configuration_evidence",
+        "claim": "Exact-package evidence identifies package characteristics but not dependency acquisition, build order, configure invocation, packaging, or checksum orchestration.",
+        "status": "partial"
+      },
+      {
+        "kind": "release-tree-inspection",
+        "authority": "GitHub Git Data API",
+        "locator": "https://api.github.com/repos/GyanD/codexffmpeg/git/trees/5b8ba5a79b0b5aa6262e686e72b7b749ad0f91bc",
+        "claim": "The immutable release tree contains no provider build script or historical orchestration recipe.",
+        "status": "verified"
+      },
+      {
+        "kind": "repository-role",
+        "authority": "GyanD/codexffmpeg",
+        "locator": "https://raw.githubusercontent.com/GyanD/codexffmpeg/46465995c991fe65c5de853fa79bddec09cd6c37/README.md",
+        "claim": "The repository identifies itself as a support site and release mirror, not as a reproducible build-recipe repository.",
+        "status": "verified"
+      }
+    ],
+    "blockers": [
+      "Complete historical provider build recipe at an immutable ref is unresolved.",
+      "Dependency acquisition, exact versions, build order, and package snapshot are unresolved.",
+      "Exact configure command, environment, paths, prefixes, working directory, and wrapper are unresolved.",
+      "Packaging process and checksum generation remain unresolved.",
+      "Patch set or explicit no-patch evidence is unresolved.",
+      "Reproducible entrypoint and binary-to-recipe correspondence are unresolved."
+    ]
+  },
+  "patch_evidence": {
+    "ffmpeg_core_patch_set_identified": false,
+    "dependency_patch_set_identified": false,
+    "explicit_no_core_patches_statement": false,
+    "explicit_no_dependency_patches_statement": false,
+    "patch_manifest": [],
+    "patch_status": "unresolved",
+    "evidence": [
+      {
+        "kind": "release-tree-inspection-gap",
+        "authority": "GitHub Git Data API",
+        "locator": "https://api.github.com/repos/GyanD/codexffmpeg/git/trees/5b8ba5a79b0b5aa6262e686e72b7b749ad0f91bc",
+        "claim": "No patch file is visible in the release metadata tree, but that absence is not an explicit statement that the core or dependencies were unpatched.",
+        "status": "unresolved"
+      }
+    ],
+    "blockers": [
+      "Dependency patch set and explicit no-patch statement are unresolved.",
+      "FFmpeg core patch set and explicit no-patch statement are unresolved.",
+      "The absence of patch files in the release metadata tree is not no-patch evidence."
+    ]
+  },
+  "reproducibility": {
+    "clean_environment_definition_identified": false,
+    "immutable_dependency_inputs_identified": false,
+    "deterministic_build_controls_identified": false,
+    "build_timestamp_controls_identified": false,
+    "archive_normalization_identified": false,
+    "binary_comparison_method_identified": false,
+    "reproducible_entrypoint_identified": false,
+    "independent_reproduction_performed": false,
+    "binary_reproduced": false,
+    "status": "unresolved",
+    "blockers": [
+      "Binary-to-recipe comparison method is unresolved.",
+      "Clean environment, immutable dependency inputs, and deterministic controls are unresolved.",
+      "No independent reproduction was performed.",
+      "Reproducible build entrypoint is unresolved."
+    ]
+  },
+  "component_coverage": {
+    "ffmpeg_external_components_total": 55,
+    "dedicated_component_evidence_total": 55,
+    "component_level_coverage_complete": true,
+    "provider_versions_complete": false,
+    "immutable_component_inputs_complete": false,
+    "toolchain_complete": false,
+    "configure_complete": false,
+    "build_orchestration_complete": false,
+    "patch_evidence_complete": false,
+    "reproducibility_complete": false,
+    "source_kit_complete": false
+  },
+  "summary": {
+    "exact_package_identified": true,
+    "ffmpeg_core_identified": true,
+    "provider_release_repository_identified": true,
+    "provider_release_metadata_ref_identified": true,
+    "provider_toolchain_family_identified": true,
+    "exact_compiler_identified": false,
+    "exact_compiler_version_identified": false,
+    "exact_supporting_tool_versions_identified": false,
+    "configure_flags_captured": true,
+    "exact_configure_command_identified": false,
+    "historical_build_recipe_identified": false,
+    "exact_dependency_recipe_identified": false,
+    "patch_set_identified": false,
+    "reproducible_entrypoint_identified": false,
+    "toolchain_complete": false,
+    "build_orchestration_complete": false,
+    "source_kit_assembly_authorized": false,
+    "remaining_blockers": [
+      "Exact compiler, linker, supporting-tool versions, and package repository snapshot are unresolved.",
+      "Exact dependency acquisition, version, and build-order recipe is unresolved.",
+      "Exact external-component versions and immutable provider inputs remain unresolved.",
+      "Exact shell configure command, environment, paths, prefixes, working directory, and wrapper are unresolved.",
+      "Historical provider recipe and binary-to-recipe correspondence are unresolved.",
+      "Patch set or explicit no-patch statements are unresolved.",
+      "Reproducible entrypoint and deterministic build controls are unresolved."
+    ]
+  },
+  "gate_state": {
+    "legal_compliance_certified": false,
+    "source_availability_certified": false,
+    "source_assets_created": false,
+    "source_kits_ready": false,
+    "assembly_authorized": false,
+    "release_gate_reconsideration_allowed": false,
+    "publishing_allowed": false
+  }
+}

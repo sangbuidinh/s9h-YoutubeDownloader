@@ -105,3 +105,13 @@ The aria2 verifier owns aria2 data and shared gates, the codec verifier owns the
 FFmpeg GMP and zlib are distinct from package-scoped aria2 records, and libssh is distinct from aria2 libssh2. No provider archive hash was accepted, no source archive was committed, and feasibility counts remain unchanged. Dedicated FFmpeg evidence-batch coverage is now **Codec batch: 16, Support batch: 14, Hardware/system batch: 14, Remaining-library batch: 11, Total dedicated component coverage: 55/55**. Component-level coverage does not resolve versions, toolchain, build orchestration, or source-kit completion.
 
 The aria2 verifier owns aria2 data and shared gates, the codec verifier owns the 16 codec records, the support verifier owns the 14 support records, the hardware/system verifier owns the 14 hardware/system records, the remaining-library verifier owns this 11-component batch, and the general feasibility verifier owns overall schema and readiness. No component verifier permanently freezes unrelated future evidence. Provider versions complete: false. Toolchain complete: false. Build orchestration complete: false. Source-kit completeness: false. No source kit was assembled. Assembly remains unauthorized, publishing remains blocked, existing releases are not retroactively certified, and this is not legal advice.
+
+## Phase 6B2B2A2 - FFmpeg provider toolchain and build-orchestration feasibility
+
+Phase 6B2B2A2 does not modify the conservative source-input inventory, and prior component verifiers retain ownership of the unchanged inventory. Detailed provider toolchain and orchestration research is stored in `legal/ffmpeg-provider-build-feasibility.json`. No readiness status changed.
+
+Provider release metadata is not a build recipe. UCRT64 is not an exact compiler identity. The exact package README contains 38 configuration entries, but configuration flags are not a complete configure command. Exact dependency versions remain unresolved. Exact compiler and supporting-tool versions remain unresolved. Exact package repository snapshot remains unresolved. Patch evidence remains unresolved. Reproducibility remains unresolved.
+
+Component evidence coverage: 55/55. Provider versions complete: false. Exact toolchain complete: false. Exact configure command complete: false. Build orchestration complete: false. Patch evidence complete: false. Reproducibility complete: false. The source kit remains incomplete.
+
+No build was performed, no binary was reproduced, and no source kit was assembled. Assembly remains unauthorized, publishing remains blocked, existing releases are not retroactively certified, and this is not legal advice.
