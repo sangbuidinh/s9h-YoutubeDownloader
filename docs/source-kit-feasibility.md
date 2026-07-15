@@ -65,6 +65,40 @@ This evidence assessment is not legal advice.
 
 The five system-facing candidates are `d3d11va`, `d3d12va`, `dxva2`, `mediafoundation`, and `vaapi`. The generated external-component resolution buckets contain `0` verified immutable inputs, `55` partially identified inputs, and `0` wholly unresolved records. Every partial record still has unresolved version or upstream-identity fields; this classification preserves provider evidence without treating a name as complete source correspondence.
 
+## Phase 6B2B2A1b - FFmpeg codec primary-source research
+
+Sixteen FFmpeg codec-library names were reviewed against the exact Gyan FFmpeg 8.1.2 Essentials package evidence and official upstream project authorities. The Gyan package identifies the component names and static linkage, but exact provider dependency versions remain unresolved. Official upstream project identification does not prove provider use of a particular version, release, commit, or archive.
+
+| Component | Provider version | Upstream project identified | Provider-to-upstream mapping | Resolution status | Blocking gap |
+| --- | --- | --- | --- | --- | --- |
+| `libaom` | unresolved | Alliance for Open Media AV1 codec | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libgsm` | unresolved | GSM 06.10 reference implementation | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libmp3lame` | unresolved | LAME | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libopencore-amrnb` | unresolved | opencore-amr | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libopencore-amrwb` | unresolved | opencore-amr | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libopenjpeg` | unresolved | OpenJPEG | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libopus` | unresolved | Opus | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libspeex` | unresolved | Speex | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libtheora` | unresolved | Theora | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libvo-amrwbenc` | unresolved | VisualOn AMR-WB encoder library | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libvorbis` | unresolved | Vorbis | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libvpx` | unresolved | WebM libvpx | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libwebp` | unresolved | WebP codec library | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libx264` | unresolved | x264 | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libx265` | unresolved | x265 | unresolved | identified-name-only | Exact provider component version is unresolved. |
+| `libxvid` | unresolved | Xvid | unresolved | identified-name-only | Exact provider component version is unresolved. |
+
+The evidence totals are:
+
+- Provider versions verified: 0
+- Verified immutable inputs: 0
+- Identified-name-only inputs: 16
+- Provider source archive hashes verified: 0
+
+No component was promoted and the feasibility counts remain unchanged. No source archive hash was accepted as a provider input, no source archive was committed, and no source kit was assembled. The exact historical recipe, toolchain, configure command, and patch set remain unresolved.
+
+The aria2 verifier owns aria2 semantics and shared gates; the FFmpeg codec batch verifier owns this 16-component evidence batch. Neither verifier weakens the general source-kit feasibility gate. Assembly remains unauthorized, publishing remains blocked, and existing releases are not retroactively certified. This is not legal advice.
+
 ## Toolchain gaps
 
 The aria2 provider metadata identifies an Ubuntu Linux mingw-w64 static cross-build, but it does not establish exact compiler and supporting-tool versions. The FFmpeg provider metadata identifies a 64-bit static GPLv3 package, but the build host, compiler, compiler version, and supporting tools remain unresolved.

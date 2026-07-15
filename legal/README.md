@@ -73,3 +73,11 @@ No source archive or source kit was created, and no source kit was assembled. So
 The official source archives for all six components were downloaded temporarily outside the repository and independently hashed. They were not committed and were not assembled into a source kit. Provider identification is not the same as immutable upstream resolution, and upstream resolution does not prove exact provider build reproduction. Archive hashing does not prove that the binary incorporated unmodified source.
 
 No source kit was assembled. Toolchain and build orchestration remain incomplete, assembly remains unauthorized, publishing remains blocked, and existing releases are not retroactively certified. This is not legal advice.
+
+## Phase 6B2B2A1b FFmpeg codec primary-source research
+
+`legal/primary-source-evidence-ffmpeg-codecs.json` records contextual official-upstream research for 16 FFmpeg codec-library names identified with static linkage by the exact Gyan package metadata. Exact provider dependency versions remain unresolved, official upstream project identification does not prove provider use, and no component was promoted.
+
+The exact result is **0 provider versions verified, 0 verified immutable inputs, 16 identified-name-only inputs, and 0 provider source archive hashes verified**. Feasibility counts remain unchanged. No source archive hash was accepted as a provider input, no source archive was committed, and no source kit was assembled.
+
+The aria2 verifier owns aria2 semantics and shared gates; the FFmpeg batch verifier owns this FFmpeg evidence batch. Neither weakens the general source-kit feasibility gate. The exact historical recipe, toolchain, configure command, and patch set remain unresolved. Assembly remains unauthorized, publishing remains blocked, existing releases are not retroactively certified, and this is not legal advice.

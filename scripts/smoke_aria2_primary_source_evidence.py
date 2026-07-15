@@ -58,6 +58,7 @@ class Fixture:
 
 def main() -> int:
     verifier.verify_repository(ROOT)
+    _expect_ffmpeg_only_refinement_accepted()
     cases: list[tuple[str, Callable[[Fixture], None]]] = [
         ("missing component", lambda f: _primary(f, lambda d: d["components"].pop())),
         ("duplicate component", lambda f: _primary(f, lambda d: d["components"].insert(1, copy.deepcopy(d["components"][0])))),
@@ -65,6 +66,9 @@ def main() -> int:
         ("changed provider version", lambda f: _component_mutation(f, "c-ares", lambda c: c.__setitem__("provider_version", "1.19.2"))),
         ("changed static linkage", lambda f: _component_mutation(f, "c-ares", lambda c: c.__setitem__("provider_linkage", "dynamic"))),
         ("changed aria2 binary hash", lambda f: _primary(f, lambda d: d.__setitem__("binary_package_sha256", "0" * 64))),
+        ("changed aria2 core commit", _change_aria2_core_commit),
+        ("changed aria2 inventory component version", lambda f: _inventory_component(f, "c-ares", lambda c: c.__setitem__("provider_version", "1.19.2"))),
+        ("changed aria2 inventory resolution status", lambda f: _inventory_component(f, "c-ares", lambda c: c.__setitem__("resolution_status", "identified-version-only"))),
         ("mutable ref main", lambda f: _identity_value(f, "c-ares", "main")),
         ("mutable ref master", lambda f: _identity_value(f, "c-ares", "master")),
         ("mutable ref latest", lambda f: _identity_value(f, "c-ares", "latest")),
@@ -83,6 +87,7 @@ def main() -> int:
         ("evidence inventory archive mismatch", lambda f: _inventory_component(f, "c-ares", lambda c: c.__setitem__("source_archive_sha256", "1" * 64))),
         ("evidence feasibility count mismatch", lambda f: _primary(f, lambda d: d["summary"].__setitem__("verified_immutable_inputs", ["c-ares", "expat", "libssh2", "sqlite"]))),
         ("modified FFmpeg record", _modify_ffmpeg),
+        ("FFmpeg-only mutation changes shared gate", _change_shared_inventory_gate),
         ("source kits ready", lambda f: _gate_flag(f, "source_kits_ready")),
         ("assembly authorized", lambda f: _gate_flag(f, "assembly_authorized")),
         ("release gate reconsideration allowed", lambda f: _gate_flag(f, "release_gate_reconsideration_allowed")),
@@ -107,12 +112,77 @@ def main() -> int:
         ("GMP unofficial mirror only", _gmp_unofficial_only),
         ("stale generated feasibility bytes", _stale_feasibility),
     ]
-    if len(cases) != 47:
-        raise AssertionError(f"expected 47 negative cases, found {len(cases)}")
+    if len(cases) != 51:
+        raise AssertionError(f"expected 51 negative cases, found {len(cases)}")
     for name, mutation in cases:
         _expect_rejected(name, mutation)
     print("aria2 primary-source evidence smoke tests passed")
     return 0
+
+
+def _expect_ffmpeg_only_refinement_accepted() -> None:
+    with tempfile.TemporaryDirectory(prefix="s9h-aria2-boundary-smoke-") as raw:
+        fixture = Fixture(Path(raw))
+        document = fixture.json("source-input-inventory")
+        ffmpeg = next(item for item in document["packages"] if item["id"] == "ffmpeg")
+        component = next(
+            item for item in ffmpeg["external_components"] if item["id"] == "libass"
+        )
+        structural = {
+            key: copy.deepcopy(component[key])
+            for key in (
+                "provider_version",
+                "version_status",
+                "upstream_repository",
+                "immutable_ref",
+                "source_archive_sha256",
+                "resolution_status",
+            )
+        }
+        expected_structural = {
+            "provider_version": "unresolved",
+            "version_status": "unresolved",
+            "upstream_repository": "unresolved",
+            "immutable_ref": "unresolved",
+            "source_archive_sha256": "unresolved",
+            "resolution_status": "identified-name-only",
+        }
+        if structural != expected_structural:
+            raise AssertionError(
+                "positive FFmpeg fixture is not unresolved/name-only"
+            )
+        component["evidence"].append(
+            {
+                "kind": "official-upstream-research",
+                "authority": "libass project",
+                "locator": "https://github.com/libass/libass",
+                "claim": "Official upstream identity was researched contextually without claiming a provider version or provider-selected input.",
+                "status": "partial",
+            }
+        )
+        component["evidence"] = sorted(
+            component["evidence"],
+            key=lambda record: tuple(record[key] for key in verifier.EVIDENCE_KEYS),
+        )
+        component["blockers"] = sorted(
+            set(
+                component["blockers"]
+                + [
+                    "Exact provider-to-upstream source mapping remains unresolved after contextual research."
+                ]
+            )
+        )
+        fixture.write_json("source-input-inventory", document)
+        _require_structural_state(component, structural)
+        verifier.verify_repository(ROOT, overrides=fixture.paths)
+
+
+def _require_structural_state(
+    component: dict[str, Any], expected: dict[str, Any]
+) -> None:
+    actual = {key: component[key] for key in expected}
+    if actual != expected:
+        raise AssertionError("positive FFmpeg refinement changed structural state")
 
 
 def _expect_rejected(name: str, mutation: Callable[[Fixture], None]) -> None:
@@ -200,7 +270,24 @@ def _promote_gmp_inventory(fixture: Fixture) -> None:
 def _modify_ffmpeg(fixture: Fixture) -> None:
     def mutate(document: dict[str, Any]) -> None:
         ffmpeg = next(item for item in document["packages"] if item["id"] == "ffmpeg")
-        ffmpeg["core_source"]["evidence"][0]["claim"] += " Changed."
+        ffmpeg["package_status"] = "ready"
+    fixture.mutate_json("source-input-inventory", mutate)
+
+
+def _change_shared_inventory_gate(fixture: Fixture) -> None:
+    fixture.mutate_json(
+        "source-input-inventory",
+        lambda document: document.__setitem__(
+            "release_gate_reconsideration_allowed", True
+        ),
+    )
+
+
+def _change_aria2_core_commit(fixture: Fixture) -> None:
+    def mutate(document: dict[str, Any]) -> None:
+        aria2 = next(item for item in document["packages"] if item["id"] == "aria2")
+        aria2["core_source"]["commit"] = "1" * 40
+
     fixture.mutate_json("source-input-inventory", mutate)
 
 

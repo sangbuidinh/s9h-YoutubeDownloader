@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import subprocess
@@ -15,7 +14,9 @@ import audit_source_kit_feasibility as feasibility_audit
 
 BASELINE = "323dec5c118b62d78dde1f9a38d525ad44a5255f"
 PACKAGE_HASH = "67d015301eef0b612191212d564c5bb0a14b5b9c4796b76454276a4d28d9b288"
-FFMPEG_HASH = "c1b41ee30f663806f8bd1fffbd378dc7f90b6b0f80b210af8553b0ae01bbcdad"
+CORE_REPOSITORY = "aria2/aria2"
+CORE_COMMIT = "02f2d0d8472b3c38c29b4dba8c75ebd5fdd2899a"
+CORE_ARCHIVE_HASH = "f0839604196b45959f72f766fdfa9df5eae6c292d48020c6475ca7eacd5d15e7"
 TOP_KEYS = (
     "schema_version", "target_phase", "baseline_commit", "package_id",
     "binary_package_sha256", "provider_evidence", "research_policy",
@@ -193,6 +194,10 @@ def _verify_primary(document: dict[str, Any], correspondence: dict[str, Any]) ->
     provider = document["provider_evidence"]
     _require(isinstance(provider, dict) and tuple(provider) == PROVIDER_KEYS, "provider evidence schema is invalid")
     aria2_source = next(item for item in correspondence["packages"] if item["id"] == "aria2")
+    _require(aria2_source["binary_package"]["sha256"] == PACKAGE_HASH, "source correspondence aria2 hash changed")
+    _require(aria2_source["core_source"]["repository"] == CORE_REPOSITORY, "source correspondence aria2 repository changed")
+    _require(aria2_source["core_source"]["commit"] == CORE_COMMIT, "source correspondence aria2 commit changed")
+    _require(aria2_source["core_source"]["archive_sha256"] == CORE_ARCHIVE_HASH, "source correspondence aria2 archive changed")
     _require(provider == {
         "source_document": "legal/source-correspondence.json#packages/aria2/provider",
         "provider_name": aria2_source["provider"]["name"],
@@ -320,9 +325,26 @@ def _verify_summary(summary: Any, components: list[dict[str, Any]]) -> None:
 
 
 def _verify_inventory(primary: dict[str, Any], inventory: dict[str, Any]) -> None:
+    for key in (
+        "release_gate_reconsideration_allowed",
+        "legal_compliance_certified",
+        "source_assets_created",
+    ):
+        _require(inventory[key] is False, f"inventory shared gate must remain false: {key}")
+    _require(
+        all(package["package_status"] == "blocked" for package in inventory["packages"]),
+        "source input package gate changed",
+    )
     aria2 = next(item for item in inventory["packages"] if item["id"] == "aria2")
-    ffmpeg = next(item for item in inventory["packages"] if item["id"] == "ffmpeg")
+    _require(aria2["id"] == "aria2", "inventory aria2 package ID changed")
     _require(aria2["binary_package_sha256"] == PACKAGE_HASH, "inventory aria2 hash changed")
+    core = aria2["core_source"]
+    _require(core["repository"] == CORE_REPOSITORY, "inventory aria2 core repository changed")
+    _require(core["commit"] == CORE_COMMIT, "inventory aria2 core commit changed")
+    _require(core["archive_sha256"] == CORE_ARCHIVE_HASH, "inventory aria2 core archive changed")
+    _require(core["license_path"] == "COPYING", "inventory aria2 core license path changed")
+    _require(core["status"] == "verified" and core["blockers"] == [], "inventory aria2 core state changed")
+    _evidence(core["evidence"], "aria2 core source")
     records = {item["id"]: item for item in aria2["external_components"]}
     evidence = {item["id"]: item for item in primary["components"]}
     _require(tuple(sorted(records)) == IDS, "inventory component set changed")
@@ -341,8 +363,17 @@ def _verify_inventory(primary: dict[str, Any], inventory: dict[str, Any]) -> Non
             _require(record["version_status"] == "provider-identified", "GMP inventory version status changed")
             _require(record["upstream_repository"] == record["immutable_ref"] == record["source_archive_sha256"] == "unresolved", "GMP promotion fields must remain unresolved")
             _require(record["resolution_status"] == "identified-version-only" and _sorted_nonempty(record["blockers"]), "GMP inventory state is inconsistent")
-    ffmpeg_bytes = (json.dumps(ffmpeg, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-    _require(hashlib.sha256(ffmpeg_bytes).hexdigest() == FFMPEG_HASH, "FFmpeg inventory record changed")
+        _evidence(record["evidence"], f"aria2 inventory {cid}")
+    toolchain = aria2["toolchain"]
+    _require(toolchain["host"] == "Ubuntu Linux" and toolchain["compiler"] == "mingw-w64", "aria2 toolchain identity changed")
+    _require(toolchain["compiler_version"] == "unresolved" and toolchain["status"] == "partial", "aria2 toolchain state changed")
+    _require(_sorted_nonempty(toolchain["blockers"]), "aria2 toolchain blockers are missing")
+    orchestration = aria2["build_orchestration"]
+    for key in ("provider_repository", "immutable_ref", "exact_configuration", "patch_status", "reproducible_entrypoint"):
+        _require(orchestration[key] == "unresolved", f"aria2 build orchestration field changed: {key}")
+    _require(orchestration["status"] == "partial" and _sorted_nonempty(orchestration["blockers"]), "aria2 build orchestration state changed")
+    _require(aria2["package_status"] == "blocked", "aria2 package is not blocked")
+    _require(_sorted_nonempty(aria2["blockers"]), "aria2 package blockers are missing")
 
 
 def _verify_feasibility(
@@ -356,9 +387,14 @@ def _verify_feasibility(
         _require(feasibility[key] is False, f"feasibility flag must remain false: {key}")
     _require(feasibility["overall_status"] == "blocked-inventory-recorded" and feasibility["next_phase"] == "6B2B2B-not-authorized", "feasibility gate state changed")
     aria2 = next(item for item in feasibility["packages"] if item["id"] == "aria2")
+    _require(aria2["binary_package_sha256"] == PACKAGE_HASH, "aria2 feasibility package hash changed")
+    _require(aria2["total_external_components"] == 6, "aria2 feasibility component count changed")
+    _require(aria2["static_components"] == list(IDS) and aria2["system_components"] == [], "aria2 feasibility component set changed")
     _require(aria2["verified_immutable_inputs"] == primary["summary"]["verified_immutable_inputs"], "evidence/feasibility verified mismatch")
     _require(aria2["partially_identified_inputs"] == primary["summary"]["partial_inputs"], "evidence/feasibility partial mismatch")
     _require(aria2["unresolved_inputs"] == primary["summary"]["unresolved_inputs"], "evidence/feasibility unresolved mismatch")
+    _require(aria2["toolchain_status"] == "partial", "aria2 feasibility toolchain state changed")
+    _require(aria2["build_orchestration_status"] == "partial", "aria2 feasibility build orchestration state changed")
     _require(aria2["source_kit_status"] == "not-ready", "aria2 source kit must remain not ready")
 
 

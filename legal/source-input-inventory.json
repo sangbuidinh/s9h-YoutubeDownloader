@@ -706,6 +706,13 @@
           "source_archive_sha256": "unresolved",
           "evidence": [
             {
+              "kind": "official-upstream-research",
+              "authority": "Alliance for Open Media AV1 codec",
+              "locator": "https://aomedia.googlesource.com/aom",
+              "claim": "Official upstream identity for libaom was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
               "kind": "provider-package-metadata",
               "authority": "Gyan FFmpeg builds",
               "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libaom",
@@ -715,9 +722,9 @@
           ],
           "resolution_status": "identified-name-only",
           "blockers": [
-            "Exact immutable upstream source ref is unresolved.",
-            "Independent source archive SHA-256 is unresolved.",
-            "Official upstream repository is unresolved."
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
           ]
         },
         {
@@ -850,6 +857,13 @@
           "source_archive_sha256": "unresolved",
           "evidence": [
             {
+              "kind": "official-upstream-research",
+              "authority": "GSM 06.10 reference implementation",
+              "locator": "https://www.quut.com/gsm/",
+              "claim": "Official upstream identity for libgsm was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
               "kind": "provider-package-metadata",
               "authority": "Gyan FFmpeg builds",
               "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libgsm",
@@ -859,9 +873,9 @@
           ],
           "resolution_status": "identified-name-only",
           "blockers": [
-            "Exact immutable upstream source ref is unresolved.",
-            "Independent source archive SHA-256 is unresolved.",
-            "Official upstream repository is unresolved."
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
           ]
         },
         {
@@ -922,6 +936,13 @@
           "source_archive_sha256": "unresolved",
           "evidence": [
             {
+              "kind": "official-upstream-research",
+              "authority": "LAME",
+              "locator": "https://svn.code.sf.net/p/lame/svn/",
+              "claim": "Official upstream identity for libmp3lame was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
               "kind": "provider-package-metadata",
               "authority": "Gyan FFmpeg builds",
               "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libmp3lame",
@@ -931,9 +952,9 @@
           ],
           "resolution_status": "identified-name-only",
           "blockers": [
-            "Exact immutable upstream source ref is unresolved.",
-            "Independent source archive SHA-256 is unresolved.",
-            "Official upstream repository is unresolved."
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
           ]
         },
         {
@@ -946,18 +967,25 @@
           "source_archive_sha256": "unresolved",
           "evidence": [
             {
+              "kind": "official-upstream-research",
+              "authority": "opencore-amr",
+              "locator": "https://git.code.sf.net/p/opencore-amr/code",
+              "claim": "Official upstream identity for libopencore-amrnb was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
               "kind": "provider-package-metadata",
               "authority": "Gyan FFmpeg builds",
               "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libopencore-amrnb",
-              "claim": "Provider metadata identifies component libopencore_amrnb with static linkage but does not identify a version.",
+              "claim": "Provider metadata identifies component libopencore-amrnb with static linkage but does not identify a version.",
               "status": "partial"
             }
           ],
           "resolution_status": "identified-name-only",
           "blockers": [
-            "Exact immutable upstream source ref is unresolved.",
-            "Independent source archive SHA-256 is unresolved.",
-            "Official upstream repository is unresolved."
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
           ]
         },
         {
@@ -970,18 +998,25 @@
           "source_archive_sha256": "unresolved",
           "evidence": [
             {
+              "kind": "official-upstream-research",
+              "authority": "opencore-amr",
+              "locator": "https://git.code.sf.net/p/opencore-amr/code",
+              "claim": "Official upstream identity for libopencore-amrwb was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
               "kind": "provider-package-metadata",
               "authority": "Gyan FFmpeg builds",
               "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libopencore-amrwb",
-              "claim": "Provider metadata identifies component libopencore_amrwb with static linkage but does not identify a version.",
+              "claim": "Provider metadata identifies component libopencore-amrwb with static linkage but does not identify a version.",
               "status": "partial"
             }
           ],
           "resolution_status": "identified-name-only",
           "blockers": [
-            "Exact immutable upstream source ref is unresolved.",
-            "Independent source archive SHA-256 is unresolved.",
-            "Official upstream repository is unresolved."
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
           ]
         },
         {
@@ -994,6 +1029,13 @@
           "source_archive_sha256": "unresolved",
           "evidence": [
             {
+              "kind": "official-upstream-research",
+              "authority": "OpenJPEG",
+              "locator": "https://github.com/uclouvain/openjpeg",
+              "claim": "Official upstream identity for libopenjpeg was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
               "kind": "provider-package-metadata",
               "authority": "Gyan FFmpeg builds",
               "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libopenjpeg",
@@ -1003,9 +1045,9 @@
           ],
           "resolution_status": "identified-name-only",
           "blockers": [
-            "Exact immutable upstream source ref is unresolved.",
-            "Independent source archive SHA-256 is unresolved.",
-            "Official upstream repository is unresolved."
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
           ]
         },
         {
@@ -1042,6 +1084,13 @@
           "source_archive_sha256": "unresolved",
           "evidence": [
             {
+              "kind": "official-upstream-research",
+              "authority": "Opus",
+              "locator": "https://github.com/xiph/opus",
+              "claim": "Official upstream identity for libopus was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
               "kind": "provider-package-metadata",
               "authority": "Gyan FFmpeg builds",
               "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libopus",
@@ -1051,9 +1100,9 @@
           ],
           "resolution_status": "identified-name-only",
           "blockers": [
-            "Exact immutable upstream source ref is unresolved.",
-            "Independent source archive SHA-256 is unresolved.",
-            "Official upstream repository is unresolved."
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
           ]
         },
         {
@@ -1090,6 +1139,13 @@
           "source_archive_sha256": "unresolved",
           "evidence": [
             {
+              "kind": "official-upstream-research",
+              "authority": "Speex",
+              "locator": "https://github.com/xiph/speex",
+              "claim": "Official upstream identity for libspeex was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
               "kind": "provider-package-metadata",
               "authority": "Gyan FFmpeg builds",
               "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libspeex",
@@ -1099,9 +1155,9 @@
           ],
           "resolution_status": "identified-name-only",
           "blockers": [
-            "Exact immutable upstream source ref is unresolved.",
-            "Independent source archive SHA-256 is unresolved.",
-            "Official upstream repository is unresolved."
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
           ]
         },
         {
@@ -1162,6 +1218,13 @@
           "source_archive_sha256": "unresolved",
           "evidence": [
             {
+              "kind": "official-upstream-research",
+              "authority": "Theora",
+              "locator": "https://github.com/xiph/theora",
+              "claim": "Official upstream identity for libtheora was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
               "kind": "provider-package-metadata",
               "authority": "Gyan FFmpeg builds",
               "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libtheora",
@@ -1171,9 +1234,9 @@
           ],
           "resolution_status": "identified-name-only",
           "blockers": [
-            "Exact immutable upstream source ref is unresolved.",
-            "Independent source archive SHA-256 is unresolved.",
-            "Official upstream repository is unresolved."
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
           ]
         },
         {
@@ -1234,18 +1297,25 @@
           "source_archive_sha256": "unresolved",
           "evidence": [
             {
+              "kind": "official-upstream-research",
+              "authority": "VisualOn AMR-WB encoder library",
+              "locator": "https://github.com/mstorsjo/vo-amrwbenc",
+              "claim": "Official upstream identity for libvo-amrwbenc was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
               "kind": "provider-package-metadata",
               "authority": "Gyan FFmpeg builds",
               "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvo-amrwbenc",
-              "claim": "Provider metadata identifies component libvo_amrwbenc with static linkage but does not identify a version.",
+              "claim": "Provider metadata identifies component libvo-amrwbenc with static linkage but does not identify a version.",
               "status": "partial"
             }
           ],
           "resolution_status": "identified-name-only",
           "blockers": [
-            "Exact immutable upstream source ref is unresolved.",
-            "Independent source archive SHA-256 is unresolved.",
-            "Official upstream repository is unresolved."
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
           ]
         },
         {
@@ -1258,6 +1328,13 @@
           "source_archive_sha256": "unresolved",
           "evidence": [
             {
+              "kind": "official-upstream-research",
+              "authority": "Vorbis",
+              "locator": "https://github.com/xiph/vorbis",
+              "claim": "Official upstream identity for libvorbis was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
               "kind": "provider-package-metadata",
               "authority": "Gyan FFmpeg builds",
               "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvorbis",
@@ -1267,9 +1344,9 @@
           ],
           "resolution_status": "identified-name-only",
           "blockers": [
-            "Exact immutable upstream source ref is unresolved.",
-            "Independent source archive SHA-256 is unresolved.",
-            "Official upstream repository is unresolved."
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
           ]
         },
         {
@@ -1306,6 +1383,13 @@
           "source_archive_sha256": "unresolved",
           "evidence": [
             {
+              "kind": "official-upstream-research",
+              "authority": "WebM libvpx",
+              "locator": "https://chromium.googlesource.com/webm/libvpx",
+              "claim": "Official upstream identity for libvpx was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
               "kind": "provider-package-metadata",
               "authority": "Gyan FFmpeg builds",
               "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvpx",
@@ -1315,9 +1399,9 @@
           ],
           "resolution_status": "identified-name-only",
           "blockers": [
-            "Exact immutable upstream source ref is unresolved.",
-            "Independent source archive SHA-256 is unresolved.",
-            "Official upstream repository is unresolved."
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
           ]
         },
         {
@@ -1330,6 +1414,13 @@
           "source_archive_sha256": "unresolved",
           "evidence": [
             {
+              "kind": "official-upstream-research",
+              "authority": "WebP codec library",
+              "locator": "https://chromium.googlesource.com/webm/libwebp",
+              "claim": "Official upstream identity for libwebp was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
               "kind": "provider-package-metadata",
               "authority": "Gyan FFmpeg builds",
               "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libwebp",
@@ -1339,9 +1430,9 @@
           ],
           "resolution_status": "identified-name-only",
           "blockers": [
-            "Exact immutable upstream source ref is unresolved.",
-            "Independent source archive SHA-256 is unresolved.",
-            "Official upstream repository is unresolved."
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
           ]
         },
         {
@@ -1354,6 +1445,13 @@
           "source_archive_sha256": "unresolved",
           "evidence": [
             {
+              "kind": "official-upstream-research",
+              "authority": "x264",
+              "locator": "https://code.videolan.org/videolan/x264",
+              "claim": "Official upstream identity for libx264 was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
               "kind": "provider-package-metadata",
               "authority": "Gyan FFmpeg builds",
               "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libx264",
@@ -1363,9 +1461,9 @@
           ],
           "resolution_status": "identified-name-only",
           "blockers": [
-            "Exact immutable upstream source ref is unresolved.",
-            "Independent source archive SHA-256 is unresolved.",
-            "Official upstream repository is unresolved."
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
           ]
         },
         {
@@ -1378,6 +1476,13 @@
           "source_archive_sha256": "unresolved",
           "evidence": [
             {
+              "kind": "official-upstream-research",
+              "authority": "x265",
+              "locator": "https://bitbucket.org/multicoreware/x265_git",
+              "claim": "Official upstream identity for libx265 was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
               "kind": "provider-package-metadata",
               "authority": "Gyan FFmpeg builds",
               "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libx265",
@@ -1387,9 +1492,9 @@
           ],
           "resolution_status": "identified-name-only",
           "blockers": [
-            "Exact immutable upstream source ref is unresolved.",
-            "Independent source archive SHA-256 is unresolved.",
-            "Official upstream repository is unresolved."
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
           ]
         },
         {
@@ -1426,6 +1531,13 @@
           "source_archive_sha256": "unresolved",
           "evidence": [
             {
+              "kind": "official-upstream-research",
+              "authority": "Xvid",
+              "locator": "https://labs.xvid.com/source/",
+              "claim": "Official upstream identity for libxvid was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
               "kind": "provider-package-metadata",
               "authority": "Gyan FFmpeg builds",
               "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libxvid",
@@ -1435,9 +1547,9 @@
           ],
           "resolution_status": "identified-name-only",
           "blockers": [
-            "Exact immutable upstream source ref is unresolved.",
-            "Independent source archive SHA-256 is unresolved.",
-            "Official upstream repository is unresolved."
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
           ]
         },
         {
