@@ -173,6 +173,54 @@ The aria2 verifier owns aria2 data and shared gates. The codec verifier owns the
 
 Assembly remains unauthorized, publishing remains blocked, and existing releases are not retroactively certified. This is not legal advice.
 
+## Phase 6B2B2A1e - FFmpeg compression, security, networking and remaining library evidence
+
+Provider metadata identifies component names and static linkage for the final 11 FFmpeg external-library records. Exact provider dependency versions remain unresolved. Official upstream material supplies contextual project, interface and licensing evidence, but upstream project identification does not prove provider use and no component was promoted.
+
+| Component ID | Functional class | Provider label interpretation | Official authority | Provider version | Provider-to-official mapping | Source-kit treatment | Resolution status | Blocker summary |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `avisynth` | scripting-integration | May identify an AviSynth integration API; the exact AviSynth or AviSynth+ implementation is unresolved. | AviSynth project | unresolved | unresolved | source-or-sdk-input-requires-version-resolution | identified-name-only | Exact implementation, API version, provider version and immutable input are unresolved. |
+| `bzlib` | compression-library | Corresponds contextually to bzip2 compression support. | bzip2 project | unresolved | unresolved | source-archive-required-if-version-resolved | identified-name-only | Exact mapping from `bzlib` to a provider-selected bzip2 input is unresolved. |
+| `gmp` | arithmetic-library | Corresponds contextually to GNU GMP; aria2 GMP evidence is not reused. | GNU MP project | unresolved | unresolved | source-archive-required-if-version-resolved | identified-name-only | Package-scoped FFmpeg GMP version and immutable input are unresolved. |
+| `gnutls` | tls-crypto-library | Corresponds contextually to GnuTLS support. | GnuTLS project | unresolved | unresolved | source-archive-required-if-version-resolved | identified-name-only | Exact provider-selected version and immutable input are unresolved. |
+| `libsrt` | network-transport-library | Corresponds contextually to Secure Reliable Transport. | Haivision SRT project | unresolved | unresolved | source-archive-required-if-version-resolved | identified-name-only | Exact provider-selected version and immutable input are unresolved. |
+| `libssh` | secure-shell-library | Identifies libssh, not libssh2; aria2 libssh2 evidence is not reused. | libssh project | unresolved | unresolved | source-archive-required-if-version-resolved | identified-name-only | Exact provider-selected libssh version and immutable input are unresolved. |
+| `libvidstab` | video-processing-library | Corresponds contextually to vid.stab. | vid.stab project | unresolved | unresolved | source-archive-required-if-version-resolved | identified-name-only | Exact provider-selected version and immutable input are unresolved. |
+| `libvmaf` | quality-analysis-library | Corresponds contextually to VMAF and libvmaf. | Netflix VMAF project | unresolved | unresolved | source-archive-required-if-version-resolved | identified-name-only | Exact provider-selected version and immutable input are unresolved. |
+| `libzmq` | messaging-library | Corresponds contextually to ZeroMQ and libzmq. | ZeroMQ project | unresolved | unresolved | source-archive-required-if-version-resolved | identified-name-only | Exact provider-selected version and immutable input are unresolved. |
+| `lzma` | compression-library | Corresponds contextually to liblzma and XZ compression support. | XZ Utils project | unresolved | unresolved | source-archive-required-if-version-resolved | identified-name-only | Exact liblzma or XZ provider version and immutable input are unresolved. |
+| `zlib` | compression-library | Corresponds contextually to zlib; aria2 zlib evidence is not reused. | zlib project | unresolved | unresolved | source-archive-required-if-version-resolved | identified-name-only | Package-scoped FFmpeg zlib version and immutable input are unresolved. |
+
+The exact batch totals are:
+
+- Current batch components: 11
+- Static components: 11
+- Provider versions verified: 0
+- Verified immutable inputs: 0
+- Identified-name-only inputs: 11
+- Provider source archive hashes verified: 0
+
+Overall FFmpeg component coverage is:
+
+- Codec batch: 16
+- Support batch: 14
+- Hardware/system batch: 14
+- Remaining-library batch: 11
+- Total dedicated component coverage: 55/55
+
+Still unresolved:
+
+- Provider versions complete: false
+- Toolchain complete: false
+- Build orchestration complete: false
+- Source-kit completeness: false
+
+No provider archive hash was accepted, no source archive was committed, and feasibility counts remain unchanged. FFmpeg GMP and zlib are distinct from package-scoped aria2 records. libssh is distinct from aria2 libssh2. All 55 FFmpeg external components now have dedicated evidence-batch coverage, but component-level coverage does not mean versions are resolved. Component-level coverage does not mean toolchain is resolved. Component-level coverage does not mean build orchestration is resolved. Component-level coverage does not establish source-kit completeness.
+
+The aria2 verifier owns aria2 data and shared gates. The codec verifier owns the 16 codec records. The support verifier owns the 14 support records. The hardware/system verifier owns the 14 hardware/system records. The remaining-library verifier owns this 11-component batch. The general feasibility verifier owns overall schema and readiness. No component verifier permanently freezes unrelated future evidence.
+
+No source kit was assembled. Assembly remains unauthorized, publishing remains blocked, and existing releases are not retroactively certified. This is not legal advice.
+
 ## Toolchain gaps
 
 The aria2 provider metadata identifies an Ubuntu Linux mingw-w64 static cross-build, but it does not establish exact compiler and supporting-tool versions. The FFmpeg provider metadata identifies a 64-bit static GPLv3 package, but the build host, compiler, compiler version, and supporting tools remain unresolved.
