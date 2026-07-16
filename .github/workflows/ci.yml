@@ -337,6 +337,8 @@ jobs:
           if ($PublishReadyExitCode -ne 1 -or ($PublishReadyOutput | Out-String) -notmatch "release bundle is not approved for publishing") {
               throw "Synthetic publish-ready verification did not remain fail-closed"
           }
+          Write-Host "Synthetic publish-ready rejection verified"
+          $global:LASTEXITCODE = 0
 
       - name: Upload synthetic release bundle
         id: upload-release-bundle

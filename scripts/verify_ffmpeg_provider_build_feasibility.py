@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+import smoke_ci_workflow as ci_workflow_verifier
 import verify_ffmpeg_remaining_library_evidence as remaining_verifier
 import verify_legal_notices as legal_notices_verifier
 
@@ -268,6 +269,18 @@ def _verify_protected(root: Path, paths: dict[str, Path]) -> None:
             try:
                 legal_notices_verifier.verify_checkout_policy(root)
             except legal_notices_verifier.LegalVerificationError as exc:
+                raise FFmpegProviderBuildFeasibilityError(
+                    f"protected file changed: {relative}: {exc}"
+                ) from exc
+            continue
+        if relative == ".github/workflows/ci.yml":
+            try:
+                ci_workflow_verifier.verify_workflow_file(root)
+            except (
+                ci_workflow_verifier.WorkflowContractError,
+                OSError,
+                UnicodeError,
+            ) as exc:
                 raise FFmpegProviderBuildFeasibilityError(
                     f"protected file changed: {relative}: {exc}"
                 ) from exc

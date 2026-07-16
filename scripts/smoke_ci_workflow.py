@@ -12,10 +12,25 @@ class WorkflowContractError(AssertionError):
     pass
 
 
+def verify_workflow_file(root: Path) -> None:
+    resolved_root = Path(root).resolve(strict=False)
+    _require(resolved_root.is_dir(), "repository root is not a directory")
+    workflow_path = resolved_root / ".github" / "workflows" / "ci.yml"
+    _require(not workflow_path.is_symlink(), "CI workflow file must not be a symlink")
+    _require(workflow_path.is_file(), "CI workflow file is missing")
+    try:
+        workflow_path.resolve(strict=False).relative_to(resolved_root)
+    except ValueError as exc:
+        raise WorkflowContractError("CI workflow file escapes the repository root") from exc
+    raw = workflow_path.read_bytes()
+    _require(not raw.startswith(b"\xef\xbb\xbf"), "CI workflow file must not use UTF-8 BOM")
+    _require(b"\x00" not in raw, "CI workflow file must not contain NUL")
+    validate_workflow(raw.decode("utf-8"))
+
+
 def main() -> int:
-    _require(WORKFLOW_PATH.is_file(), "CI workflow file is missing")
+    verify_workflow_file(REPO_ROOT)
     workflow = _normalize_newlines(WORKFLOW_PATH.read_text(encoding="utf-8"))
-    validate_workflow(workflow)
     _test_negative_mutations(workflow)
     _test_immutable_action_policy(workflow)
     validate_workflow(workflow + "\n# Harmless trailing comment.\n")
@@ -222,10 +237,58 @@ def validate_workflow(workflow: str) -> None:
         "--require-release-ready true 2>&1",
         "$PSNativeCommandUseErrorActionPreference = $false",
         "$PSNativeCommandUseErrorActionPreference = $PreviousNativePreference",
+        "$PublishReadyExitCode = $LASTEXITCODE",
         "$PublishReadyExitCode -ne 1",
         "release bundle is not approved for publishing",
+        'Write-Host "Synthetic publish-ready rejection verified"',
+        "$global:LASTEXITCODE = 0",
     ):
         _require(required in create_text, f"synthetic bundle producer is missing: {required}")
+    publish_invocation = "--require-release-ready true 2>&1"
+    capture_line = "$PublishReadyExitCode = $LASTEXITCODE"
+    restore_line = "$PSNativeCommandUseErrorActionPreference = $PreviousNativePreference"
+    guard_line = (
+        'if ($PublishReadyExitCode -ne 1 -or ($PublishReadyOutput | Out-String) '
+        '-notmatch "release bundle is not approved for publishing") {'
+    )
+    success_line = 'Write-Host "Synthetic publish-ready rejection verified"'
+    normalization_line = "$global:LASTEXITCODE = 0"
+    for exact, label in (
+        (capture_line, "publish-ready exit capture"),
+        (guard_line, "publish-ready rejection guard"),
+        (success_line, "publish-ready rejection success message"),
+        (normalization_line, "controlled native exit normalization"),
+    ):
+        _require(create_text.count(exact) == 1, f"{label} must appear exactly once")
+    publish_index = create_text.rindex(publish_invocation)
+    capture_index = create_text.index(capture_line)
+    finally_index = create_text.index("finally {")
+    restore_index = create_text.index(restore_line)
+    guard_index = create_text.index(guard_line)
+    success_index = create_text.index(success_line)
+    normalization_index = create_text.index(normalization_line)
+    _require(
+        publish_index
+        < capture_index
+        < finally_index
+        < restore_index
+        < guard_index
+        < success_index
+        < normalization_index,
+        "publish-ready exit normalization ordering is invalid",
+    )
+    final_executable = next(
+        (line.strip() for line in reversed(create_step) if line.strip()),
+        "",
+    )
+    _require(
+        final_executable == normalization_line,
+        "controlled normalization must be the final executable statement",
+    )
+    _require(
+        re.search(r"(?m)^\s*exit\s+0\s*$", create_text) is None,
+        "exit 0 must not replace controlled normalization",
+    )
     _require(
         create_text.count("--release-notes $SyntheticReleaseNotes") == 2,
         "synthetic legal payload commands must use release notes exactly twice",
@@ -540,6 +603,115 @@ def _test_negative_mutations(workflow: str) -> None:
                 "    runs-on: windows-2022\n    timeout-minutes: 30\n    continue-on-error: true\n",
             ),
             "continue-on-error",
+        ),
+        (
+            "missing native exit normalization",
+            _replace_once(workflow, "          $global:LASTEXITCODE = 0\n", ""),
+            "",
+        ),
+        (
+            "normalization before publish-ready guard",
+            _replace_once(
+                workflow,
+                "          if ($PublishReadyExitCode -ne 1 -or ($PublishReadyOutput | Out-String) -notmatch \"release bundle is not approved for publishing\") {\n"
+                "              throw \"Synthetic publish-ready verification did not remain fail-closed\"\n"
+                "          }\n"
+                "          Write-Host \"Synthetic publish-ready rejection verified\"\n"
+                "          $global:LASTEXITCODE = 0",
+                "          $global:LASTEXITCODE = 0\n"
+                "          if ($PublishReadyExitCode -ne 1 -or ($PublishReadyOutput | Out-String) -notmatch \"release bundle is not approved for publishing\") {\n"
+                "              throw \"Synthetic publish-ready verification did not remain fail-closed\"\n"
+                "          }\n"
+                "          Write-Host \"Synthetic publish-ready rejection verified\"",
+            ),
+            "",
+        ),
+        (
+            "normalization changed to one",
+            _replace_once(
+                workflow,
+                "          $global:LASTEXITCODE = 0",
+                "          $global:LASTEXITCODE = 1",
+            ),
+            "",
+        ),
+        (
+            "duplicate native exit normalization",
+            _replace_once(
+                workflow,
+                "          $global:LASTEXITCODE = 0",
+                "          $global:LASTEXITCODE = 0\n          $global:LASTEXITCODE = 0",
+            ),
+            "",
+        ),
+        (
+            "missing publish-ready success message",
+            _replace_once(
+                workflow,
+                "          Write-Host \"Synthetic publish-ready rejection verified\"\n",
+                "",
+            ),
+            "",
+        ),
+        (
+            "publish-ready success message before guard",
+            _replace_once(
+                workflow,
+                "          if ($PublishReadyExitCode -ne 1 -or ($PublishReadyOutput | Out-String) -notmatch \"release bundle is not approved for publishing\") {\n"
+                "              throw \"Synthetic publish-ready verification did not remain fail-closed\"\n"
+                "          }\n"
+                "          Write-Host \"Synthetic publish-ready rejection verified\"",
+                "          Write-Host \"Synthetic publish-ready rejection verified\"\n"
+                "          if ($PublishReadyExitCode -ne 1 -or ($PublishReadyOutput | Out-String) -notmatch \"release bundle is not approved for publishing\") {\n"
+                "              throw \"Synthetic publish-ready verification did not remain fail-closed\"\n"
+                "          }",
+            ),
+            "",
+        ),
+        (
+            "publish-ready expected exit changed to zero",
+            _replace_once(
+                workflow,
+                "$PublishReadyExitCode -ne 1",
+                "$PublishReadyExitCode -ne 0",
+            ),
+            "",
+        ),
+        (
+            "publish-ready expected message removed",
+            _replace_once(
+                workflow,
+                "release bundle is not approved for publishing",
+                "publish-ready rejection text removed",
+            ),
+            "",
+        ),
+        (
+            "publish-ready guard made unconditional success",
+            _replace_once(
+                workflow,
+                "          if ($PublishReadyExitCode -ne 1 -or ($PublishReadyOutput | Out-String) -notmatch \"release bundle is not approved for publishing\") {",
+                "          if ($false) {",
+            ),
+            "",
+        ),
+        (
+            "exit zero replaces controlled normalization",
+            _replace_once(
+                workflow,
+                "          $global:LASTEXITCODE = 0",
+                "          exit 0",
+            ),
+            "",
+        ),
+        (
+            "native command after controlled normalization",
+            _replace_once(
+                workflow,
+                "          $global:LASTEXITCODE = 0",
+                "          $global:LASTEXITCODE = 0\n          python --version",
+            ),
+            "",
         ),
         (
             "unsafe artifact retention",
