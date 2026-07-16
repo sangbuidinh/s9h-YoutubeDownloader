@@ -182,7 +182,7 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
     for required in (
         f"python {legal_tool} create",
         f"python {legal_tool} verify",
-        f"--control-root {'..\\control' if contract.fixed_tag else '.'}",
+        "--control-root " + ("..\\control" if contract.fixed_tag else "."),
         f"--portable-zip release/assets/{contract.zip_name}",
         f"--output-zip release/assets/{contract.legal_name}",
         "--release-notes release/RELEASE_NOTES.md",
