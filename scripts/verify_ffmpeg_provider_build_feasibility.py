@@ -12,6 +12,7 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 
 import verify_ffmpeg_remaining_library_evidence as remaining_verifier
+import verify_legal_notices as legal_notices_verifier
 
 
 BASELINE = "95587c76919042b0b9d9a5b51f0f2e40e241e346"
@@ -263,6 +264,14 @@ def _paths(root: Path, overrides: dict[str, Path]) -> dict[str, Path]:
 def _verify_protected(root: Path, paths: dict[str, Path]) -> None:
     reverse = {relative: key for key, relative in PATHS.items()}
     for relative in PROTECTED:
+        if relative == ".gitattributes":
+            try:
+                legal_notices_verifier.verify_checkout_policy(root)
+            except legal_notices_verifier.LegalVerificationError as exc:
+                raise FFmpegProviderBuildFeasibilityError(
+                    f"protected file changed: {relative}: {exc}"
+                ) from exc
+            continue
         key = reverse.get(relative)
         if key:
             current = paths[key]

@@ -157,6 +157,10 @@ ALL_LICENSE_PATHS = tuple(
 GITATTRIBUTES_PATH = ".gitattributes"
 GITATTRIBUTES_LINES = (
     "/.gitattributes text eol=lf",
+    "/README.md text eol=lf",
+    "/docs/source-kit-feasibility.md text eol=lf",
+    "/legal/*.json text eol=lf",
+    "/legal/README.md text eol=lf",
     "/legal/built-artifact-inventory.json text eol=lf",
     "/legal/components.json text eol=lf",
     "/legal/release-assets-v2.json text eol=lf",
@@ -166,6 +170,12 @@ GITATTRIBUTES_LINES = (
     "/legal/licenses/** -text",
 )
 GITATTRIBUTES_BYTES = ("\n".join(GITATTRIBUTES_LINES) + "\n").encode("utf-8")
+CANONICAL_DOCUMENT_PATHS = (
+    "README.md",
+    "docs/source-kit-feasibility.md",
+    "legal/README.md",
+)
+EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT = 15
 
 NOTICE_HEADINGS = {
     "aria2": "### aria2 1.37.0",
@@ -261,7 +271,7 @@ def main() -> int:
 
 def verify_repository(root: Path) -> dict[str, Any]:
     root = Path(root)
-    _verify_checkout_policy(root)
+    verify_checkout_policy(root)
     inventory, inventory_text = _verify_inventory(root)
     artifact_path = root / "legal/built-artifact-inventory.json"
     policy_path = root / "legal/release-policy.json"
@@ -315,7 +325,17 @@ def git_blob_sha1(data: bytes) -> str:
     return hashlib.sha1(header + data).hexdigest()
 
 
+def verify_checkout_policy(root: Path) -> None:
+    root = Path(root)
+    _verify_checkout_policy(root)
+
+
 def _verify_checkout_policy(root: Path) -> None:
+    legal_json_paths = _discover_top_level_legal_json(root)
+    _require(
+        len(legal_json_paths) == EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT,
+        "top-level legal JSON count must be 15",
+    )
     path = root / GITATTRIBUTES_PATH
     _require(
         path.is_file() and not path.is_symlink(),
@@ -333,24 +353,23 @@ def _verify_checkout_policy(root: Path) -> None:
     _require(lines == GITATTRIBUTES_LINES, f"{GITATTRIBUTES_PATH} checkout rules are invalid")
     _require(raw == GITATTRIBUTES_BYTES, f"{GITATTRIBUTES_PATH} bytes are not canonical")
 
-    attributes = _expected_checkout_attributes()
-    git_attributes = _read_git_checkout_attributes(root)
+    attributes = _expected_checkout_attributes(legal_json_paths)
+    git_attributes = _read_git_checkout_attributes(root, legal_json_paths)
     if git_attributes is not None:
         attributes = git_attributes
     _require(attributes[GITATTRIBUTES_PATH]["text"] == "set", ".gitattributes text attribute must be set")
     _require(attributes[GITATTRIBUTES_PATH]["eol"] == "lf", ".gitattributes eol attribute must be lf")
-    _require(attributes["legal/components.json"]["text"] == "set", "components JSON text attribute must be set")
-    _require(attributes["legal/components.json"]["eol"] == "lf", "components JSON eol attribute must be lf")
-    for relative in (
-        "legal/built-artifact-inventory.json",
-        "legal/release-assets-v2.json",
-        "legal/release-policy.json",
-    ):
+    for relative in legal_json_paths:
         _require(attributes[relative]["text"] == "set", f"{relative} text attribute must be set")
         _require(attributes[relative]["eol"] == "lf", f"{relative} eol attribute must be lf")
-    for relative in ("legal/source-correspondence.json", "legal/source-kit-requirements.json"):
+    for relative in CANONICAL_DOCUMENT_PATHS:
         _require(attributes[relative]["text"] == "set", f"{relative} text attribute must be set")
         _require(attributes[relative]["eol"] == "lf", f"{relative} eol attribute must be lf")
+        _verify_canonical_document_bytes(
+            root,
+            relative,
+            compare_git_blob=git_attributes is not None,
+        )
     for relative in ALL_LICENSE_PATHS:
         _require(attributes[relative]["text"] == "unset", f"{relative} text attribute must be unset")
 
@@ -371,21 +390,64 @@ def _verify_attribute_text_hygiene(text: str) -> None:
         )
 
 
-def _expected_checkout_attributes() -> dict[str, dict[str, str]]:
+def _discover_top_level_legal_json(root: Path) -> tuple[str, ...]:
+    legal_root = root / "legal"
+    _require(
+        legal_root.is_dir() and not legal_root.is_symlink(),
+        "required directory is missing: legal",
+    )
+    paths = tuple(
+        sorted(
+            (
+                path.relative_to(root).as_posix()
+                for path in legal_root.iterdir()
+                if path.is_file() and not path.is_symlink() and path.suffix.casefold() == ".json"
+            ),
+            key=lambda value: (value.casefold(), value),
+        )
+    )
+    _require(paths, "no top-level legal JSON files found")
+    return paths
+
+
+def _verify_canonical_document_bytes(
+    root: Path,
+    relative: str,
+    *,
+    compare_git_blob: bool,
+) -> None:
+    path = root / relative
+    _require(
+        path.is_file() and not path.is_symlink(),
+        f"required regular file is missing: {relative}",
+    )
+    raw = path.read_bytes()
+    _require(not raw.startswith(b"\xef\xbb\xbf"), f"{relative} contains a UTF-8 BOM")
+    _require(b"\r" not in raw, f"noncanonical documentation: {relative}")
+    _require(b"\0" not in raw, f"{relative} contains NUL")
+    raw.decode("utf-8")
+    if compare_git_blob:
+        blob = _read_git_blob(root, relative)
+        if blob is not None:
+            _require(raw == blob, f"canonical documentation differs from Git blob: {relative}")
+
+
+def _expected_checkout_attributes(
+    legal_json_paths: tuple[str, ...],
+) -> dict[str, dict[str, str]]:
     attributes = {
         GITATTRIBUTES_PATH: {"text": "set", "eol": "lf"},
-        "legal/built-artifact-inventory.json": {"text": "set", "eol": "lf"},
-        "legal/components.json": {"text": "set", "eol": "lf"},
-        "legal/release-assets-v2.json": {"text": "set", "eol": "lf"},
-        "legal/release-policy.json": {"text": "set", "eol": "lf"},
-        "legal/source-correspondence.json": {"text": "set", "eol": "lf"},
-        "legal/source-kit-requirements.json": {"text": "set", "eol": "lf"},
     }
+    attributes.update({relative: {"text": "set", "eol": "lf"} for relative in legal_json_paths})
+    attributes.update({relative: {"text": "set", "eol": "lf"} for relative in CANONICAL_DOCUMENT_PATHS})
     attributes.update({relative: {"text": "unset", "eol": "unspecified"} for relative in ALL_LICENSE_PATHS})
     return attributes
 
 
-def _read_git_checkout_attributes(root: Path) -> dict[str, dict[str, str]] | None:
+def _read_git_checkout_attributes(
+    root: Path,
+    legal_json_paths: tuple[str, ...],
+) -> dict[str, dict[str, str]] | None:
     git = shutil.which("git")
     if git is None:
         return None
@@ -408,12 +470,8 @@ def _read_git_checkout_attributes(root: Path) -> dict[str, dict[str, str]] | Non
 
     paths = (
         GITATTRIBUTES_PATH,
-        "legal/built-artifact-inventory.json",
-        "legal/components.json",
-        "legal/release-assets-v2.json",
-        "legal/release-policy.json",
-        "legal/source-correspondence.json",
-        "legal/source-kit-requirements.json",
+        *legal_json_paths,
+        *CANONICAL_DOCUMENT_PATHS,
         *ALL_LICENSE_PATHS,
     )
     result = subprocess.run(
@@ -437,6 +495,18 @@ def _read_git_checkout_attributes(root: Path) -> dict[str, dict[str, str]] | Non
         attributes[relative][attribute] = value
     _require(all(set(values) == {"text", "eol"} for values in attributes.values()), "git check-attr output is incomplete")
     return attributes
+
+
+def _read_git_blob(root: Path, relative: str) -> bytes | None:
+    git = shutil.which("git")
+    if git is None:
+        return None
+    result = subprocess.run(
+        [git, "-C", str(root), "show", f"HEAD:{relative}"],
+        capture_output=True,
+        check=False,
+    )
+    return result.stdout if result.returncode == 0 else None
 
 
 def _verify_inventory(root: Path) -> tuple[dict[str, Any], str]:
