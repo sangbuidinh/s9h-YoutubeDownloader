@@ -154,6 +154,11 @@ SECRET_KEY_PARTS = (
     "authorization",
 )
 SECRET_KEY_EXACT = {"token"}
+PRIVATE_KEY_PEM_HEADER_RE = re.compile(
+    r"-----BEGIN(?: [A-Z0-9-]+)* PRIVATE KEY-----",
+    re.IGNORECASE,
+)
+ATTEST_ACTION_COMMIT = "f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6"
 
 
 class PolicyError(ValueError):
@@ -268,7 +273,7 @@ def _scan_for_forbidden_material(value: Any, path: str = "policy") -> None:
             _scan_for_forbidden_material(child, f"{path}[{index}]")
     elif isinstance(value, str):
         folded = value.casefold()
-        if "-----begin private key-----" in folded or "-----begin rsa private key-----" in folded:
+        if PRIVATE_KEY_PEM_HEADER_RE.search(value) is not None:
             _fail("private-key-material", "private-key material is forbidden")
         if "-----begin certificate-----" in folded or re.search(r"(?i)(?:^|[\\/])[^\\/]+\.(?:pfx|p12|pem|key)$", value):
             _fail("certificate-material", "certificate material or path is forbidden")
@@ -435,6 +440,8 @@ def _validate_provenance(value: Any) -> None:
     commit = _require_string(provenance["candidate_action_commit"], "candidate action commit")
     if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
         _fail("action-pin", "candidate action commit must be a full lowercase SHA")
+    if commit != ATTEST_ACTION_COMMIT:
+        _fail("action-pin", "candidate action commit changed")
     if provenance["candidate_major_release"] != "v4" or provenance["candidate_release"] != "v4.2.0":
         _fail("provenance-action", "candidate action release changed")
     _require_true(provenance["final_bytes_only"], "final-byte-order", "final-bytes-only provenance")

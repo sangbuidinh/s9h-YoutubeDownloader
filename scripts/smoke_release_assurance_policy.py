@@ -86,6 +86,17 @@ def _delete_list_item(path: tuple[str, ...], value: str) -> Mutation:
     return mutate
 
 
+def _insert_sorted_list_item(path: tuple[str, ...], value: str) -> Mutation:
+    def mutate(policy: dict[str, Any]) -> None:
+        target: Any = policy
+        for key in path:
+            target = target[key]
+        target.append(value)
+        target.sort()
+
+    return mutate
+
+
 def _add(path: tuple[str, ...], key: str, value: Any) -> Mutation:
     def mutate(policy: dict[str, Any]) -> None:
         target: dict[str, Any] = policy
@@ -152,6 +163,7 @@ def main() -> int:
         ("provenance readiness true", "provenance-readiness", {"mutation": _set(("provenance", "readiness"), True)}),
         ("provenance action changed", "provenance-action", {"mutation": _set(("provenance", "action_repository"), "example/attest")}),
         ("candidate action SHA malformed", "action-pin", {"mutation": _set(("provenance", "candidate_action_commit"), "v4")}),
+        ("candidate action commit changed", "action-pin", {"mutation": _set(("provenance", "candidate_action_commit"), "0" * 40)}),
         ("workflow permissions integrated", "workflow-permissions", {"mutation": _set(("provenance", "workflow_permission_review", "integrated"), True)}),
         ("artifact metadata permission removed", "workflow-permissions", {"mutation": _delete_list_item(("provenance", "workflow_permission_review", "required_job_permissions"), "artifact-metadata: write")}),
         ("final subject removed", "provenance-subjects", {"mutation": _delete_list_item(("provenance", "subjects"), "SHA256SUMS.txt")}),
@@ -166,6 +178,9 @@ def main() -> int:
         ("PFX path added", "certificate-material", {"mutation": _add(("authenticode",), "pfx_" + "path", "fixtures/" + "identity." + "pfx")}),
         ("certificate password field added", "secret-key", {"mutation": _add(("authenticode",), "certificate_" + "password", "synthetic-fixture")}),
         ("private key material added", "private-key-material", {"mutation": _add(("authenticode",), "key_material", "-----BEGIN " + "PRIVATE" + " KEY-----")}),
+        ("EC private-key PEM header", "private-key-material", {"mutation": _insert_sorted_list_item(("authenticode", "blockers"), "-----BEGIN EC PRIVATE KEY-----")}),
+        ("encrypted private-key PEM header", "private-key-material", {"mutation": _insert_sorted_list_item(("authenticode", "blockers"), "-----BEGIN ENCRYPTED PRIVATE KEY-----")}),
+        ("OpenSSH private-key PEM header", "private-key-material", {"mutation": _insert_sorted_list_item(("authenticode", "blockers"), "-----BEGIN OPENSSH PRIVATE KEY-----")}),
         ("user-profile path added", "user-path", {"mutation": _add(("authenticode",), "notes", "C:" + "\\Users" + "\\example\\signing")}),
         ("unsupported production-ready claim", "unsupported-claim", {"mutation": _add(("authenticode",), "status", "production ready")}),
     ]
