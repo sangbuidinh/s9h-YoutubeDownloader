@@ -175,7 +175,7 @@ CANONICAL_DOCUMENT_PATHS = (
     "docs/source-kit-feasibility.md",
     "legal/README.md",
 )
-EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT = 15
+EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT = 16
 
 NOTICE_HEADINGS = {
     "aria2": "### aria2 1.37.0",
@@ -334,7 +334,7 @@ def _verify_checkout_policy(root: Path) -> None:
     legal_json_paths = _discover_top_level_legal_json(root)
     _require(
         len(legal_json_paths) == EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT,
-        "top-level legal JSON count must be 15",
+        f"top-level legal JSON count must be {EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT}",
     )
     path = root / GITATTRIBUTES_PATH
     _require(

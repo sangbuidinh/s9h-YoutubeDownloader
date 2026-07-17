@@ -1,0 +1,211 @@
+{
+  "assessment_baseline": "bf196a0895990802624f7f1926458100170b2443",
+  "authenticode": {
+    "blockers": [
+      "CI signing identity not provisioned",
+      "RFC3161 timestamp authority not approved",
+      "code-signing certificate provider not selected",
+      "private-key custody model not approved",
+      "signed-artifact checksum sequencing not implemented",
+      "signing and verification workflow not implemented"
+    ],
+    "candidate_timestamp": {
+      "digest": "SHA256",
+      "protocol": "RFC3161",
+      "timestamp_authority_selected": false
+    },
+    "certificate_provisioned": false,
+    "credential_source_selected": false,
+    "failure_policy": {
+      "signing_fail_closed": true,
+      "timestamp_fail_closed": true,
+      "unsigned_fallback_may_be_published_as_signed": false,
+      "verification_fail_closed": true
+    },
+    "file_digest": "SHA256",
+    "first_party_signing_targets": [
+      "Youtube.Downloaderbs.exe"
+    ],
+    "implementation_status": false,
+    "readiness": false,
+    "sequencing": {
+      "after_final_application_build": true,
+      "before_final_checksums": true,
+      "before_portable_zip_creation": true,
+      "verify_after_signing": true,
+      "verify_timestamp": true
+    },
+    "signing_key_custody_approved": false,
+    "third_party_resigning": {
+      "allowed": false,
+      "excluded": [
+        "yt-dlp.exe",
+        "ffmpeg.exe",
+        "ffprobe.exe",
+        "deno.exe",
+        "aria2c.exe",
+        "any other vendor-supplied binary"
+      ]
+    },
+    "verification_policy": "Default Authenticode",
+    "verification_switch": "/pa"
+  },
+  "claims": {
+    "authenticode_signed": false,
+    "provenance_attested": false,
+    "release_assurance_ready": false,
+    "sbom_attested": false,
+    "sbom_generated": false,
+    "sbom_validated": false,
+    "signature_timestamped": false,
+    "signature_verified": false
+  },
+  "policy_id": "s9h-release-assurance-v1",
+  "product": "Youtube Downloaderbs",
+  "provenance": {
+    "action_repository": "actions/attest",
+    "attestation_generated": false,
+    "blockers": [
+      "artifact metadata permission not integrated",
+      "attestation permission not integrated",
+      "final subject strategy not implemented",
+      "final-byte sequencing not implemented",
+      "immutable action pin not integrated",
+      "job-level OIDC permission not integrated",
+      "no production attestation exists",
+      "verification command and policy not tested"
+    ],
+    "candidate_action_commit": "f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6",
+    "candidate_major_release": "v4",
+    "candidate_release": "v4.2.0",
+    "final_bytes_only": true,
+    "implementation_status": false,
+    "provider": "github-artifact-attestations",
+    "public_verification_repository": "sangbuidinh/s9h-YoutubeDownloader",
+    "readiness": false,
+    "sigstore_claim_made": false,
+    "source_kit_subjects_mandatory": false,
+    "subjects": [
+      "Youtube.Downloaderbs.exe",
+      "Youtube-Downloaderbs-v{version}.zip",
+      "Youtube-Downloaderbs-v{version}-legal.zip",
+      "Youtube-Downloaderbs-v{version}.spdx.json",
+      "SHA256SUMS.txt",
+      "RELEASE_MANIFEST.json"
+    ],
+    "synthetic_ci_attestations_are_release_attestations": false,
+    "verification": {
+      "documented_and_tested": false,
+      "final_subject_names_required": true,
+      "sha256_subject_digests_required": true
+    },
+    "workflow_permission_review": {
+      "integrated": false,
+      "packages_write_required": false,
+      "required_job_permissions": [
+        "artifact-metadata: write",
+        "attestations: write",
+        "contents: read",
+        "id-token: write"
+      ],
+      "status": "planned"
+    }
+  },
+  "release_integration": {
+    "all_byte_changes_before_finalization": true,
+    "blockers": [
+      "Authenticode signing and verification are not integrated",
+      "final checksum and manifest synchronization is not integrated with assurance artifacts",
+      "production SBOM generation and validation are not integrated",
+      "provenance and SBOM attestation verification are not integrated"
+    ],
+    "existing_gate_invariants": {
+      "assembly_authorized": false,
+      "legal_compliance_certified": false,
+      "publishing_allowed": false,
+      "release_gate_reconsideration_allowed": false,
+      "release_ready": false,
+      "source_assets_created": false,
+      "source_availability_certified": false,
+      "source_kits_ready": false
+    },
+    "readiness": {
+      "authenticode_ready": false,
+      "provenance_ready": false,
+      "release_assurance_ready": false,
+      "sbom_ready": false
+    },
+    "sequence": [
+      "build first-party executable",
+      "validate unsigned build structure",
+      "Authenticode-sign first-party executable",
+      "verify Authenticode signature and timestamp",
+      "assemble the portable package using the signed executable",
+      "calculate final artifact checksums",
+      "generate and validate the final SBOM",
+      "synchronize checksums, release notes and release manifest",
+      "perform final release-bundle validation",
+      "generate provenance and SBOM attestations over final immutable subjects",
+      "verify attestations",
+      "hand off immutable release bundle",
+      "allow publishing only when all independent release gates pass"
+    ]
+  },
+  "sbom": {
+    "blockers": [
+      "PyInstaller dependency extraction strategy not implemented",
+      "SPDX schema validation not implemented",
+      "bundled runtime inventory not reconciled",
+      "distributed Python package inventory not reconciled",
+      "generator not selected",
+      "generator version not pinned",
+      "production SBOM not generated",
+      "release-manifest cross-check not implemented"
+    ],
+    "coverage_categories": [
+      "first-party application",
+      "Python interpreter/runtime components included by packaging",
+      "Python packages actually distributed",
+      "yt-dlp",
+      "FFmpeg and ffprobe",
+      "Deno",
+      "aria2",
+      "any other executable, DLL, package or distributable dependency present in the final release package"
+    ],
+    "filename_template": "Youtube-Downloaderbs-v{version}.spdx.json",
+    "format": "SPDX-2.3-json",
+    "future_properties": {
+      "creation_tool_identity_and_pinned_version": true,
+      "declared_license_from_authoritative_evidence": true,
+      "deterministic_json_serialization": true,
+      "document_namespace_unique_to_release": true,
+      "download_location_or_noassertion": true,
+      "final_artifact_association": true,
+      "license_conclusion_not_fabricated": true,
+      "package_supplier_or_origin_when_known": true,
+      "package_url_when_authoritative": true,
+      "package_version": true,
+      "release_tag": true,
+      "semantic_release_manifest_and_checksum_validation": true,
+      "sha256_package_and_file_checksums": true,
+      "source_commit": true,
+      "stable_package_ordering": true,
+      "stable_relationship_ordering": true,
+      "strict_schema_validation": true,
+      "workflow_control_commit": true
+    },
+    "generator_selected": false,
+    "implementation_status": false,
+    "non_claims": {
+      "complete_sbom": false,
+      "license_compliance_certified": false,
+      "reproducible_build": false,
+      "source_correspondence_complete": false,
+      "vulnerability_free_build": false
+    },
+    "predicate_type": "https://spdx.dev/Document/v2.3",
+    "readiness": false
+  },
+  "schema_version": 1,
+  "version": "1.3.1"
+}
