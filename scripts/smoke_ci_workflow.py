@@ -12,10 +12,25 @@ class WorkflowContractError(AssertionError):
     pass
 
 
+def verify_workflow_file(root: Path) -> None:
+    resolved_root = Path(root).resolve(strict=False)
+    _require(resolved_root.is_dir(), "repository root is not a directory")
+    workflow_path = resolved_root / ".github" / "workflows" / "ci.yml"
+    _require(not workflow_path.is_symlink(), "CI workflow file must not be a symlink")
+    _require(workflow_path.is_file(), "CI workflow file is missing")
+    try:
+        workflow_path.resolve(strict=False).relative_to(resolved_root)
+    except ValueError as exc:
+        raise WorkflowContractError("CI workflow file escapes the repository root") from exc
+    raw = workflow_path.read_bytes()
+    _require(not raw.startswith(b"\xef\xbb\xbf"), "CI workflow file must not use UTF-8 BOM")
+    _require(b"\x00" not in raw, "CI workflow file must not contain NUL")
+    validate_workflow(raw.decode("utf-8"))
+
+
 def main() -> int:
-    _require(WORKFLOW_PATH.is_file(), "CI workflow file is missing")
+    verify_workflow_file(REPO_ROOT)
     workflow = _normalize_newlines(WORKFLOW_PATH.read_text(encoding="utf-8"))
-    validate_workflow(workflow)
     _test_negative_mutations(workflow)
     _test_immutable_action_policy(workflow)
     validate_workflow(workflow + "\n# Harmless trailing comment.\n")
@@ -192,15 +207,96 @@ def validate_workflow(workflow: str) -> None:
         '$env:RUNNER_TEMP',
         'b"MZ synthetic CI fixture; this file is not executable.\\n"',
         'zipfile.ZipInfo("SYNTHETIC.txt", date_time=(1980, 1, 1, 0, 0, 0))',
-        'b"# Synthetic CI release\\n\\nArtifact handoff verification only.\\n"',
+        "import hashlib",
+        "portable_hash = hashlib.sha256(archive.read_bytes()).hexdigest()",
+        '"# Synthetic CI release\\n\\n"',
+        'f"- `{archive.name}`: `{portable_hash}`\\n"',
+        "python scripts/prepare_release_legal_payload.py create",
+        "python scripts/prepare_release_legal_payload.py verify",
+        "--release-notes $SyntheticReleaseNotes",
+        "$PreInjectionHash",
+        "$PostInjectionHash",
+        "$SyntheticNotesText.Contains($PostInjectionHash)",
+        "$SyntheticNotesText.Contains($PreInjectionHash)",
+        '"SYNTHETIC_SOURCE_FIXTURE.txt"',
+        '"SOURCE_MANIFEST.json"',
+        'b"synthetic fixture\\n"',
+        'b"not a real source kit\\n"',
+        'b"not for distribution\\n"',
         "python scripts/prepare_release_bundle.py create",
         "python scripts/prepare_release_bundle.py verify",
         "--tag v0.0.0-ci",
         "--source-commit $Commit",
         "--control-commit $Commit",
         "--prerelease true",
+        "--policy legal/release-policy.json",
+        "--asset-contract legal/release-assets-v2.json",
+        "--legal-payload",
+        "--source-assets-root",
+        "--require-release-ready false",
+        "--require-release-ready true 2>&1",
+        "$PSNativeCommandUseErrorActionPreference = $false",
+        "$PSNativeCommandUseErrorActionPreference = $PreviousNativePreference",
+        "$PublishReadyExitCode = $LASTEXITCODE",
+        "$PublishReadyExitCode -ne 1",
+        "release bundle is not approved for publishing",
+        'Write-Host "Synthetic publish-ready rejection verified"',
+        "$global:LASTEXITCODE = 0",
     ):
         _require(required in create_text, f"synthetic bundle producer is missing: {required}")
+    publish_invocation = "--require-release-ready true 2>&1"
+    capture_line = "$PublishReadyExitCode = $LASTEXITCODE"
+    restore_line = "$PSNativeCommandUseErrorActionPreference = $PreviousNativePreference"
+    guard_line = (
+        'if ($PublishReadyExitCode -ne 1 -or ($PublishReadyOutput | Out-String) '
+        '-notmatch "release bundle is not approved for publishing") {'
+    )
+    success_line = 'Write-Host "Synthetic publish-ready rejection verified"'
+    normalization_line = "$global:LASTEXITCODE = 0"
+    for exact, label in (
+        (capture_line, "publish-ready exit capture"),
+        (guard_line, "publish-ready rejection guard"),
+        (success_line, "publish-ready rejection success message"),
+        (normalization_line, "controlled native exit normalization"),
+    ):
+        _require(create_text.count(exact) == 1, f"{label} must appear exactly once")
+    publish_index = create_text.rindex(publish_invocation)
+    capture_index = create_text.index(capture_line)
+    finally_index = create_text.index("finally {")
+    restore_index = create_text.index(restore_line)
+    guard_index = create_text.index(guard_line)
+    success_index = create_text.index(success_line)
+    normalization_index = create_text.index(normalization_line)
+    _require(
+        publish_index
+        < capture_index
+        < finally_index
+        < restore_index
+        < guard_index
+        < success_index
+        < normalization_index,
+        "publish-ready exit normalization ordering is invalid",
+    )
+    final_executable = next(
+        (line.strip() for line in reversed(create_step) if line.strip()),
+        "",
+    )
+    _require(
+        final_executable == normalization_line,
+        "controlled normalization must be the final executable statement",
+    )
+    _require(
+        re.search(r"(?m)^\s*exit\s+0\s*$", create_text) is None,
+        "exit 0 must not replace controlled normalization",
+    )
+    _require(
+        create_text.count("--release-notes $SyntheticReleaseNotes") == 2,
+        "synthetic legal payload commands must use release notes exactly twice",
+    )
+    _require(
+        create_text.count("python scripts/prepare_release_bundle.py verify") == 2,
+        "synthetic bundle must run structural and publish-ready verification",
+    )
     upload_ref = _action_ref(upload_step, "actions/upload-artifact")
     _require_safe_action_ref("actions/upload-artifact", upload_ref)
     for required in (
@@ -265,11 +361,21 @@ def validate_workflow(workflow: str) -> None:
     )
     verifier_text = "\n".join(verifier)
     for required in (
-        "Synthetic release bundle handoff verified",
+        "Synthetic release bundle v2 handoff verified",
         "v0.0.0-ci",
         "${{ github.sha }}",
         "Get-FileHash",
         "ConvertFrom-Json",
+        "s9h-release-bundle-v2",
+        "release_ready",
+        "legal_compliance_certified",
+        "source_availability_certified",
+        "legal-payload",
+        "aria2-source",
+        "ffmpeg-source",
+        "assets/$env:EXPECTED_LEGAL",
+        "assets/$env:EXPECTED_ARIA2_SOURCE",
+        "assets/$env:EXPECTED_FFMPEG_SOURCE",
         "SHA256SUMS.txt",
         "ReparsePoint",
     ):
@@ -499,6 +605,115 @@ def _test_negative_mutations(workflow: str) -> None:
             "continue-on-error",
         ),
         (
+            "missing native exit normalization",
+            _replace_once(workflow, "          $global:LASTEXITCODE = 0\n", ""),
+            "",
+        ),
+        (
+            "normalization before publish-ready guard",
+            _replace_once(
+                workflow,
+                "          if ($PublishReadyExitCode -ne 1 -or ($PublishReadyOutput | Out-String) -notmatch \"release bundle is not approved for publishing\") {\n"
+                "              throw \"Synthetic publish-ready verification did not remain fail-closed\"\n"
+                "          }\n"
+                "          Write-Host \"Synthetic publish-ready rejection verified\"\n"
+                "          $global:LASTEXITCODE = 0",
+                "          $global:LASTEXITCODE = 0\n"
+                "          if ($PublishReadyExitCode -ne 1 -or ($PublishReadyOutput | Out-String) -notmatch \"release bundle is not approved for publishing\") {\n"
+                "              throw \"Synthetic publish-ready verification did not remain fail-closed\"\n"
+                "          }\n"
+                "          Write-Host \"Synthetic publish-ready rejection verified\"",
+            ),
+            "",
+        ),
+        (
+            "normalization changed to one",
+            _replace_once(
+                workflow,
+                "          $global:LASTEXITCODE = 0",
+                "          $global:LASTEXITCODE = 1",
+            ),
+            "",
+        ),
+        (
+            "duplicate native exit normalization",
+            _replace_once(
+                workflow,
+                "          $global:LASTEXITCODE = 0",
+                "          $global:LASTEXITCODE = 0\n          $global:LASTEXITCODE = 0",
+            ),
+            "",
+        ),
+        (
+            "missing publish-ready success message",
+            _replace_once(
+                workflow,
+                "          Write-Host \"Synthetic publish-ready rejection verified\"\n",
+                "",
+            ),
+            "",
+        ),
+        (
+            "publish-ready success message before guard",
+            _replace_once(
+                workflow,
+                "          if ($PublishReadyExitCode -ne 1 -or ($PublishReadyOutput | Out-String) -notmatch \"release bundle is not approved for publishing\") {\n"
+                "              throw \"Synthetic publish-ready verification did not remain fail-closed\"\n"
+                "          }\n"
+                "          Write-Host \"Synthetic publish-ready rejection verified\"",
+                "          Write-Host \"Synthetic publish-ready rejection verified\"\n"
+                "          if ($PublishReadyExitCode -ne 1 -or ($PublishReadyOutput | Out-String) -notmatch \"release bundle is not approved for publishing\") {\n"
+                "              throw \"Synthetic publish-ready verification did not remain fail-closed\"\n"
+                "          }",
+            ),
+            "",
+        ),
+        (
+            "publish-ready expected exit changed to zero",
+            _replace_once(
+                workflow,
+                "$PublishReadyExitCode -ne 1",
+                "$PublishReadyExitCode -ne 0",
+            ),
+            "",
+        ),
+        (
+            "publish-ready expected message removed",
+            _replace_once(
+                workflow,
+                "release bundle is not approved for publishing",
+                "publish-ready rejection text removed",
+            ),
+            "",
+        ),
+        (
+            "publish-ready guard made unconditional success",
+            _replace_once(
+                workflow,
+                "          if ($PublishReadyExitCode -ne 1 -or ($PublishReadyOutput | Out-String) -notmatch \"release bundle is not approved for publishing\") {",
+                "          if ($false) {",
+            ),
+            "",
+        ),
+        (
+            "exit zero replaces controlled normalization",
+            _replace_once(
+                workflow,
+                "          $global:LASTEXITCODE = 0",
+                "          exit 0",
+            ),
+            "",
+        ),
+        (
+            "native command after controlled normalization",
+            _replace_once(
+                workflow,
+                "          $global:LASTEXITCODE = 0",
+                "          $global:LASTEXITCODE = 0\n          python --version",
+            ),
+            "",
+        ),
+        (
             "unsafe artifact retention",
             _replace_once(workflow, "          retention-days: 1", "          retention-days: 2"),
             "retention-days",
@@ -513,6 +728,63 @@ def _test_negative_mutations(workflow: str) -> None:
                 "      - name: Create and verify synthetic release bundle",
             ),
             "pip install",
+        ),
+        (
+            "missing legal payload generation",
+            _replace_once(
+                workflow,
+                "python scripts/prepare_release_legal_payload.py create",
+                "python scripts/prepare_release_legal_payload.py verify",
+            ),
+            "synthetic bundle producer",
+        ),
+        (
+            "missing legal payload verification",
+            _replace_once(
+                workflow,
+                "python scripts/prepare_release_legal_payload.py verify",
+                "python scripts/prepare_release_legal_payload.py inspect",
+            ),
+            "synthetic bundle producer",
+        ),
+        (
+            "missing release-notes legal input",
+            _replace_once(
+                workflow,
+                "            --output-zip $LegalPayload `\n"
+                "            --release-notes $SyntheticReleaseNotes `\n",
+                "            --output-zip $LegalPayload `\n",
+            ),
+            "release notes exactly twice",
+        ),
+        (
+            "publish-ready verifier disabled",
+            _replace_once(
+                workflow,
+                "              --require-release-ready true 2>&1",
+                "              --require-release-ready false 2>&1",
+            ),
+            "synthetic bundle producer",
+        ),
+        (
+            "missing synthetic source fixture",
+            _replace_once(workflow, '"SYNTHETIC_SOURCE_FIXTURE.txt"', '"SOURCE.txt"'),
+            "synthetic bundle producer",
+        ),
+        (
+            "missing structural readiness flag",
+            _replace_once(workflow, "            --require-release-ready false\n", ""),
+            "require-release-ready",
+        ),
+        (
+            "bundle v1 consumer",
+            _replace_once(workflow, "s9h-release-bundle-v2", "s9h-release-bundle-v1"),
+            "handoff verifier",
+        ),
+        (
+            "consumer omits aria2 source",
+            _replace_once(workflow, '              "assets/$env:EXPECTED_ARIA2_SOURCE",\n', ""),
+            "handoff verifier",
         ),
         (
             "shallow checkout",

@@ -23,6 +23,7 @@ def main() -> int:
     _run_inventory_mutations()
     _run_phase6b1_mutations()
     _run_phase6b2a_mutations()
+    _run_phase6b2b1_mutations()
     _run_license_mutations()
     _run_notice_mutations()
     _run_claim_and_hygiene_mutations()
@@ -32,6 +33,11 @@ def main() -> int:
 
 def _verify_positive_repository() -> None:
     inventory = verifier.verify_repository(REPO_ROOT)
+    _assert(
+        len(verifier._discover_top_level_legal_json(REPO_ROOT))
+        == verifier.EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT,
+        "top-level legal JSON count changed",
+    )
     _assert(
         (REPO_ROOT / verifier.GITATTRIBUTES_PATH).read_bytes() == verifier.GITATTRIBUTES_BYTES,
         ".gitattributes policy changed",
@@ -54,6 +60,11 @@ def _verify_positive_repository() -> None:
     correspondence, source_kits = verifier.source_correspondence.verify_repository(REPO_ROOT)
     _assert(correspondence["corresponding_source_complete"] is False, "source completion changed")
     _assert(all(kit["status"] == "blocked" for kit in source_kits["kits"]), "source kit is not blocked")
+    release_assets = verifier.release_payload.load_asset_contract(
+        REPO_ROOT / verifier.release_payload.CONTRACT_PATH
+    )
+    _assert(release_assets["release_readiness"] == "blocked", "release readiness changed")
+    _assert(release_assets["source_kits_ready"] is False, "source kits were marked ready")
 
     for component in components:
         data = (REPO_ROOT / component["local_license_path"]).read_bytes()
@@ -80,10 +91,27 @@ def _verify_positive_repository() -> None:
 def _run_checkout_policy_tests() -> None:
     _verify_temporary_git_worktree()
     _verify_windows_checkout_simulation()
+    _verify_later_override_rejected(
+        "legal/primary-source-evidence-aria2.json",
+        _later_aria2_override,
+        "aria2",
+    )
+    _verify_later_override_rejected("README.md", _later_readme_override, "README")
     mutations = (
         ("missing .gitattributes", _missing_gitattributes, "regular file"),
+        ("missing legal JSON wildcard", _missing_legal_json_wildcard, "checkout rules"),
+        ("legal JSON wildcard eol=crlf", _legal_json_wildcard_eol_crlf, "checkout rules"),
+        ("legal JSON wildcard missing eol=lf", _legal_json_wildcard_missing_eol, "checkout rules"),
+        ("legal JSON wildcard marked -text", _legal_json_wildcard_binary, "checkout rules"),
+        ("missing README rule", _missing_readme_rule, "checkout rules"),
+        ("README eol=crlf", _readme_eol_crlf, "checkout rules"),
+        ("missing legal README rule", _missing_legal_readme_rule, "checkout rules"),
+        ("legal README eol=crlf", _legal_readme_eol_crlf, "checkout rules"),
+        ("missing feasibility document rule", _missing_feasibility_document_rule, "checkout rules"),
+        ("feasibility document eol=crlf", _feasibility_document_eol_crlf, "checkout rules"),
         ("missing built inventory rule", _missing_built_inventory_rule, "checkout rules"),
         ("missing components rule", _missing_components_rule, "checkout rules"),
+        ("missing release assets rule", _missing_release_assets_rule, "checkout rules"),
         ("missing release policy rule", _missing_release_policy_rule, "checkout rules"),
         ("missing source correspondence rule", _missing_source_correspondence_rule, "checkout rules"),
         ("missing source kit rule", _missing_source_kit_rule, "checkout rules"),
@@ -120,6 +148,12 @@ def _verify_windows_checkout_simulation() -> None:
         source = temp_root / "source"
         checkout = temp_root / "checkout"
         _copy_fixture(source)
+        json_probe_relative = "legal/checkout-policy-probe.json"
+        json_probe_bytes = b'{\n  "checkout_policy_probe": true\n}\n'
+        docs_probe_relative = "docs/checkout-policy-probe.md"
+        docs_probe_bytes = b"# Checkout policy probe\n"
+        (source / json_probe_relative).write_bytes(json_probe_bytes)
+        (source / docs_probe_relative).write_bytes(docs_probe_bytes)
         commit = _initialize_git_repository(source, commit=True)
         _run_git_command("clone", "--no-local", "--no-checkout", str(source), str(checkout))
         _git(checkout, "config", "core.autocrlf", "true")
@@ -130,19 +164,62 @@ def _verify_windows_checkout_simulation() -> None:
         _assert(b"\r" not in policy, ".gitattributes changed line endings in Windows-style checkout")
         _assert(policy == _git_blob(source, commit, verifier.GITATTRIBUTES_PATH), ".gitattributes blob mismatch")
 
-        inventory = (checkout / "legal/components.json").read_bytes()
-        _assert(b"\n" in inventory and b"\r" not in inventory, "components JSON is not LF-only after checkout")
-        _assert(inventory == _git_blob(source, commit, "legal/components.json"), "components JSON blob mismatch")
-
-        for relative in (
-            "legal/built-artifact-inventory.json",
-            "legal/release-policy.json",
-            "legal/source-correspondence.json",
-            "legal/source-kit-requirements.json",
-        ):
+        legal_json_paths = verifier._discover_top_level_legal_json(source)
+        _assert(
+            len(legal_json_paths) == verifier.EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT + 1,
+            "future legal JSON probe count changed",
+        )
+        for relative in legal_json_paths:
             data = (checkout / relative).read_bytes()
             _assert(b"\n" in data and b"\r" not in data, f"{relative} is not LF-only after checkout")
             _assert(data == _git_blob(source, commit, relative), f"{relative} blob mismatch")
+        _assert(
+            (checkout / json_probe_relative).read_bytes() == json_probe_bytes,
+            "future legal JSON probe changed",
+        )
+
+        for relative in verifier.CANONICAL_DOCUMENT_PATHS:
+            data = (checkout / relative).read_bytes()
+            _assert(b"\n" in data and b"\r" not in data, f"{relative} is not LF-only after checkout")
+            _assert(data == _git_blob(source, commit, relative), f"{relative} blob mismatch")
+
+        json_probe_attributes = _git(
+            checkout,
+            "check-attr",
+            "text",
+            "eol",
+            "--",
+            json_probe_relative,
+        ).splitlines()
+        _assert(
+            f"{json_probe_relative}: text: set" in json_probe_attributes,
+            "future legal JSON probe text attribute changed",
+        )
+        _assert(
+            f"{json_probe_relative}: eol: lf" in json_probe_attributes,
+            "future legal JSON probe eol attribute changed",
+        )
+
+        docs_probe = (checkout / docs_probe_relative).read_bytes()
+        docs_probe_blob = _git_blob(source, commit, docs_probe_relative)
+        docs_probe_attributes = _git(
+            checkout,
+            "check-attr",
+            "text",
+            "eol",
+            "--",
+            docs_probe_relative,
+        ).splitlines()
+        _assert(docs_probe_relative not in verifier.CANONICAL_DOCUMENT_PATHS, "docs probe became canonical")
+        _assert(
+            f"{docs_probe_relative}: text: unspecified" in docs_probe_attributes,
+            "unlisted Markdown text attribute changed",
+        )
+        _assert(
+            f"{docs_probe_relative}: eol: unspecified" in docs_probe_attributes,
+            "unlisted Markdown eol attribute changed",
+        )
+        _assert(b"\r" in docs_probe and docs_probe != docs_probe_blob, "unlisted Markdown was unexpectedly pinned")
 
         preserved = 0
         for relative in verifier.ALL_LICENSE_PATHS:
@@ -150,11 +227,16 @@ def _verify_windows_checkout_simulation() -> None:
             _assert(data == _git_blob(source, commit, relative), f"license checkout changed bytes: {relative}")
             preserved += 1
         _assert(preserved == 8, "license checkout preservation count changed")
+        _assert_effective_attributes(checkout)
+        (checkout / json_probe_relative).unlink()
         verifier.verify_repository(checkout)
         _assert_effective_attributes(checkout)
+        _assert(not (REPO_ROOT / json_probe_relative).exists(), "future legal JSON probe escaped fixture")
+        _assert(not (REPO_ROOT / docs_probe_relative).exists(), "docs probe escaped fixture")
 
 
 def _assert_effective_attributes(root: Path) -> None:
+    legal_json_paths = verifier._discover_top_level_legal_json(root)
     output = _git(
         root,
         "check-attr",
@@ -162,26 +244,16 @@ def _assert_effective_attributes(root: Path) -> None:
         "eol",
         "--",
         ".gitattributes",
-        "legal/built-artifact-inventory.json",
-        "legal/components.json",
-        "legal/release-policy.json",
-        "legal/source-correspondence.json",
-        "legal/source-kit-requirements.json",
+        *legal_json_paths,
+        *verifier.CANONICAL_DOCUMENT_PATHS,
     )
     required = {
         ".gitattributes: text: set",
         ".gitattributes: eol: lf",
-        "legal/components.json: text: set",
-        "legal/components.json: eol: lf",
-        "legal/built-artifact-inventory.json: text: set",
-        "legal/built-artifact-inventory.json: eol: lf",
-        "legal/release-policy.json: text: set",
-        "legal/release-policy.json: eol: lf",
-        "legal/source-correspondence.json: text: set",
-        "legal/source-correspondence.json: eol: lf",
-        "legal/source-kit-requirements.json: text: set",
-        "legal/source-kit-requirements.json: eol: lf",
     }
+    for relative in (*legal_json_paths, *verifier.CANONICAL_DOCUMENT_PATHS):
+        required.add(f"{relative}: text: set")
+        required.add(f"{relative}: eol: lf")
     _assert(required.issubset(set(output.splitlines())), "effective text/eol attributes changed")
     for relative in verifier.ALL_LICENSE_PATHS:
         output = _git(root, "check-attr", "text", "--", relative)
@@ -205,8 +277,8 @@ def _run_inventory_mutations() -> None:
 
 
 def _run_phase6b1_mutations() -> None:
-    _expect_failure("missing built inventory", _missing_built_inventory, "required file is missing")
-    _expect_failure("missing release policy", _missing_release_policy, "required file is missing")
+    _expect_failure("missing built inventory", _missing_built_inventory, "top-level legal JSON count")
+    _expect_failure("missing release policy", _missing_release_policy, "top-level legal JSON count")
     _expect_failure("release policy allows publishing", _allow_release, "blocked")
     _expect_failure("release-ready claim", _add_release_ready_claim, "unsupported project claim")
     _expect_failure("source-complete claim", _add_source_complete_claim, "unsupported project claim")
@@ -214,8 +286,8 @@ def _run_phase6b1_mutations() -> None:
 
 
 def _run_phase6b2a_mutations() -> None:
-    _expect_failure("missing source correspondence", _missing_source_correspondence, "required regular file")
-    _expect_failure("missing source kit requirements", _missing_source_kit_requirements, "required regular file")
+    _expect_failure("missing source correspondence", _missing_source_correspondence, "top-level legal JSON count")
+    _expect_failure("missing source kit requirements", _missing_source_kit_requirements, "top-level legal JSON count")
     _expect_failure("source kit unblocked", _unblock_source_kit, "must remain blocked")
     _expect_failure("source gate enabled", _enable_source_gate, "fail-closed")
     _expect_failure("source completion enabled", _mark_source_complete, "must remain incomplete")
@@ -223,6 +295,26 @@ def _run_phase6b2a_mutations() -> None:
         "source documentation reference removed",
         _remove_source_documentation_reference,
         "legal/source-correspondence.json",
+    )
+
+
+def _run_phase6b2b1_mutations() -> None:
+    _expect_failure("missing release-assets contract", _missing_release_assets, "top-level legal JSON count")
+    _expect_failure("wrong bundle format", _wrong_bundle_format, "asset contract")
+    _expect_failure("wrong legal payload format", _wrong_legal_payload_format, "asset contract")
+    _expect_failure("release readiness ready", _release_readiness_ready, "asset contract")
+    _expect_failure("source kits ready", _source_kits_ready, "asset contract")
+    _expect_failure("missing source asset template", _missing_source_asset_template, "asset contract")
+    _expect_failure("source asset status ready", _source_asset_status_ready, "asset contract")
+    _expect_failure(
+        "docs claim publishing enabled",
+        _add_publishing_enabled_claim,
+        "unsupported project claim",
+    )
+    _expect_failure(
+        "docs claim complete Corresponding Source",
+        _add_complete_corresponding_source_claim,
+        "unsupported project claim",
     )
 
 
@@ -280,6 +372,7 @@ def _expect_failure(
             verifier.LegalVerificationError,
             verifier.built_inventory.InventoryError,
             verifier.release_gate.ReleaseLegalGateError,
+            verifier.release_payload.LegalPayloadError,
             verifier.source_correspondence.SourceCorrespondenceError,
             OSError,
             UnicodeError,
@@ -297,6 +390,11 @@ def _copy_fixture(root: Path) -> None:
     for relative in ("README.md", "THIRD_PARTY_NOTICES.md", "VERSION"):
         shutil.copy2(REPO_ROOT / relative, root / relative)
     shutil.copytree(REPO_ROOT / "legal", root / "legal")
+    (root / "docs").mkdir()
+    shutil.copy2(
+        REPO_ROOT / "docs/source-kit-feasibility.md",
+        root / "docs/source-kit-feasibility.md",
+    )
 
     (root / ".github").mkdir()
     shutil.copy2(REPO_ROOT / ".github/build-dependencies.json", root / ".github/build-dependencies.json")
@@ -346,6 +444,105 @@ def _missing_gitattributes(root: Path) -> None:
     (root / verifier.GITATTRIBUTES_PATH).unlink()
 
 
+def _missing_legal_json_wildcard(root: Path) -> None:
+    _rewrite_gitattributes(root, lambda data: data.replace(b"/legal/*.json text eol=lf\n", b""))
+
+
+def _legal_json_wildcard_eol_crlf(root: Path) -> None:
+    _rewrite_gitattributes(
+        root,
+        lambda data: data.replace(b"/legal/*.json text eol=lf", b"/legal/*.json text eol=crlf"),
+    )
+
+
+def _legal_json_wildcard_missing_eol(root: Path) -> None:
+    _rewrite_gitattributes(
+        root,
+        lambda data: data.replace(b"/legal/*.json text eol=lf", b"/legal/*.json text"),
+    )
+
+
+def _legal_json_wildcard_binary(root: Path) -> None:
+    _rewrite_gitattributes(
+        root,
+        lambda data: data.replace(b"/legal/*.json text eol=lf", b"/legal/*.json -text"),
+    )
+
+
+def _missing_readme_rule(root: Path) -> None:
+    _rewrite_gitattributes(root, lambda data: data.replace(b"/README.md text eol=lf\n", b""))
+
+
+def _readme_eol_crlf(root: Path) -> None:
+    _rewrite_gitattributes(
+        root,
+        lambda data: data.replace(b"/README.md text eol=lf", b"/README.md text eol=crlf"),
+    )
+
+
+def _missing_legal_readme_rule(root: Path) -> None:
+    _rewrite_gitattributes(root, lambda data: data.replace(b"/legal/README.md text eol=lf\n", b""))
+
+
+def _legal_readme_eol_crlf(root: Path) -> None:
+    _rewrite_gitattributes(
+        root,
+        lambda data: data.replace(
+            b"/legal/README.md text eol=lf",
+            b"/legal/README.md text eol=crlf",
+        ),
+    )
+
+
+def _missing_feasibility_document_rule(root: Path) -> None:
+    _rewrite_gitattributes(
+        root,
+        lambda data: data.replace(b"/docs/source-kit-feasibility.md text eol=lf\n", b""),
+    )
+
+
+def _feasibility_document_eol_crlf(root: Path) -> None:
+    _rewrite_gitattributes(
+        root,
+        lambda data: data.replace(
+            b"/docs/source-kit-feasibility.md text eol=lf",
+            b"/docs/source-kit-feasibility.md text eol=crlf",
+        ),
+    )
+
+
+def _verify_later_override_rejected(
+    relative: str,
+    mutation: Mutation,
+    label: str,
+) -> None:
+    with tempfile.TemporaryDirectory(prefix="legal-policy-later-override-") as temp:
+        root = Path(temp) / "repo"
+        _copy_fixture(root)
+        mutation(root)
+        _initialize_git_repository(root, commit=False)
+        output = _git(root, "check-attr", "text", "eol", "--", relative).splitlines()
+        _assert(f"{relative}: text: set" in output, f"{label} override text attribute changed")
+        _assert(f"{relative}: eol: crlf" in output, f"{label} override was not effective")
+        try:
+            verifier.verify_repository(root)
+        except verifier.LegalVerificationError as exc:
+            _assert("checkout rules" in str(exc), f"{label} override: unexpected failure: {exc}")
+        else:
+            raise AssertionError(f"later {label} eol=crlf override was not rejected")
+
+
+def _later_aria2_override(root: Path) -> None:
+    _rewrite_gitattributes(
+        root,
+        lambda data: data + b"/legal/primary-source-evidence-aria2.json text eol=crlf\n",
+    )
+
+
+def _later_readme_override(root: Path) -> None:
+    _rewrite_gitattributes(root, lambda data: data + b"/README.md text eol=crlf\n")
+
+
 def _missing_components_rule(root: Path) -> None:
     _rewrite_gitattributes(root, lambda data: data.replace(b"/legal/components.json text eol=lf\n", b""))
 
@@ -354,6 +551,13 @@ def _missing_built_inventory_rule(root: Path) -> None:
     _rewrite_gitattributes(
         root,
         lambda data: data.replace(b"/legal/built-artifact-inventory.json text eol=lf\n", b""),
+    )
+
+
+def _missing_release_assets_rule(root: Path) -> None:
+    _rewrite_gitattributes(
+        root,
+        lambda data: data.replace(b"/legal/release-assets-v2.json text eol=lf\n", b""),
     )
 
 
@@ -384,6 +588,44 @@ def _missing_source_correspondence(root: Path) -> None:
 
 def _missing_source_kit_requirements(root: Path) -> None:
     (root / verifier.source_correspondence.KIT_PATH).unlink()
+
+
+def _missing_release_assets(root: Path) -> None:
+    (root / verifier.release_payload.CONTRACT_PATH).unlink()
+
+
+def _mutate_release_assets(root: Path, mutation: Callable[[dict], None]) -> None:
+    path = root / verifier.release_payload.CONTRACT_PATH
+    document = json.loads(path.read_text(encoding="utf-8"))
+    mutation(document)
+    path.write_bytes((json.dumps(document, indent=2, ensure_ascii=True) + "\n").encode("utf-8"))
+
+
+def _wrong_bundle_format(root: Path) -> None:
+    _mutate_release_assets(root, lambda document: document.update(bundle_format="s9h-release-bundle-v1"))
+
+
+def _wrong_legal_payload_format(root: Path) -> None:
+    _mutate_release_assets(root, lambda document: document.update(legal_payload_format="invalid"))
+
+
+def _release_readiness_ready(root: Path) -> None:
+    _mutate_release_assets(root, lambda document: document.update(release_readiness="ready"))
+
+
+def _source_kits_ready(root: Path) -> None:
+    _mutate_release_assets(root, lambda document: document.update(source_kits_ready=True))
+
+
+def _missing_source_asset_template(root: Path) -> None:
+    _mutate_release_assets(root, lambda document: document["required_source_asset_templates"].pop())
+
+
+def _source_asset_status_ready(root: Path) -> None:
+    _mutate_release_assets(
+        root,
+        lambda document: document["required_source_asset_templates"][0].update(status="ready"),
+    )
 
 
 def _mutate_source_json(root: Path, relative: str, mutation: Callable[[dict], None]) -> None:
@@ -653,6 +895,14 @@ def _add_release_ready_claim(root: Path) -> None:
 
 def _add_source_complete_claim(root: Path) -> None:
     _append_notice(root, "The source availability is " + "complete.")
+
+
+def _add_publishing_enabled_claim(root: Path) -> None:
+    _append_notice(root, "Publishing " + "enabled.")
+
+
+def _add_complete_corresponding_source_claim(root: Path) -> None:
+    _append_notice(root, "Complete " + "Corresponding Source.")
 
 
 def _add_exhaustive_inventory_claim(root: Path) -> None:

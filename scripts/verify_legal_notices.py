@@ -11,6 +11,7 @@ from typing import Any
 
 import inventory_built_executable as built_inventory
 import verify_release_legal_gate as release_gate
+import verify_release_legal_payload as release_payload
 import verify_source_correspondence as source_correspondence
 
 
@@ -156,14 +157,25 @@ ALL_LICENSE_PATHS = tuple(
 GITATTRIBUTES_PATH = ".gitattributes"
 GITATTRIBUTES_LINES = (
     "/.gitattributes text eol=lf",
+    "/README.md text eol=lf",
+    "/docs/source-kit-feasibility.md text eol=lf",
+    "/legal/*.json text eol=lf",
+    "/legal/README.md text eol=lf",
     "/legal/built-artifact-inventory.json text eol=lf",
     "/legal/components.json text eol=lf",
+    "/legal/release-assets-v2.json text eol=lf",
     "/legal/release-policy.json text eol=lf",
     "/legal/source-correspondence.json text eol=lf",
     "/legal/source-kit-requirements.json text eol=lf",
     "/legal/licenses/** -text",
 )
 GITATTRIBUTES_BYTES = ("\n".join(GITATTRIBUTES_LINES) + "\n").encode("utf-8")
+CANONICAL_DOCUMENT_PATHS = (
+    "README.md",
+    "docs/source-kit-feasibility.md",
+    "legal/README.md",
+)
+EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT = 15
 
 NOTICE_HEADINGS = {
     "aria2": "### aria2 1.37.0",
@@ -198,12 +210,21 @@ FORBIDDEN_CLAIMS = tuple(
         ("release", "ready"),
         ("ready", "for", "release"),
         ("approved", "to", "publish"),
+        ("publishing", "enabled"),
+        ("source", "kit", "complete"),
         ("source", "availability", "complete"),
         ("source", "availability", "is", "complete"),
         ("corresponding", "source", "is", "complete"),
         ("project", "is", "open", "source"),
         ("mit", "licensed", "project"),
     )
+)
+DOCUMENTATION_ONLY_FORBIDDEN_CLAIMS = (
+    "complete corresponding source",
+    "legally compliant",
+    "release approved",
+    "safe to distribute",
+    "all source available",
 )
 UNSUPPORTED_ATTRIBUTION_CLAIMS = tuple(
     " ".join(parts)
@@ -236,6 +257,7 @@ def main() -> int:
         LegalVerificationError,
         built_inventory.InventoryError,
         release_gate.ReleaseLegalGateError,
+        release_payload.LegalPayloadError,
         source_correspondence.SourceCorrespondenceError,
         OSError,
         UnicodeError,
@@ -249,7 +271,7 @@ def main() -> int:
 
 def verify_repository(root: Path) -> dict[str, Any]:
     root = Path(root)
-    _verify_checkout_policy(root)
+    verify_checkout_policy(root)
     inventory, inventory_text = _verify_inventory(root)
     artifact_path = root / "legal/built-artifact-inventory.json"
     policy_path = root / "legal/release-policy.json"
@@ -267,6 +289,8 @@ def verify_repository(root: Path) -> dict[str, Any]:
     _verify_sources_of_truth(root, inventory)
     correspondence, source_kits = source_correspondence.verify_repository(root)
     _verify_phase6b2a_artifacts(correspondence, source_kits)
+    release_assets = release_payload.load_asset_contract(root / release_payload.CONTRACT_PATH)
+    _verify_phase6b2b1_artifacts(release_assets, release_policy, source_kits)
     _verify_project_claims_and_hygiene(
         {
             "README.md": product_readme,
@@ -277,6 +301,9 @@ def verify_repository(root: Path) -> dict[str, Any]:
                 root / "legal/built-artifact-inventory.json"
             ).read_text(encoding="utf-8"),
             "legal/release-policy.json": (root / "legal/release-policy.json").read_text(encoding="utf-8"),
+            "legal/release-assets-v2.json": (
+                root / "legal/release-assets-v2.json"
+            ).read_text(encoding="utf-8"),
             "legal/source-correspondence.json": (
                 root / "legal/source-correspondence.json"
             ).read_text(encoding="utf-8"),
@@ -298,7 +325,17 @@ def git_blob_sha1(data: bytes) -> str:
     return hashlib.sha1(header + data).hexdigest()
 
 
+def verify_checkout_policy(root: Path) -> None:
+    root = Path(root)
+    _verify_checkout_policy(root)
+
+
 def _verify_checkout_policy(root: Path) -> None:
+    legal_json_paths = _discover_top_level_legal_json(root)
+    _require(
+        len(legal_json_paths) == EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT,
+        "top-level legal JSON count must be 15",
+    )
     path = root / GITATTRIBUTES_PATH
     _require(
         path.is_file() and not path.is_symlink(),
@@ -316,20 +353,23 @@ def _verify_checkout_policy(root: Path) -> None:
     _require(lines == GITATTRIBUTES_LINES, f"{GITATTRIBUTES_PATH} checkout rules are invalid")
     _require(raw == GITATTRIBUTES_BYTES, f"{GITATTRIBUTES_PATH} bytes are not canonical")
 
-    attributes = _expected_checkout_attributes()
-    git_attributes = _read_git_checkout_attributes(root)
+    attributes = _expected_checkout_attributes(legal_json_paths)
+    git_attributes = _read_git_checkout_attributes(root, legal_json_paths)
     if git_attributes is not None:
         attributes = git_attributes
     _require(attributes[GITATTRIBUTES_PATH]["text"] == "set", ".gitattributes text attribute must be set")
     _require(attributes[GITATTRIBUTES_PATH]["eol"] == "lf", ".gitattributes eol attribute must be lf")
-    _require(attributes["legal/components.json"]["text"] == "set", "components JSON text attribute must be set")
-    _require(attributes["legal/components.json"]["eol"] == "lf", "components JSON eol attribute must be lf")
-    for relative in ("legal/built-artifact-inventory.json", "legal/release-policy.json"):
+    for relative in legal_json_paths:
         _require(attributes[relative]["text"] == "set", f"{relative} text attribute must be set")
         _require(attributes[relative]["eol"] == "lf", f"{relative} eol attribute must be lf")
-    for relative in ("legal/source-correspondence.json", "legal/source-kit-requirements.json"):
+    for relative in CANONICAL_DOCUMENT_PATHS:
         _require(attributes[relative]["text"] == "set", f"{relative} text attribute must be set")
         _require(attributes[relative]["eol"] == "lf", f"{relative} eol attribute must be lf")
+        _verify_canonical_document_bytes(
+            root,
+            relative,
+            compare_git_blob=git_attributes is not None,
+        )
     for relative in ALL_LICENSE_PATHS:
         _require(attributes[relative]["text"] == "unset", f"{relative} text attribute must be unset")
 
@@ -350,20 +390,64 @@ def _verify_attribute_text_hygiene(text: str) -> None:
         )
 
 
-def _expected_checkout_attributes() -> dict[str, dict[str, str]]:
+def _discover_top_level_legal_json(root: Path) -> tuple[str, ...]:
+    legal_root = root / "legal"
+    _require(
+        legal_root.is_dir() and not legal_root.is_symlink(),
+        "required directory is missing: legal",
+    )
+    paths = tuple(
+        sorted(
+            (
+                path.relative_to(root).as_posix()
+                for path in legal_root.iterdir()
+                if path.is_file() and not path.is_symlink() and path.suffix.casefold() == ".json"
+            ),
+            key=lambda value: (value.casefold(), value),
+        )
+    )
+    _require(paths, "no top-level legal JSON files found")
+    return paths
+
+
+def _verify_canonical_document_bytes(
+    root: Path,
+    relative: str,
+    *,
+    compare_git_blob: bool,
+) -> None:
+    path = root / relative
+    _require(
+        path.is_file() and not path.is_symlink(),
+        f"required regular file is missing: {relative}",
+    )
+    raw = path.read_bytes()
+    _require(not raw.startswith(b"\xef\xbb\xbf"), f"{relative} contains a UTF-8 BOM")
+    _require(b"\r" not in raw, f"noncanonical documentation: {relative}")
+    _require(b"\0" not in raw, f"{relative} contains NUL")
+    raw.decode("utf-8")
+    if compare_git_blob:
+        blob = _read_git_blob(root, relative)
+        if blob is not None:
+            _require(raw == blob, f"canonical documentation differs from Git blob: {relative}")
+
+
+def _expected_checkout_attributes(
+    legal_json_paths: tuple[str, ...],
+) -> dict[str, dict[str, str]]:
     attributes = {
         GITATTRIBUTES_PATH: {"text": "set", "eol": "lf"},
-        "legal/built-artifact-inventory.json": {"text": "set", "eol": "lf"},
-        "legal/components.json": {"text": "set", "eol": "lf"},
-        "legal/release-policy.json": {"text": "set", "eol": "lf"},
-        "legal/source-correspondence.json": {"text": "set", "eol": "lf"},
-        "legal/source-kit-requirements.json": {"text": "set", "eol": "lf"},
     }
+    attributes.update({relative: {"text": "set", "eol": "lf"} for relative in legal_json_paths})
+    attributes.update({relative: {"text": "set", "eol": "lf"} for relative in CANONICAL_DOCUMENT_PATHS})
     attributes.update({relative: {"text": "unset", "eol": "unspecified"} for relative in ALL_LICENSE_PATHS})
     return attributes
 
 
-def _read_git_checkout_attributes(root: Path) -> dict[str, dict[str, str]] | None:
+def _read_git_checkout_attributes(
+    root: Path,
+    legal_json_paths: tuple[str, ...],
+) -> dict[str, dict[str, str]] | None:
     git = shutil.which("git")
     if git is None:
         return None
@@ -386,11 +470,8 @@ def _read_git_checkout_attributes(root: Path) -> dict[str, dict[str, str]] | Non
 
     paths = (
         GITATTRIBUTES_PATH,
-        "legal/built-artifact-inventory.json",
-        "legal/components.json",
-        "legal/release-policy.json",
-        "legal/source-correspondence.json",
-        "legal/source-kit-requirements.json",
+        *legal_json_paths,
+        *CANONICAL_DOCUMENT_PATHS,
         *ALL_LICENSE_PATHS,
     )
     result = subprocess.run(
@@ -414,6 +495,18 @@ def _read_git_checkout_attributes(root: Path) -> dict[str, dict[str, str]] | Non
         attributes[relative][attribute] = value
     _require(all(set(values) == {"text", "eol"} for values in attributes.values()), "git check-attr output is incomplete")
     return attributes
+
+
+def _read_git_blob(root: Path, relative: str) -> bytes | None:
+    git = shutil.which("git")
+    if git is None:
+        return None
+    result = subprocess.run(
+        [git, "-C", str(root), "show", f"HEAD:{relative}"],
+        capture_output=True,
+        check=False,
+    )
+    return result.stdout if result.returncode == 0 else None
 
 
 def _verify_inventory(root: Path) -> tuple[dict[str, Any], str]:
@@ -512,6 +605,13 @@ def _verify_notices(notices: str, inventory: dict[str, Any]) -> None:
         "## Distributed runtime tools",
         "## Packaged application runtime",
         "## GPL source-availability warning",
+        "## Phase 6B2B1 release legal payload",
+        "portable packages will include verified legal materials",
+        "standalone EXE releases require a companion legal ZIP",
+        "legal materials do not replace source-distribution obligations",
+        "release bundle v2 requires both source assets",
+        "publishing remains disabled",
+        "Phase 6B2B2 remains required",
         "## Trademarks and affiliation",
         "## License files",
     ):
@@ -552,6 +652,14 @@ def _verify_readmes(product_readme: str, legal_readme: str) -> None:
         "source correspondence partially identified",
         "source kit not ready",
         "no compliance certification",
+        "## Phase 6B2B1 release legal payload",
+        "legal/release-assets-v2.json",
+        "s9h-release-bundle-v2",
+        "s9h-release-legal-payload-v1",
+        "standalone EXE releases require a companion legal ZIP",
+        "source asset names are defined but assets are not ready",
+        "publishing remains disabled",
+        "Phase 6B2B2 remains required",
     ):
         _require(required in product_readme, f"product README missing legal statement: {required}")
     _require(
@@ -592,6 +700,14 @@ def _verify_readmes(product_readme: str, legal_readme: str) -> None:
         "source correspondence partially identified",
         "source kit not ready",
         "no compliance certification",
+        "## Phase 6B2B1 release legal payload",
+        "legal/release-assets-v2.json",
+        "s9h-release-bundle-v2",
+        "s9h-release-legal-payload-v1",
+        "standalone EXE releases require a companion legal ZIP",
+        "source asset names are defined but assets are not ready",
+        "publishing remains disabled",
+        "Phase 6B2B2 remains required",
     ):
         _require(required in legal_readme, f"legal README missing status or requirement: {required}")
 
@@ -660,6 +776,50 @@ def _verify_phase6b2a_artifacts(
     )
 
 
+def _verify_phase6b2b1_artifacts(
+    release_assets: dict[str, Any],
+    release_policy: dict[str, Any],
+    source_kits: dict[str, Any],
+) -> None:
+    _require(
+        release_assets["bundle_format"] == "s9h-release-bundle-v2",
+        "release bundle format changed",
+    )
+    _require(
+        release_assets["legal_payload_format"] == "s9h-release-legal-payload-v1",
+        "release legal payload format changed",
+    )
+    _require(release_assets["release_readiness"] == "blocked", "release readiness changed")
+    _require(release_assets["legal_compliance_certified"] is False, "legal compliance was certified")
+    _require(
+        release_assets["source_availability_certified"] is False,
+        "source availability was certified",
+    )
+    _require(release_assets["source_kits_ready"] is False, "source kits were marked ready")
+    _require(
+        [item["id"] for item in release_assets["required_source_asset_templates"]]
+        == ["aria2", "ffmpeg"],
+        "required source asset templates changed",
+    )
+    _require(
+        all(
+            item["status"] == "not-ready"
+            for item in release_assets["required_source_asset_templates"]
+        ),
+        "required source asset status changed",
+    )
+    _require(release_policy["policy_mode"] == "fail-closed", "release policy mode changed")
+    _require(release_policy["release_payload_integrated"] is False, "release payload was marked integrated")
+    _require(
+        source_kits["release_gate_reconsideration_allowed"] is False,
+        "source gate was reconsidered",
+    )
+    _require(
+        all(kit["status"] == "blocked" for kit in source_kits["kits"]),
+        "source kit must remain blocked",
+    )
+
+
 def _verify_sources_of_truth(root: Path, inventory: dict[str, Any]) -> None:
     build_dependencies = json.loads(_read_required_bytes(root, ".github/build-dependencies.json").decode("utf-8"))
     _require(build_dependencies["target"]["python"] == "3.11.9", "build lock Python version changed")
@@ -709,6 +869,12 @@ def _verify_project_claims_and_hygiene(documents: dict[str, str]) -> None:
         folded = text.casefold()
         for claim in FORBIDDEN_CLAIMS:
             _require(claim not in folded, f"unsupported project claim in {relative}: {claim}")
+        if relative in {"README.md", "THIRD_PARTY_NOTICES.md", "legal/README.md"}:
+            for claim in DOCUMENTATION_ONLY_FORBIDDEN_CLAIMS:
+                _require(
+                    claim not in folded,
+                    f"unsupported project claim in {relative}: {claim}",
+                )
         for claim in UNSUPPORTED_ATTRIBUTION_CLAIMS:
             _require(claim not in folded, f"unsupported attribution claim in {relative}: {claim}")
         _require(LOCAL_PATH_PATTERN.search(text) is None, f"local absolute path in {relative}")

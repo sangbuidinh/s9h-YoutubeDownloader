@@ -1,0 +1,2779 @@
+{
+  "schema_version": 1,
+  "target_phase": "6B2B2A",
+  "baseline_commit": "89df08602591184dc6501240e5d50738197f8db4",
+  "inventory_scope": "pinned-gpl-runtime-source-kit-input-feasibility",
+  "release_gate_reconsideration_allowed": false,
+  "legal_compliance_certified": false,
+  "source_assets_created": false,
+  "packages": [
+    {
+      "id": "aria2",
+      "binary_package_sha256": "67d015301eef0b612191212d564c5bb0a14b5b9c4796b76454276a4d28d9b288",
+      "core_source": {
+        "repository": "aria2/aria2",
+        "commit": "02f2d0d8472b3c38c29b4dba8c75ebd5fdd2899a",
+        "archive_sha256": "f0839604196b45959f72f766fdfa9df5eae6c292d48020c6475ca7eacd5d15e7",
+        "license_path": "COPYING",
+        "evidence": [
+          {
+            "kind": "repository-commit-and-archive",
+            "authority": "verified source correspondence",
+            "locator": "legal/source-correspondence.json#packages/aria2/core_source",
+            "claim": "Core repository aria2/aria2 is identified by commit 02f2d0d8472b3c38c29b4dba8c75ebd5fdd2899a and archive SHA-256 f0839604196b45959f72f766fdfa9df5eae6c292d48020c6475ca7eacd5d15e7.",
+            "status": "verified"
+          }
+        ],
+        "status": "verified",
+        "blockers": []
+      },
+      "external_components": [
+        {
+          "id": "c-ares",
+          "linkage": "static",
+          "provider_version": "1.19.1",
+          "version_status": "verified",
+          "upstream_repository": "https://github.com/c-ares/c-ares",
+          "immutable_ref": "6360e96b5cf8e5980c887ce58ef727e53d77243a",
+          "source_archive_sha256": "321700399b72ed0e037d0074c629e7741f6b2ec2dda92956abe3e9671d3e268e",
+          "evidence": [
+            {
+              "kind": "official-license",
+              "authority": "c-ares project",
+              "locator": "https://github.com/c-ares/c-ares/blob/6360e96b5cf8e5980c887ce58ef727e53d77243a/LICENSE.md",
+              "claim": "The immutable upstream source identifies the c-ares licensing terms.",
+              "status": "verified"
+            },
+            {
+              "kind": "official-release",
+              "authority": "c-ares project",
+              "locator": "https://github.com/c-ares/c-ares/releases/tag/cares-1_19_1",
+              "claim": "The official c-ares release identifies version 1.19.1 and its source archive.",
+              "status": "verified"
+            },
+            {
+              "kind": "official-repository-commit",
+              "authority": "c-ares project",
+              "locator": "https://github.com/c-ares/c-ares/commit/6360e96b5cf8e5980c887ce58ef727e53d77243a",
+              "claim": "The official annotated release tag resolves to immutable commit 6360e96b5cf8e5980c887ce58ef727e53d77243a.",
+              "status": "verified"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "aria2 project Windows release",
+              "locator": "legal/source-correspondence.json#packages/aria2/external_components/c-ares",
+              "claim": "Provider metadata identifies c-ares version 1.19.1 with static linkage.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "verified-immutable-input",
+          "blockers": []
+        },
+        {
+          "id": "expat",
+          "linkage": "static",
+          "provider_version": "2.5.0",
+          "version_status": "verified",
+          "upstream_repository": "https://github.com/libexpat/libexpat",
+          "immutable_ref": "654d2de0da85662fcc7644a7acd7c2dd2cfb21f0",
+          "source_archive_sha256": "ef2420f0232c087801abf705e89ae65f6257df6b7931d37846a193ef2e8cdcbe",
+          "evidence": [
+            {
+              "kind": "official-license",
+              "authority": "Expat project",
+              "locator": "https://github.com/libexpat/libexpat/blob/654d2de0da85662fcc7644a7acd7c2dd2cfb21f0/expat/COPYING",
+              "claim": "The immutable upstream source identifies the Expat licensing terms.",
+              "status": "verified"
+            },
+            {
+              "kind": "official-release",
+              "authority": "Expat project",
+              "locator": "https://github.com/libexpat/libexpat/releases/tag/R_2_5_0",
+              "claim": "The official Expat release identifies version 2.5.0 and its source archive.",
+              "status": "verified"
+            },
+            {
+              "kind": "official-repository-commit",
+              "authority": "Expat project",
+              "locator": "https://github.com/libexpat/libexpat/commit/654d2de0da85662fcc7644a7acd7c2dd2cfb21f0",
+              "claim": "The official annotated release tag resolves to immutable commit 654d2de0da85662fcc7644a7acd7c2dd2cfb21f0.",
+              "status": "verified"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "aria2 project Windows release",
+              "locator": "legal/source-correspondence.json#packages/aria2/external_components/expat",
+              "claim": "Provider metadata identifies expat version 2.5.0 with static linkage.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "verified-immutable-input",
+          "blockers": []
+        },
+        {
+          "id": "gmp",
+          "linkage": "static",
+          "provider_version": "6.3.0",
+          "version_status": "provider-identified",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-license",
+              "authority": "GNU MP project",
+              "locator": "https://gmplib.org/manual/Copying",
+              "claim": "The official GNU MP manual states the project's dual licensing terms.",
+              "status": "verified"
+            },
+            {
+              "kind": "official-release-archive",
+              "authority": "GNU MP project",
+              "locator": "https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz",
+              "claim": "The official GNU MP release infrastructure provides the 6.3.0 source archive that was independently hashed.",
+              "status": "verified"
+            },
+            {
+              "kind": "official-repository-policy",
+              "authority": "GNU MP project",
+              "locator": "https://gmplib.org/devel/repo-usage",
+              "claim": "The official repository documentation identifies Mercurial as the GNU MP source-control system.",
+              "status": "verified"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "aria2 project Windows release",
+              "locator": "legal/source-correspondence.json#packages/aria2/external_components/gmp",
+              "claim": "Provider metadata identifies gmp version 6.3.0 with static linkage.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-version-only",
+          "blockers": [
+            "Exact official Mercurial changeset for GNU MP 6.3.0 remains unresolved.",
+            "Official upstream repository cannot be promoted while the immutable identity remains unresolved.",
+            "Source archive SHA-256 cannot be promoted while this inventory record remains unverified under the protected schema.",
+            "The protected inventory requires a 40-character Git commit and cannot represent the official Mercurial identity without a schema change."
+          ]
+        },
+        {
+          "id": "libssh2",
+          "linkage": "static",
+          "provider_version": "1.11.0",
+          "version_status": "verified",
+          "upstream_repository": "https://github.com/libssh2/libssh2",
+          "immutable_ref": "1c3f1b7da588f2652260285529ec3c1f1125eb4e",
+          "source_archive_sha256": "a488a22625296342ddae862de1d59633e6d446eff8417398e06674a49be3d7c2",
+          "evidence": [
+            {
+              "kind": "official-license",
+              "authority": "libssh2 project",
+              "locator": "https://github.com/libssh2/libssh2/blob/1c3f1b7da588f2652260285529ec3c1f1125eb4e/COPYING",
+              "claim": "The immutable upstream source identifies the libssh2 licensing terms.",
+              "status": "verified"
+            },
+            {
+              "kind": "official-release",
+              "authority": "libssh2 project",
+              "locator": "https://github.com/libssh2/libssh2/releases/tag/libssh2-1.11.0",
+              "claim": "The official libssh2 release identifies version 1.11.0 and its source archive.",
+              "status": "verified"
+            },
+            {
+              "kind": "official-repository-commit",
+              "authority": "libssh2 project",
+              "locator": "https://github.com/libssh2/libssh2/commit/1c3f1b7da588f2652260285529ec3c1f1125eb4e",
+              "claim": "The official annotated release tag resolves to immutable commit 1c3f1b7da588f2652260285529ec3c1f1125eb4e.",
+              "status": "verified"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "aria2 project Windows release",
+              "locator": "legal/source-correspondence.json#packages/aria2/external_components/libssh2",
+              "claim": "Provider metadata identifies libssh2 version 1.11.0 with static linkage.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "verified-immutable-input",
+          "blockers": []
+        },
+        {
+          "id": "sqlite",
+          "linkage": "static",
+          "provider_version": "3.43.1",
+          "version_status": "verified",
+          "upstream_repository": "https://github.com/sqlite/sqlite",
+          "immutable_ref": "f1f6a0bba16895215150081e55dda0d960494773",
+          "source_archive_sha256": "fe1bf29c5af379444ff5744f8317ad246fb865ceacc937903fe0fec0281fba2a",
+          "evidence": [
+            {
+              "kind": "official-fossil-release",
+              "authority": "SQLite project",
+              "locator": "https://www.sqlite.org/releaselog/3_43_1.html",
+              "claim": "The official SQLite 3.43.1 release log identifies Fossil source identity 2d3a40c05c49e1a49264912b1a05bc2143ac0e7c3df588276ce80a4cbc9bd1b0.",
+              "status": "verified"
+            },
+            {
+              "kind": "official-license",
+              "authority": "SQLite project",
+              "locator": "https://github.com/sqlite/sqlite/blob/f1f6a0bba16895215150081e55dda0d960494773/LICENSE.md",
+              "claim": "The authorized official mirror source identifies SQLite's public-domain dedication.",
+              "status": "verified"
+            },
+            {
+              "kind": "official-mirror-mapping",
+              "authority": "SQLite project official Git mirror",
+              "locator": "https://github.com/sqlite/sqlite/releases/tag/version-3.43.1",
+              "claim": "The official Git mirror maps commit f1f6a0bba16895215150081e55dda0d960494773 to FossilOrigin-Name 2d3a40c05c49e1a49264912b1a05bc2143ac0e7c3df588276ce80a4cbc9bd1b0.",
+              "status": "verified"
+            },
+            {
+              "kind": "official-source-archive",
+              "authority": "SQLite project official Git mirror",
+              "locator": "https://github.com/sqlite/sqlite/archive/refs/tags/version-3.43.1.tar.gz",
+              "claim": "The official mirror tag archive contains VERSION 3.43.1 and manifest.uuid matching the official Fossil identity.",
+              "status": "verified"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "aria2 project Windows release",
+              "locator": "legal/source-correspondence.json#packages/aria2/external_components/sqlite",
+              "claim": "Provider metadata identifies sqlite version 3.43.1 with static linkage.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "verified-immutable-input",
+          "blockers": []
+        },
+        {
+          "id": "zlib",
+          "linkage": "static",
+          "provider_version": "1.3",
+          "version_status": "verified",
+          "upstream_repository": "https://github.com/madler/zlib",
+          "immutable_ref": "09155eaa2f9270dc4ed1fa13e2b4b2613e6e4851",
+          "source_archive_sha256": "8a9ba2898e1d0d774eca6ba5b4627a11e5588ba85c8851336eb38de4683050a7",
+          "evidence": [
+            {
+              "kind": "official-license",
+              "authority": "zlib project",
+              "locator": "https://github.com/madler/zlib/blob/09155eaa2f9270dc4ed1fa13e2b4b2613e6e4851/LICENSE",
+              "claim": "The immutable upstream source identifies the zlib licensing terms.",
+              "status": "verified"
+            },
+            {
+              "kind": "official-release",
+              "authority": "zlib project",
+              "locator": "https://github.com/madler/zlib/releases/tag/v1.3",
+              "claim": "The official zlib release identifies version 1.3 and its source archive.",
+              "status": "verified"
+            },
+            {
+              "kind": "official-repository-commit",
+              "authority": "zlib project",
+              "locator": "https://github.com/madler/zlib/commit/09155eaa2f9270dc4ed1fa13e2b4b2613e6e4851",
+              "claim": "The official annotated release tag resolves to immutable commit 09155eaa2f9270dc4ed1fa13e2b4b2613e6e4851.",
+              "status": "verified"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "aria2 project Windows release",
+              "locator": "legal/source-correspondence.json#packages/aria2/external_components/zlib",
+              "claim": "Provider metadata identifies zlib version 1.3 with static linkage.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "verified-immutable-input",
+          "blockers": []
+        }
+      ],
+      "toolchain": {
+        "host": "Ubuntu Linux",
+        "compiler": "mingw-w64",
+        "compiler_version": "unresolved",
+        "supporting_tools": [],
+        "evidence": [
+          {
+            "kind": "provider-package-metadata",
+            "authority": "aria2 project Windows release",
+            "locator": "legal/source-correspondence.json#packages/aria2/provider/configuration_evidence",
+            "claim": "Provider metadata identifies an Ubuntu Linux mingw-w64 static cross-build but not exact toolchain versions.",
+            "status": "partial"
+          }
+        ],
+        "status": "partial",
+        "blockers": [
+          "Exact compiler and supporting tool versions are unresolved."
+        ]
+      },
+      "build_orchestration": {
+        "provider_repository": "unresolved",
+        "immutable_ref": "unresolved",
+        "exact_configuration": "unresolved",
+        "patch_status": "unresolved",
+        "reproducible_entrypoint": "unresolved",
+        "evidence": [
+          {
+            "kind": "provider-package-metadata",
+            "authority": "aria2 project Windows release",
+            "locator": "legal/source-correspondence.json#packages/aria2/provider/configuration_evidence",
+            "claim": "Provider metadata records partial configuration characteristics but not complete immutable build orchestration.",
+            "status": "partial"
+          }
+        ],
+        "status": "partial",
+        "blockers": [
+          "Complete build orchestration at an immutable ref is unresolved.",
+          "Exact configuration and reproducible entrypoint are unresolved.",
+          "Patch or explicit no-modification evidence is unresolved."
+        ]
+      },
+      "package_status": "blocked",
+      "blockers": [
+        "Complete Windows build commands and patch or no-modification evidence are absent.",
+        "Exact Windows compiler and toolchain versions are not identified.",
+        "Exact compiler and toolchain versions are not identified by package metadata.",
+        "External-component source archives are not assembled.",
+        "Full build commands and patch or no-modification evidence are absent.",
+        "Release source assets and binary-to-source mapping are not integrated.",
+        "Source archives for statically linked external components are not assembled."
+      ]
+    },
+    {
+      "id": "ffmpeg",
+      "binary_package_sha256": "db580001caa24ac104c8cb856cd113a87b0a443f7bdf47d8c12b1d740584a2ec",
+      "core_source": {
+        "repository": "FFmpeg/FFmpeg",
+        "commit": "38b88335f99e76ed89ff3c93f877fdefce736c13",
+        "archive_sha256": "c3453fbfc7ca25423f4984a83ceda01949d458a8bc04f9d68fab7c392f75b3ab",
+        "license_path": "COPYING.GPLv3",
+        "evidence": [
+          {
+            "kind": "repository-commit-and-archive",
+            "authority": "verified source correspondence",
+            "locator": "legal/source-correspondence.json#packages/ffmpeg/core_source",
+            "claim": "Core repository FFmpeg/FFmpeg is identified by commit 38b88335f99e76ed89ff3c93f877fdefce736c13 and archive SHA-256 c3453fbfc7ca25423f4984a83ceda01949d458a8bc04f9d68fab7c392f75b3ab.",
+            "status": "verified"
+          }
+        ],
+        "status": "verified",
+        "blockers": []
+      },
+      "external_components": [
+        {
+          "id": "amf",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "component-nature-classification",
+              "authority": "Advanced Micro Devices, Inc.",
+              "locator": "https://github.com/GPUOpen-LibrariesAndSDKs/AMF",
+              "claim": "Official documentation supports classifying amf as vendor-sdk; this contextual classification does not prove the provider-selected version or incorporation method.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-interface-research",
+              "authority": "Advanced Micro Devices, Inc.",
+              "locator": "https://github.com/GPUOpen-LibrariesAndSDKs/AMF",
+              "claim": "Official material identifies Advanced Media Framework (AMF) SDK; no current release, SDK, toolkit, driver, or API version is represented as the historical Gyan input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/amf",
+              "claim": "Provider metadata identifies component amf with static linkage but does not identify an exact dependency, SDK, toolkit, or system-interface version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/amf",
+              "claim": "The exact provider-selected version and immutable input for amf remain unresolved; official current documentation is not historical provider-version evidence.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "Advanced Micro Devices, Inc.",
+              "locator": "https://github.com/GPUOpen-LibrariesAndSDKs/AMF",
+              "claim": "The evidence-only source-kit treatment for amf is sdk-or-header-input-requires-version-resolution; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component or SDK version is unresolved.",
+            "Exact provider-to-official mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Provider build recipe does not establish source or SDK incorporation.",
+            "Source or SDK package identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "avisynth",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "functional-classification",
+              "authority": "AviSynth project",
+              "locator": "https://github.com/AviSynth/AviSynthPlus",
+              "claim": "Official upstream material supports classifying avisynth as scripting-integration; this contextual classification does not establish the provider-selected version or static incorporation.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-upstream-research",
+              "authority": "AviSynth project",
+              "locator": "https://github.com/AviSynth/AviSynthPlus",
+              "claim": "Official material identifies AviSynth integration API and AviSynth+; no current release or commit is represented as the historical Gyan provider input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-mapping-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/avisynth",
+              "claim": "No exact package-scoped mapping from FFmpeg component avisynth to a provider-selected upstream release, commit, archive, or SDK input is established.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/avisynth",
+              "claim": "Provider metadata identifies FFmpeg component avisynth with static linkage but does not identify an exact dependency version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/avisynth",
+              "claim": "The package-scoped FFmpeg provider-selected version and immutable input for avisynth remain unresolved; evidence from another package is non-transferable.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "AviSynth project",
+              "locator": "https://github.com/AviSynth/AviSynthPlus",
+              "claim": "The evidence-only source-kit treatment for avisynth is source-or-sdk-input-requires-version-resolution; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact AviSynth implementation and API version are unresolved.",
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Provider historical build recipe does not prove static incorporation.",
+            "Source archive identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "bzlib",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "functional-classification",
+              "authority": "bzip2 project",
+              "locator": "https://sourceware.org/bzip2/",
+              "claim": "Official upstream material supports classifying bzlib as compression-library; this contextual classification does not establish the provider-selected version or static incorporation.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-upstream-research",
+              "authority": "bzip2 project",
+              "locator": "https://sourceware.org/bzip2/",
+              "claim": "Official material identifies bzip2 and libbzip2; no current release or commit is represented as the historical Gyan provider input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-mapping-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/bzlib",
+              "claim": "No exact package-scoped mapping from FFmpeg component bzlib to a provider-selected upstream release, commit, archive, or SDK input is established.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/bzlib",
+              "claim": "Provider metadata identifies FFmpeg component bzlib with static linkage but does not identify an exact dependency version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/bzlib",
+              "claim": "The package-scoped FFmpeg provider-selected version and immutable input for bzlib remain unresolved; evidence from another package is non-transferable.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "bzip2 project",
+              "locator": "https://sourceware.org/bzip2/",
+              "claim": "The evidence-only source-kit treatment for bzlib is source-archive-required-if-version-resolved; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact mapping from provider label bzlib to the provider-selected bzip2 input is unresolved.",
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Provider historical build recipe does not prove static incorporation.",
+            "Source archive identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "cairo",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "Cairo",
+              "locator": "https://gitlab.freedesktop.org/cairo/cairo",
+              "claim": "Official upstream identity for cairo was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/cairo",
+              "claim": "Provider metadata identifies component cairo with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "cuda",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "component-nature-classification",
+              "authority": "NVIDIA Corporation",
+              "locator": "https://docs.nvidia.com/cuda/index.html",
+              "claim": "Official documentation supports classifying cuda as toolkit-interface; this contextual classification does not prove the provider-selected version or incorporation method.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-interface-research",
+              "authority": "NVIDIA Corporation",
+              "locator": "https://docs.nvidia.com/cuda/index.html",
+              "claim": "Official material identifies CUDA Toolkit and programming interfaces; no current release, SDK, toolkit, driver, or API version is represented as the historical Gyan input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/cuda",
+              "claim": "Provider metadata identifies component cuda with static linkage but does not identify an exact dependency, SDK, toolkit, or system-interface version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/cuda",
+              "claim": "The exact provider-selected version and immutable input for cuda remain unresolved; official current documentation is not historical provider-version evidence.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "NVIDIA Corporation",
+              "locator": "https://docs.nvidia.com/cuda/index.html",
+              "claim": "The evidence-only source-kit treatment for cuda is provider-label-needs-build-recipe; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component or SDK version is unresolved.",
+            "Exact provider-to-official mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Provider build recipe does not establish source or SDK incorporation.",
+            "Source or SDK package identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "cuda-llvm",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "component-nature-classification",
+              "authority": "LLVM Project",
+              "locator": "https://llvm.org/docs/CompileCudaWithLLVM.html",
+              "claim": "Official documentation supports classifying cuda-llvm as toolkit-interface; this contextual classification does not prove the provider-selected version or incorporation method.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-interface-research",
+              "authority": "LLVM Project",
+              "locator": "https://llvm.org/docs/CompileCudaWithLLVM.html",
+              "claim": "Official material identifies Clang CUDA compilation interface; no current release, SDK, toolkit, driver, or API version is represented as the historical Gyan input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/cuda-llvm",
+              "claim": "Provider metadata identifies component cuda-llvm with static linkage but does not identify an exact dependency, SDK, toolkit, or system-interface version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/cuda-llvm",
+              "claim": "The exact provider-selected version and immutable input for cuda-llvm remain unresolved; official current documentation is not historical provider-version evidence.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "LLVM Project",
+              "locator": "https://llvm.org/docs/CompileCudaWithLLVM.html",
+              "claim": "The evidence-only source-kit treatment for cuda-llvm is provider-label-needs-build-recipe; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component or SDK version is unresolved.",
+            "Exact provider-to-official mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Provider build recipe does not establish source or SDK incorporation.",
+            "Source or SDK package identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "cuvid",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "component-nature-classification",
+              "authority": "NVIDIA Corporation",
+              "locator": "https://docs.nvidia.com/video-technologies/video-codec-sdk/",
+              "claim": "Official documentation supports classifying cuvid as hardware-api; this contextual classification does not prove the provider-selected version or incorporation method.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-interface-research",
+              "authority": "NVIDIA Corporation",
+              "locator": "https://docs.nvidia.com/video-technologies/video-codec-sdk/",
+              "claim": "Official material identifies NVDECODE (CUVID) API; no current release, SDK, toolkit, driver, or API version is represented as the historical Gyan input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/cuvid",
+              "claim": "Provider metadata identifies component cuvid with static linkage but does not identify an exact dependency, SDK, toolkit, or system-interface version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/cuvid",
+              "claim": "The exact provider-selected version and immutable input for cuvid remain unresolved; official current documentation is not historical provider-version evidence.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "NVIDIA Corporation",
+              "locator": "https://docs.nvidia.com/video-technologies/video-codec-sdk/",
+              "claim": "The evidence-only source-kit treatment for cuvid is sdk-or-header-input-requires-version-resolution; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component or SDK version is unresolved.",
+            "Exact provider-to-official mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Provider build recipe does not establish source or SDK incorporation.",
+            "Source or SDK package identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "d3d11va",
+          "linkage": "system",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "component-nature-classification",
+              "authority": "Microsoft Corporation",
+              "locator": "https://learn.microsoft.com/en-us/windows/win32/medfound/direct3d-11-video-apis",
+              "claim": "Official documentation supports classifying d3d11va as system-api; this contextual classification does not prove the provider-selected version or incorporation method.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-interface-research",
+              "authority": "Microsoft Corporation",
+              "locator": "https://learn.microsoft.com/en-us/windows/win32/medfound/direct3d-11-video-apis",
+              "claim": "Official material identifies Direct3D 11 Video APIs; no current release, SDK, toolkit, driver, or API version is represented as the historical Gyan input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/d3d11va",
+              "claim": "Provider metadata identifies component d3d11va with system linkage but does not identify an exact dependency, SDK, toolkit, or system-interface version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/d3d11va",
+              "claim": "The exact provider-selected version and immutable input for d3d11va remain unresolved; official current documentation is not historical provider-version evidence.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "Microsoft Corporation",
+              "locator": "https://learn.microsoft.com/en-us/windows/win32/medfound/direct3d-11-video-apis",
+              "claim": "The evidence-only source-kit treatment for d3d11va is system-interface-documentation-only; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "system-component-candidate",
+          "blockers": [
+            "Exact Windows SDK or system-interface version is unresolved.",
+            "Exact provider build dependency mapping is unresolved.",
+            "Provider configure and build evidence is incomplete.",
+            "System-component treatment requires final legal and build review."
+          ]
+        },
+        {
+          "id": "d3d12va",
+          "linkage": "system",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "component-nature-classification",
+              "authority": "Microsoft Corporation",
+              "locator": "https://learn.microsoft.com/en-us/windows/win32/medfound/direct3d-12-video-apis",
+              "claim": "Official documentation supports classifying d3d12va as system-api; this contextual classification does not prove the provider-selected version or incorporation method.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-interface-research",
+              "authority": "Microsoft Corporation",
+              "locator": "https://learn.microsoft.com/en-us/windows/win32/medfound/direct3d-12-video-apis",
+              "claim": "Official material identifies Direct3D 12 Video APIs; no current release, SDK, toolkit, driver, or API version is represented as the historical Gyan input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/d3d12va",
+              "claim": "Provider metadata identifies component d3d12va with system linkage but does not identify an exact dependency, SDK, toolkit, or system-interface version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/d3d12va",
+              "claim": "The exact provider-selected version and immutable input for d3d12va remain unresolved; official current documentation is not historical provider-version evidence.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "Microsoft Corporation",
+              "locator": "https://learn.microsoft.com/en-us/windows/win32/medfound/direct3d-12-video-apis",
+              "claim": "The evidence-only source-kit treatment for d3d12va is system-interface-documentation-only; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "system-component-candidate",
+          "blockers": [
+            "Exact Windows SDK or system-interface version is unresolved.",
+            "Exact provider build dependency mapping is unresolved.",
+            "Provider configure and build evidence is incomplete.",
+            "System-component treatment requires final legal and build review."
+          ]
+        },
+        {
+          "id": "dxva2",
+          "linkage": "system",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "component-nature-classification",
+              "authority": "Microsoft Corporation",
+              "locator": "https://learn.microsoft.com/en-us/windows/win32/medfound/about-dxva-2-0",
+              "claim": "Official documentation supports classifying dxva2 as system-api; this contextual classification does not prove the provider-selected version or incorporation method.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-interface-research",
+              "authority": "Microsoft Corporation",
+              "locator": "https://learn.microsoft.com/en-us/windows/win32/medfound/about-dxva-2-0",
+              "claim": "Official material identifies DirectX Video Acceleration 2.0; no current release, SDK, toolkit, driver, or API version is represented as the historical Gyan input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/dxva2",
+              "claim": "Provider metadata identifies component dxva2 with system linkage but does not identify an exact dependency, SDK, toolkit, or system-interface version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/dxva2",
+              "claim": "The exact provider-selected version and immutable input for dxva2 remain unresolved; official current documentation is not historical provider-version evidence.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "Microsoft Corporation",
+              "locator": "https://learn.microsoft.com/en-us/windows/win32/medfound/about-dxva-2-0",
+              "claim": "The evidence-only source-kit treatment for dxva2 is system-interface-documentation-only; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "system-component-candidate",
+          "blockers": [
+            "Exact Windows SDK or system-interface version is unresolved.",
+            "Exact provider build dependency mapping is unresolved.",
+            "Provider configure and build evidence is incomplete.",
+            "System-component treatment requires final legal and build review."
+          ]
+        },
+        {
+          "id": "ffnvcodec",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "component-nature-classification",
+              "authority": "FFmpeg project",
+              "locator": "https://github.com/FFmpeg/nv-codec-headers",
+              "claim": "Official documentation supports classifying ffnvcodec as header-sdk; this contextual classification does not prove the provider-selected version or incorporation method.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-interface-research",
+              "authority": "FFmpeg project",
+              "locator": "https://github.com/FFmpeg/nv-codec-headers",
+              "claim": "Official material identifies FFmpeg nv-codec-headers; no current release, SDK, toolkit, driver, or API version is represented as the historical Gyan input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/ffnvcodec",
+              "claim": "Provider metadata identifies component ffnvcodec with static linkage but does not identify an exact dependency, SDK, toolkit, or system-interface version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/ffnvcodec",
+              "claim": "The exact provider-selected version and immutable input for ffnvcodec remain unresolved; official current documentation is not historical provider-version evidence.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "FFmpeg project",
+              "locator": "https://github.com/FFmpeg/nv-codec-headers",
+              "claim": "The evidence-only source-kit treatment for ffnvcodec is sdk-or-header-input-requires-version-resolution; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component or SDK version is unresolved.",
+            "Exact provider-to-official mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Provider build recipe does not establish source or SDK incorporation.",
+            "Source or SDK package identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "gmp",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "functional-classification",
+              "authority": "GNU GMP project",
+              "locator": "https://gmplib.org/",
+              "claim": "Official upstream material supports classifying gmp as arithmetic-library; this contextual classification does not establish the provider-selected version or static incorporation.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-upstream-research",
+              "authority": "GNU GMP project",
+              "locator": "https://gmplib.org/",
+              "claim": "Official material identifies GNU Multiple Precision Arithmetic Library; no current release or commit is represented as the historical Gyan provider input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-mapping-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/gmp",
+              "claim": "No exact package-scoped mapping from FFmpeg component gmp to a provider-selected upstream release, commit, archive, or SDK input is established.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/gmp",
+              "claim": "Provider metadata identifies FFmpeg component gmp with static linkage but does not identify an exact dependency version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/gmp",
+              "claim": "The package-scoped FFmpeg provider-selected version and immutable input for gmp remain unresolved; evidence from another package is non-transferable.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "GNU GMP project",
+              "locator": "https://gmplib.org/",
+              "claim": "The evidence-only source-kit treatment for gmp is source-archive-required-if-version-resolved; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Aria2 GMP evidence is package-scoped and non-transferable to FFmpeg.",
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Package-scoped FFmpeg GMP version is unresolved.",
+            "Provider historical build recipe does not prove static incorporation.",
+            "Source archive identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "gnutls",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "functional-classification",
+              "authority": "GnuTLS project",
+              "locator": "https://www.gnutls.org/",
+              "claim": "Official upstream material supports classifying gnutls as tls-crypto-library; this contextual classification does not establish the provider-selected version or static incorporation.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-upstream-research",
+              "authority": "GnuTLS project",
+              "locator": "https://www.gnutls.org/",
+              "claim": "Official material identifies GnuTLS secure communications library; no current release or commit is represented as the historical Gyan provider input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-mapping-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/gnutls",
+              "claim": "No exact package-scoped mapping from FFmpeg component gnutls to a provider-selected upstream release, commit, archive, or SDK input is established.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/gnutls",
+              "claim": "Provider metadata identifies FFmpeg component gnutls with static linkage but does not identify an exact dependency version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/gnutls",
+              "claim": "The package-scoped FFmpeg provider-selected version and immutable input for gnutls remain unresolved; evidence from another package is non-transferable.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "GnuTLS project",
+              "locator": "https://www.gnutls.org/",
+              "claim": "The evidence-only source-kit treatment for gnutls is source-archive-required-if-version-resolved; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Provider historical build recipe does not prove static incorporation.",
+            "Source archive identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "iconv",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "GNU libiconv",
+              "locator": "https://www.gnu.org/software/libiconv/",
+              "claim": "Official upstream identity for iconv was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/iconv",
+              "claim": "Provider metadata identifies component iconv with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libaom",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "Alliance for Open Media AV1 codec",
+              "locator": "https://aomedia.googlesource.com/aom",
+              "claim": "Official upstream identity for libaom was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libaom",
+              "claim": "Provider metadata identifies component libaom with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libass",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "libass",
+              "locator": "https://github.com/libass/libass",
+              "claim": "Official upstream identity for libass was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libass",
+              "claim": "Provider metadata identifies component libass with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libfontconfig",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "Fontconfig",
+              "locator": "https://gitlab.freedesktop.org/fontconfig/fontconfig",
+              "claim": "Official upstream identity for libfontconfig was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libfontconfig",
+              "claim": "Provider metadata identifies component libfontconfig with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libfreetype",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "FreeType",
+              "locator": "https://gitlab.freedesktop.org/freetype/freetype",
+              "claim": "Official upstream identity for libfreetype was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libfreetype",
+              "claim": "Provider metadata identifies component libfreetype with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libfribidi",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "GNU FriBidi",
+              "locator": "https://github.com/fribidi/fribidi",
+              "claim": "Official upstream identity for libfribidi was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libfribidi",
+              "claim": "Provider metadata identifies component libfribidi with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libgme",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "Game_Music_Emu",
+              "locator": "https://github.com/libgme/game-music-emu",
+              "claim": "Official upstream identity for libgme was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libgme",
+              "claim": "Provider metadata identifies component libgme with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libgsm",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "GSM 06.10 reference implementation",
+              "locator": "https://www.quut.com/gsm/",
+              "claim": "Official upstream identity for libgsm was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libgsm",
+              "claim": "Provider metadata identifies component libgsm with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libharfbuzz",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "HarfBuzz",
+              "locator": "https://github.com/harfbuzz/harfbuzz",
+              "claim": "Official upstream identity for libharfbuzz was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libharfbuzz",
+              "claim": "Provider metadata identifies component libharfbuzz with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libmfx",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "component-nature-classification",
+              "authority": "Intel Corporation",
+              "locator": "https://github.com/Intel-Media-SDK/MediaSDK",
+              "claim": "Official documentation supports classifying libmfx as source-library; this contextual classification does not prove the provider-selected version or incorporation method.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-interface-research",
+              "authority": "Intel Corporation",
+              "locator": "https://github.com/Intel-Media-SDK/MediaSDK",
+              "claim": "Official material identifies Intel Media SDK (libmfx); no current release, SDK, toolkit, driver, or API version is represented as the historical Gyan input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libmfx",
+              "claim": "Provider metadata identifies component libmfx with static linkage but does not identify an exact dependency, SDK, toolkit, or system-interface version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libmfx",
+              "claim": "The exact provider-selected version and immutable input for libmfx remain unresolved; official current documentation is not historical provider-version evidence.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "Intel Corporation",
+              "locator": "https://github.com/Intel-Media-SDK/MediaSDK",
+              "claim": "The evidence-only source-kit treatment for libmfx is source-archive-required-if-version-resolved; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component or SDK version is unresolved.",
+            "Exact provider-to-official mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Provider build recipe does not establish source or SDK incorporation.",
+            "Source or SDK package identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "libmp3lame",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "LAME",
+              "locator": "https://svn.code.sf.net/p/lame/svn/",
+              "claim": "Official upstream identity for libmp3lame was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libmp3lame",
+              "claim": "Provider metadata identifies component libmp3lame with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libopencore-amrnb",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "opencore-amr",
+              "locator": "https://git.code.sf.net/p/opencore-amr/code",
+              "claim": "Official upstream identity for libopencore-amrnb was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libopencore-amrnb",
+              "claim": "Provider metadata identifies component libopencore-amrnb with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libopencore-amrwb",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "opencore-amr",
+              "locator": "https://git.code.sf.net/p/opencore-amr/code",
+              "claim": "Official upstream identity for libopencore-amrwb was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libopencore-amrwb",
+              "claim": "Provider metadata identifies component libopencore-amrwb with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libopenjpeg",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "OpenJPEG",
+              "locator": "https://github.com/uclouvain/openjpeg",
+              "claim": "Official upstream identity for libopenjpeg was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libopenjpeg",
+              "claim": "Provider metadata identifies component libopenjpeg with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libopenmpt",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "OpenMPT/libopenmpt",
+              "locator": "https://github.com/OpenMPT/openmpt",
+              "claim": "Official upstream identity for libopenmpt was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libopenmpt",
+              "claim": "Provider metadata identifies component libopenmpt with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libopus",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "Opus",
+              "locator": "https://github.com/xiph/opus",
+              "claim": "Official upstream identity for libopus was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libopus",
+              "claim": "Provider metadata identifies component libopus with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "librubberband",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "Rubber Band Library",
+              "locator": "https://github.com/breakfastquay/rubberband",
+              "claim": "Official upstream identity for librubberband was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/librubberband",
+              "claim": "Provider metadata identifies component librubberband with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libspeex",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "Speex",
+              "locator": "https://github.com/xiph/speex",
+              "claim": "Official upstream identity for libspeex was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libspeex",
+              "claim": "Provider metadata identifies component libspeex with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libsrt",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "functional-classification",
+              "authority": "Haivision SRT project",
+              "locator": "https://github.com/Haivision/srt",
+              "claim": "Official upstream material supports classifying libsrt as network-transport-library; this contextual classification does not establish the provider-selected version or static incorporation.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-upstream-research",
+              "authority": "Haivision SRT project",
+              "locator": "https://github.com/Haivision/srt",
+              "claim": "Official material identifies Secure Reliable Transport (SRT); no current release or commit is represented as the historical Gyan provider input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-mapping-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libsrt",
+              "claim": "No exact package-scoped mapping from FFmpeg component libsrt to a provider-selected upstream release, commit, archive, or SDK input is established.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libsrt",
+              "claim": "Provider metadata identifies FFmpeg component libsrt with static linkage but does not identify an exact dependency version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libsrt",
+              "claim": "The package-scoped FFmpeg provider-selected version and immutable input for libsrt remain unresolved; evidence from another package is non-transferable.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "Haivision SRT project",
+              "locator": "https://github.com/Haivision/srt",
+              "claim": "The evidence-only source-kit treatment for libsrt is source-archive-required-if-version-resolved; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Provider historical build recipe does not prove static incorporation.",
+            "Source archive identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "libssh",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "functional-classification",
+              "authority": "libssh project",
+              "locator": "https://www.libssh.org/",
+              "claim": "Official upstream material supports classifying libssh as secure-shell-library; this contextual classification does not establish the provider-selected version or static incorporation.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-upstream-research",
+              "authority": "libssh project",
+              "locator": "https://www.libssh.org/",
+              "claim": "Official material identifies libssh SSH protocol library; no current release or commit is represented as the historical Gyan provider input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-mapping-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libssh",
+              "claim": "No exact package-scoped mapping from FFmpeg component libssh to a provider-selected upstream release, commit, archive, or SDK input is established.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libssh",
+              "claim": "Provider metadata identifies FFmpeg component libssh with static linkage but does not identify an exact dependency version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libssh",
+              "claim": "The package-scoped FFmpeg provider-selected version and immutable input for libssh remain unresolved; evidence from another package is non-transferable.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "libssh project",
+              "locator": "https://www.libssh.org/",
+              "claim": "The evidence-only source-kit treatment for libssh is source-archive-required-if-version-resolved; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Aria2 libssh2 evidence is package-scoped and cannot be reused for FFmpeg libssh.",
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Provider component libssh is distinct from aria2 libssh2.",
+            "Provider historical build recipe does not prove static incorporation.",
+            "Source archive identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "libtheora",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "Theora",
+              "locator": "https://github.com/xiph/theora",
+              "claim": "Official upstream identity for libtheora was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libtheora",
+              "claim": "Provider metadata identifies component libtheora with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libvidstab",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "functional-classification",
+              "authority": "vid.stab project",
+              "locator": "https://github.com/georgmartius/vid.stab",
+              "claim": "Official upstream material supports classifying libvidstab as video-processing-library; this contextual classification does not establish the provider-selected version or static incorporation.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-upstream-research",
+              "authority": "vid.stab project",
+              "locator": "https://github.com/georgmartius/vid.stab",
+              "claim": "Official material identifies vid.stab video stabilization library; no current release or commit is represented as the historical Gyan provider input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-mapping-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvidstab",
+              "claim": "No exact package-scoped mapping from FFmpeg component libvidstab to a provider-selected upstream release, commit, archive, or SDK input is established.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvidstab",
+              "claim": "Provider metadata identifies FFmpeg component libvidstab with static linkage but does not identify an exact dependency version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvidstab",
+              "claim": "The package-scoped FFmpeg provider-selected version and immutable input for libvidstab remain unresolved; evidence from another package is non-transferable.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "vid.stab project",
+              "locator": "https://github.com/georgmartius/vid.stab",
+              "claim": "The evidence-only source-kit treatment for libvidstab is source-archive-required-if-version-resolved; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Provider historical build recipe does not prove static incorporation.",
+            "Source archive identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "libvmaf",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "functional-classification",
+              "authority": "Netflix VMAF project",
+              "locator": "https://github.com/Netflix/vmaf",
+              "claim": "Official upstream material supports classifying libvmaf as quality-analysis-library; this contextual classification does not establish the provider-selected version or static incorporation.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-upstream-research",
+              "authority": "Netflix VMAF project",
+              "locator": "https://github.com/Netflix/vmaf",
+              "claim": "Official material identifies VMAF and libvmaf video quality analysis; no current release or commit is represented as the historical Gyan provider input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-mapping-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvmaf",
+              "claim": "No exact package-scoped mapping from FFmpeg component libvmaf to a provider-selected upstream release, commit, archive, or SDK input is established.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvmaf",
+              "claim": "Provider metadata identifies FFmpeg component libvmaf with static linkage but does not identify an exact dependency version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvmaf",
+              "claim": "The package-scoped FFmpeg provider-selected version and immutable input for libvmaf remain unresolved; evidence from another package is non-transferable.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "Netflix VMAF project",
+              "locator": "https://github.com/Netflix/vmaf",
+              "claim": "The evidence-only source-kit treatment for libvmaf is source-archive-required-if-version-resolved; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Provider historical build recipe does not prove static incorporation.",
+            "Source archive identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "libvo-amrwbenc",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "VisualOn AMR-WB encoder library",
+              "locator": "https://github.com/mstorsjo/vo-amrwbenc",
+              "claim": "Official upstream identity for libvo-amrwbenc was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvo-amrwbenc",
+              "claim": "Provider metadata identifies component libvo-amrwbenc with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libvorbis",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "Vorbis",
+              "locator": "https://github.com/xiph/vorbis",
+              "claim": "Official upstream identity for libvorbis was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvorbis",
+              "claim": "Provider metadata identifies component libvorbis with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libvpl",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "component-nature-classification",
+              "authority": "Intel Corporation",
+              "locator": "https://github.com/intel/libvpl",
+              "claim": "Official documentation supports classifying libvpl as source-library; this contextual classification does not prove the provider-selected version or incorporation method.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-interface-research",
+              "authority": "Intel Corporation",
+              "locator": "https://github.com/intel/libvpl",
+              "claim": "Official material identifies Intel oneAPI Video Processing Library (oneVPL); no current release, SDK, toolkit, driver, or API version is represented as the historical Gyan input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvpl",
+              "claim": "Provider metadata identifies component libvpl with static linkage but does not identify an exact dependency, SDK, toolkit, or system-interface version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvpl",
+              "claim": "The exact provider-selected version and immutable input for libvpl remain unresolved; official current documentation is not historical provider-version evidence.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "Intel Corporation",
+              "locator": "https://github.com/intel/libvpl",
+              "claim": "The evidence-only source-kit treatment for libvpl is source-archive-required-if-version-resolved; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component or SDK version is unresolved.",
+            "Exact provider-to-official mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Provider build recipe does not establish source or SDK incorporation.",
+            "Source or SDK package identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "libvpx",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "WebM libvpx",
+              "locator": "https://chromium.googlesource.com/webm/libvpx",
+              "claim": "Official upstream identity for libvpx was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libvpx",
+              "claim": "Provider metadata identifies component libvpx with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libwebp",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "WebP codec library",
+              "locator": "https://chromium.googlesource.com/webm/libwebp",
+              "claim": "Official upstream identity for libwebp was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libwebp",
+              "claim": "Provider metadata identifies component libwebp with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libx264",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "x264",
+              "locator": "https://code.videolan.org/videolan/x264",
+              "claim": "Official upstream identity for libx264 was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libx264",
+              "claim": "Provider metadata identifies component libx264 with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libx265",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "x265",
+              "locator": "https://bitbucket.org/multicoreware/x265_git",
+              "claim": "Official upstream identity for libx265 was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libx265",
+              "claim": "Provider metadata identifies component libx265 with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libxml2",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "libxml2",
+              "locator": "https://gitlab.gnome.org/GNOME/libxml2",
+              "claim": "Official upstream identity for libxml2 was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libxml2",
+              "claim": "Provider metadata identifies component libxml2 with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libxvid",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "Xvid",
+              "locator": "https://labs.xvid.com/source/",
+              "claim": "Official upstream identity for libxvid was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libxvid",
+              "claim": "Provider metadata identifies component libxvid with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libzimg",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "zimg",
+              "locator": "https://github.com/sekrit-twc/zimg",
+              "claim": "Official upstream identity for libzimg was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libzimg",
+              "claim": "Provider metadata identifies component libzimg with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "libzmq",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "functional-classification",
+              "authority": "ZeroMQ project",
+              "locator": "https://github.com/zeromq/libzmq",
+              "claim": "Official upstream material supports classifying libzmq as messaging-library; this contextual classification does not establish the provider-selected version or static incorporation.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-upstream-research",
+              "authority": "ZeroMQ project",
+              "locator": "https://github.com/zeromq/libzmq",
+              "claim": "Official material identifies ZeroMQ libzmq messaging library; no current release or commit is represented as the historical Gyan provider input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-mapping-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libzmq",
+              "claim": "No exact package-scoped mapping from FFmpeg component libzmq to a provider-selected upstream release, commit, archive, or SDK input is established.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libzmq",
+              "claim": "Provider metadata identifies FFmpeg component libzmq with static linkage but does not identify an exact dependency version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/libzmq",
+              "claim": "The package-scoped FFmpeg provider-selected version and immutable input for libzmq remain unresolved; evidence from another package is non-transferable.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "ZeroMQ project",
+              "locator": "https://github.com/zeromq/libzmq",
+              "claim": "The evidence-only source-kit treatment for libzmq is source-archive-required-if-version-resolved; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Provider historical build recipe does not prove static incorporation.",
+            "Source archive identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "lzma",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "functional-classification",
+              "authority": "XZ Utils project",
+              "locator": "https://tukaani.org/xz/",
+              "claim": "Official upstream material supports classifying lzma as compression-library; this contextual classification does not establish the provider-selected version or static incorporation.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-upstream-research",
+              "authority": "XZ Utils project",
+              "locator": "https://tukaani.org/xz/",
+              "claim": "Official material identifies XZ Utils and liblzma; no current release or commit is represented as the historical Gyan provider input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-mapping-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/lzma",
+              "claim": "No exact package-scoped mapping from FFmpeg component lzma to a provider-selected upstream release, commit, archive, or SDK input is established.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/lzma",
+              "claim": "Provider metadata identifies FFmpeg component lzma with static linkage but does not identify an exact dependency version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/lzma",
+              "claim": "The package-scoped FFmpeg provider-selected version and immutable input for lzma remain unresolved; evidence from another package is non-transferable.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "XZ Utils project",
+              "locator": "https://tukaani.org/xz/",
+              "claim": "The evidence-only source-kit treatment for lzma is source-archive-required-if-version-resolved; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact liblzma or XZ provider version is unresolved.",
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Provider historical build recipe does not prove static incorporation.",
+            "Source archive identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "mediafoundation",
+          "linkage": "system",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "component-nature-classification",
+              "authority": "Microsoft Corporation",
+              "locator": "https://learn.microsoft.com/en-us/windows/win32/medfound/microsoft-media-foundation-sdk",
+              "claim": "Official documentation supports classifying mediafoundation as system-api; this contextual classification does not prove the provider-selected version or incorporation method.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-interface-research",
+              "authority": "Microsoft Corporation",
+              "locator": "https://learn.microsoft.com/en-us/windows/win32/medfound/microsoft-media-foundation-sdk",
+              "claim": "Official material identifies Microsoft Media Foundation; no current release, SDK, toolkit, driver, or API version is represented as the historical Gyan input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/mediafoundation",
+              "claim": "Provider metadata identifies component mediafoundation with system linkage but does not identify an exact dependency, SDK, toolkit, or system-interface version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/mediafoundation",
+              "claim": "The exact provider-selected version and immutable input for mediafoundation remain unresolved; official current documentation is not historical provider-version evidence.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "Microsoft Corporation",
+              "locator": "https://learn.microsoft.com/en-us/windows/win32/medfound/microsoft-media-foundation-sdk",
+              "claim": "The evidence-only source-kit treatment for mediafoundation is system-interface-documentation-only; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "system-component-candidate",
+          "blockers": [
+            "Exact Windows SDK or system-interface version is unresolved.",
+            "Exact provider build dependency mapping is unresolved.",
+            "Provider configure and build evidence is incomplete.",
+            "System-component treatment requires final legal and build review."
+          ]
+        },
+        {
+          "id": "nvdec",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "component-nature-classification",
+              "authority": "NVIDIA Corporation",
+              "locator": "https://docs.nvidia.com/video-technologies/video-codec-sdk/",
+              "claim": "Official documentation supports classifying nvdec as hardware-api; this contextual classification does not prove the provider-selected version or incorporation method.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-interface-research",
+              "authority": "NVIDIA Corporation",
+              "locator": "https://docs.nvidia.com/video-technologies/video-codec-sdk/",
+              "claim": "Official material identifies NVDECODE API; no current release, SDK, toolkit, driver, or API version is represented as the historical Gyan input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/nvdec",
+              "claim": "Provider metadata identifies component nvdec with static linkage but does not identify an exact dependency, SDK, toolkit, or system-interface version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/nvdec",
+              "claim": "The exact provider-selected version and immutable input for nvdec remain unresolved; official current documentation is not historical provider-version evidence.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "NVIDIA Corporation",
+              "locator": "https://docs.nvidia.com/video-technologies/video-codec-sdk/",
+              "claim": "The evidence-only source-kit treatment for nvdec is provider-label-needs-build-recipe; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component or SDK version is unresolved.",
+            "Exact provider-to-official mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Provider build recipe does not establish source or SDK incorporation.",
+            "Source or SDK package identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "nvenc",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "component-nature-classification",
+              "authority": "NVIDIA Corporation",
+              "locator": "https://docs.nvidia.com/video-technologies/video-codec-sdk/",
+              "claim": "Official documentation supports classifying nvenc as hardware-api; this contextual classification does not prove the provider-selected version or incorporation method.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-interface-research",
+              "authority": "NVIDIA Corporation",
+              "locator": "https://docs.nvidia.com/video-technologies/video-codec-sdk/",
+              "claim": "Official material identifies NVENCODE API; no current release, SDK, toolkit, driver, or API version is represented as the historical Gyan input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/nvenc",
+              "claim": "Provider metadata identifies component nvenc with static linkage but does not identify an exact dependency, SDK, toolkit, or system-interface version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/nvenc",
+              "claim": "The exact provider-selected version and immutable input for nvenc remain unresolved; official current documentation is not historical provider-version evidence.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "NVIDIA Corporation",
+              "locator": "https://docs.nvidia.com/video-technologies/video-codec-sdk/",
+              "claim": "The evidence-only source-kit treatment for nvenc is provider-label-needs-build-recipe; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component or SDK version is unresolved.",
+            "Exact provider-to-official mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Provider build recipe does not establish source or SDK incorporation.",
+            "Source or SDK package identity and independent SHA-256 are unresolved."
+          ]
+        },
+        {
+          "id": "openal",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "OpenAL Soft",
+              "locator": "https://github.com/kcat/openal-soft",
+              "claim": "Official upstream identity for openal was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/openal",
+              "claim": "Provider metadata identifies component openal with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "sdl2",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "official-upstream-research",
+              "authority": "Simple DirectMedia Layer (SDL)",
+              "locator": "https://github.com/libsdl-org/SDL",
+              "claim": "Official upstream identity for sdl2 was researched separately, but no upstream version, release, commit, or archive is mapped to the Gyan package.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/sdl2",
+              "claim": "Provider metadata identifies component sdl2 with static linkage but does not identify a version.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream source mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence."
+          ]
+        },
+        {
+          "id": "vaapi",
+          "linkage": "system",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "component-nature-classification",
+              "authority": "libva project",
+              "locator": "https://github.com/intel/libva",
+              "claim": "Official documentation supports classifying vaapi as system-api; this contextual classification does not prove the provider-selected version or incorporation method.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-interface-research",
+              "authority": "libva project",
+              "locator": "https://github.com/intel/libva",
+              "claim": "Official material identifies Video Acceleration API (VA-API); no current release, SDK, toolkit, driver, or API version is represented as the historical Gyan input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/vaapi",
+              "claim": "Provider metadata identifies component vaapi with system linkage but does not identify an exact dependency, SDK, toolkit, or system-interface version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/vaapi",
+              "claim": "The exact provider-selected version and immutable input for vaapi remain unresolved; official current documentation is not historical provider-version evidence.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "libva project",
+              "locator": "https://github.com/intel/libva",
+              "claim": "The evidence-only source-kit treatment for vaapi is system-interface-documentation-only; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "system-component-candidate",
+          "blockers": [
+            "Exact VA-API interface and implementation version is unresolved.",
+            "Exact provider build dependency mapping is unresolved.",
+            "Provider configure and build evidence is incomplete.",
+            "System-component treatment requires final legal and build review."
+          ]
+        },
+        {
+          "id": "zlib",
+          "linkage": "static",
+          "provider_version": "unresolved",
+          "version_status": "unresolved",
+          "upstream_repository": "unresolved",
+          "immutable_ref": "unresolved",
+          "source_archive_sha256": "unresolved",
+          "evidence": [
+            {
+              "kind": "functional-classification",
+              "authority": "zlib project",
+              "locator": "https://zlib.net/",
+              "claim": "Official upstream material supports classifying zlib as compression-library; this contextual classification does not establish the provider-selected version or static incorporation.",
+              "status": "partial"
+            },
+            {
+              "kind": "official-upstream-research",
+              "authority": "zlib project",
+              "locator": "https://zlib.net/",
+              "claim": "Official material identifies zlib DEFLATE compression library; no current release or commit is represented as the historical Gyan provider input.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-mapping-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/zlib",
+              "claim": "No exact package-scoped mapping from FFmpeg component zlib to a provider-selected upstream release, commit, archive, or SDK input is established.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "provider-package-metadata",
+              "authority": "Gyan FFmpeg builds",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/zlib",
+              "claim": "Provider metadata identifies FFmpeg component zlib with static linkage but does not identify an exact dependency version.",
+              "status": "partial"
+            },
+            {
+              "kind": "provider-version-gap",
+              "authority": "verified source correspondence",
+              "locator": "legal/source-correspondence.json#packages/ffmpeg/external_components/zlib",
+              "claim": "The package-scoped FFmpeg provider-selected version and immutable input for zlib remain unresolved; evidence from another package is non-transferable.",
+              "status": "unresolved"
+            },
+            {
+              "kind": "source-kit-treatment",
+              "authority": "zlib project",
+              "locator": "https://zlib.net/",
+              "claim": "The evidence-only source-kit treatment for zlib is source-archive-required-if-version-resolved; this does not authorize assembly or conclude redistribution compliance.",
+              "status": "partial"
+            }
+          ],
+          "resolution_status": "identified-name-only",
+          "blockers": [
+            "Aria2 zlib evidence is package-scoped and non-transferable to FFmpeg.",
+            "Exact provider component version is unresolved.",
+            "Exact provider-to-upstream mapping is unresolved.",
+            "Immutable provider input cannot be selected without provider-version evidence.",
+            "Package-scoped FFmpeg zlib version is unresolved.",
+            "Provider historical build recipe does not prove static incorporation.",
+            "Source archive identity and independent SHA-256 are unresolved."
+          ]
+        }
+      ],
+      "toolchain": {
+        "host": "unresolved",
+        "compiler": "unresolved",
+        "compiler_version": "unresolved",
+        "supporting_tools": [],
+        "evidence": [
+          {
+            "kind": "provider-package-metadata",
+            "authority": "Gyan FFmpeg builds",
+            "locator": "legal/source-correspondence.json#packages/ffmpeg/provider/configuration_evidence",
+            "claim": "Provider metadata identifies a 64-bit static GPLv3 build but does not identify the host, compiler, or tool versions.",
+            "status": "partial"
+          }
+        ],
+        "status": "unresolved",
+        "blockers": [
+          "Build host, compiler, compiler version, and supporting tool versions are unresolved."
+        ]
+      },
+      "build_orchestration": {
+        "provider_repository": "unresolved",
+        "immutable_ref": "unresolved",
+        "exact_configuration": "unresolved",
+        "patch_status": "unresolved",
+        "reproducible_entrypoint": "unresolved",
+        "evidence": [
+          {
+            "kind": "provider-package-metadata",
+            "authority": "Gyan FFmpeg builds",
+            "locator": "legal/source-correspondence.json#packages/ffmpeg/provider/configuration_evidence",
+            "claim": "Provider metadata records partial configuration characteristics but not complete immutable build orchestration.",
+            "status": "partial"
+          }
+        ],
+        "status": "partial",
+        "blockers": [
+          "Complete build orchestration at an immutable ref is unresolved.",
+          "Exact configuration and reproducible entrypoint are unresolved.",
+          "Patch or explicit no-modification evidence is unresolved."
+        ]
+      },
+      "package_status": "blocked",
+      "blockers": [
+        "Complete provider build scripts, exact configure command, toolchain versions, and patch evidence are absent.",
+        "Core FFmpeg source alone is not complete Corresponding Source for the static package.",
+        "External-component source archives are not assembled.",
+        "External-library versions and immutable source refs are not identified by package metadata.",
+        "External-library versions and immutable source refs are unresolved.",
+        "Provider build orchestration, exact configure command, toolchain versions, and patch evidence are incomplete.",
+        "Release source assets and binary-to-source mapping are not integrated.",
+        "Source archives for evidenced non-system static components are not assembled."
+      ]
+    }
+  ]
+}

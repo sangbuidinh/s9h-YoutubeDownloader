@@ -30,8 +30,8 @@ FORBIDDEN_VERSION_WORKFLOW_TRIGGERS = {
     "workflow_run",
 }
 ACTION_POLICY = {
-    "actions/checkout": ("v4", 8),
-    "actions/setup-python": ("v5", 5),
+    "actions/checkout": ("v4", 12),
+    "actions/setup-python": ("v5", 9),
     "actions/upload-artifact": ("v4", 5),
     "actions/download-artifact": ("v4", 5),
     "softprops/action-gh-release": ("v2", 4),
@@ -145,7 +145,7 @@ def validate_supply_chain(documents: dict[str, str], inventory: dict) -> None:
     counts = Counter({name: len(rows) for name, rows in uses_by_action.items()})
     expected_counts = Counter({name: policy[1] for name, policy in ACTION_POLICY.items()})
     _require(counts == expected_counts, f"action occurrence counts differ: {counts}")
-    _require(sum(counts.values()) == 27, "total immutable action count must be 27")
+    _require(sum(counts.values()) == 35, "total immutable action count must be 35")
     for repository, rows in uses_by_action.items():
         _require(
             len({commit for _, commit, _ in rows}) == 1,
@@ -208,7 +208,8 @@ def _validate_workflow_environment(path: str, workflow: str) -> None:
     )
 
     versions = re.findall(r'(?m)^\s*python-version:\s*"?([^"\s]+)"?\s*$', workflow)
-    _require(versions == ["3.11.9"], f"{path} Python selector must be 3.11.9")
+    expected_versions = ["3.11.9"] if path == CI_WORKFLOW else ["3.11.9", "3.11.9"]
+    _require(versions == expected_versions, f"{path} Python selectors must be exact 3.11.9")
     for required in (
         "python --version",
         '$VersionOutput = (& python --version 2>&1 | Out-String).Trim()',
@@ -216,6 +217,11 @@ def _validate_workflow_environment(path: str, workflow: str) -> None:
         'Write-Host "Pinned Python verified: $VersionOutput"',
     ):
         _require(required in workflow, f"{path} exact Python verification is missing")
+    if path != CI_WORKFLOW:
+        _require(
+            'Write-Host "Pinned publish Python verified: $VersionOutput"' in workflow,
+            f"{path} exact publish Python verification is missing",
+        )
 
 
 def _validate_trigger_policy(path: str, workflow: str) -> None:
@@ -309,6 +315,7 @@ def _validate_historical_behavior(path: str, workflow: str) -> None:
         f"{path} publishing action is missing",
     )
     _validate_dependency_install(path, workflow, tag, build_command)
+    _validate_release_legal_integration(path, workflow, tag, build_command)
 
 
 def _validate_action_placement(path: str, workflow: str) -> None:
@@ -342,9 +349,153 @@ def _validate_action_placement(path: str, workflow: str) -> None:
     _require("softprops/action-gh-release@" not in build, f"{path} build must not publish")
     _require(publish.count("actions/download-artifact@") == 1, f"{path} publish download action count")
     _require(publish.count("softprops/action-gh-release@") == 1, f"{path} publish action count")
-    for forbidden in ("actions/checkout@", "actions/setup-python@", "actions/upload-artifact@"):
+    _require(publish.count("actions/checkout@") == 1, f"{path} publish checkout action count")
+    _require(publish.count("actions/setup-python@") == 1, f"{path} publish setup-python action count")
+    for forbidden in ("actions/upload-artifact@",):
         _require(forbidden not in publish, f"{path} publish contains forbidden action: {forbidden}")
+    publish_steps = _step_blocks(publish_block)
+    publish_checkout = _action_steps(publish_steps, "actions/checkout")[0]
+    _require(
+        _direct_mapping_pairs(_mapping_block(publish_checkout, "with", 8), 10)
+        == [
+            ("ref", "${{ needs.build.outputs.control-commit }}"),
+            ("path", "control"),
+            ("persist-credentials", "false"),
+        ],
+        f"{path} publish control checkout inputs changed",
+    )
+    publish_setup = _action_steps(publish_steps, "actions/setup-python")[0]
+    _require(
+        _direct_mapping_pairs(_mapping_block(publish_setup, "with", 8), 10)
+        == [("python-version", "3.11.9")],
+        f"{path} publish Python selector changed",
+    )
     _validate_download_inputs(publish, "${{ needs.build.outputs.artifact-id }}", path)
+
+
+def _validate_release_legal_integration(
+    path: str,
+    workflow: str,
+    tag: str,
+    build_command: str,
+) -> None:
+    jobs = _mapping_block(workflow.splitlines(), "jobs", 0)
+    build = _mapping_block(jobs, "build", 2)
+    publish = _mapping_block(jobs, "publish", 2)
+    build_steps = _step_blocks(build)
+    publish_steps = _step_blocks(publish)
+    build_step = next(
+        (step for step in build_steps if build_command in "\n".join(step)),
+        None,
+    )
+    _require(build_step is not None, f"{path} build step is unavailable")
+    legal_step = _named_step(build_steps, "Prepare and verify release legal payload")
+    bundle_step = _named_step(build_steps, "Create and verify release bundle")
+    upload_step = _action_steps(build_steps, "actions/upload-artifact")[0]
+    _require(
+        build_steps.index(build_step)
+        < build_steps.index(legal_step)
+        < build_steps.index(bundle_step)
+        < build_steps.index(upload_step),
+        f"{path} build/legal/bundle order is invalid",
+    )
+    legal_text = "\n".join(legal_step)
+    bundle_text = "\n".join(bundle_step)
+    for required in (
+        "prepare_release_legal_payload.py create",
+        "prepare_release_legal_payload.py verify",
+        "--release-notes release/RELEASE_NOTES.md",
+        f"Youtube-Downloaderbs-{tag}-legal.zip",
+    ):
+        _require(required in legal_text, f"{path} legal payload integration is missing: {required}")
+    _require(
+        legal_text.count("--release-notes release/RELEASE_NOTES.md") == 2,
+        f"{path} legal payload release-notes argument count changed",
+    )
+    for required in (
+        "prepare_release_bundle.py create",
+        "prepare_release_bundle.py verify",
+        "release-assets-v2.json",
+        "--source-assets-root release/source-assets",
+        "--require-release-ready false",
+    ):
+        _require(required in bundle_text, f"{path} bundle v2 integration is missing: {required}")
+    _require(
+        re.search(
+            r"(?i)(?:New-Item|Set-Content|write_bytes|writestr)[^\n]*source-assets",
+            "\n".join(build),
+        )
+        is None,
+        f"{path} creates an empty source placeholder",
+    )
+
+    verifier = _named_step(publish_steps, "Verify downloaded release bundle")
+    verifier_text = "\n".join(verifier)
+    for required in (
+        "s9h-release-bundle-v2",
+        "legal-payload",
+        "aria2-source",
+        "ffmpeg-source",
+    ):
+        _require(required in verifier_text, f"{path} publish verifier is missing: {required}")
+
+    publish_checkout = _action_steps(publish_steps, "actions/checkout")[0]
+    publish_setup = _action_steps(publish_steps, "actions/setup-python")[0]
+    publish_python_check = _named_step(publish_steps, "Verify publish Python version")
+    download_step = _action_steps(publish_steps, "actions/download-artifact")[0]
+    publish_ready = _named_step(publish_steps, "Enforce publish-ready release bundle")
+    publish_ready_text = "\n".join(publish_ready)
+    _require(
+        len(
+            re.findall(
+                r"(?m)^\s*python control/scripts/prepare_release_bundle\.py verify\s*`?\s*$",
+                publish_ready_text,
+            )
+        )
+        == 1,
+        f"{path} must execute one real publish-ready verifier",
+    )
+    for required in (
+        "--bundle-root release-bundle",
+        f"--tag {tag}",
+        '--source-commit "${{ needs.build.outputs.source-commit }}"',
+        '--control-commit "${{ needs.build.outputs.control-commit }}"',
+        "--policy control/legal/release-policy.json",
+        "--asset-contract control/legal/release-assets-v2.json",
+        f"--legal-payload release-bundle/assets/Youtube-Downloaderbs-{tag}-legal.zip",
+        "--source-assets-root release-bundle/assets",
+        "--require-release-ready true",
+        "release bundle is not approved for publishing",
+    ):
+        _require(required in publish_ready_text, f"{path} publish-ready command is missing: {required}")
+    _require(
+        re.search(r"(?m)^\s+(?:continue-on-error|if)\s*:", publish_ready_text) is None,
+        f"{path} publish-ready command contains a YAML bypass",
+    )
+
+    output_validation = _named_step(publish_steps, "Validate immutable build outputs")
+    absence = _named_step(publish_steps, "Confirm release absence immediately before publishing")
+    release_step = _action_steps(publish_steps, "softprops/action-gh-release")[0]
+    _require(
+        publish_steps.index(output_validation)
+        < publish_steps.index(publish_checkout)
+        < publish_steps.index(publish_setup)
+        < publish_steps.index(publish_python_check)
+        < publish_steps.index(download_step)
+        < publish_steps.index(verifier)
+        < publish_steps.index(publish_ready)
+        < publish_steps.index(absence)
+        < publish_steps.index(release_step),
+        f"{path} publish verification order changed",
+    )
+    release_text = "\n".join(release_step)
+    for filename in (
+        f"Youtube-Downloaderbs-{tag}-legal.zip",
+        f"Youtube-Downloaderbs-{tag}-aria2-source.zip",
+        f"Youtube-Downloaderbs-{tag}-ffmpeg-source.zip",
+    ):
+        _require(filename in release_text, f"{path} publish asset is missing: {filename}")
+    _require("fail_on_unmatched_files: true" in release_text, f"{path} unmatched files gate changed")
 
 
 def _validate_download_inputs(job: str, artifact_id: str, label: str) -> None:
@@ -506,7 +657,7 @@ def _validate_release_legal_gate(
         _require(required in gate_text, f"{path} legal gate is missing: {required}")
     job_text = "\n".join("\n".join(step) for step in steps)
     _require(job_text.count("verify_release_legal_gate.py") == 1, f"{path} legal gate count changed")
-    _require(job_text.count("release-policy.json") == 1, f"{path} release policy path count changed")
+    _require(job_text.count("release-policy.json") == 3, f"{path} release policy path count changed")
     _require(
         re.search(r"(?m)^\s+(?:continue-on-error|if|env)\s*:", gate_text) is None,
         f"{path} legal gate contains a YAML bypass",
@@ -625,6 +776,55 @@ def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None
     mutated = copy.deepcopy(documents)
     mutated[release] = _replace_once(mutated[release], "    needs: build\n", "")
     mutations.append(("publish no longer needs build", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] = _remove_named_step(
+        mutated[release],
+        "Prepare and verify release legal payload",
+    )
+    mutations.append(("missing release legal payload step", mutated))
+
+    mutated = copy.deepcopy(documents)
+    mutated[release] = _move_named_step_after(
+        mutated[release],
+        "Build and validate checksum-pinned assets",
+        "Prepare and verify release legal payload",
+    )
+    mutations.append(("release legal payload before build", mutated))
+
+    for label, old, new in (
+        ("release bundle v1", "s9h-release-bundle-v2", "s9h-release-bundle-v1"),
+        (
+            "real publish verifier replaced by previous comment-only pattern",
+            "          python control/scripts/prepare_release_bundle.py verify `",
+            "          $requireReleaseReady = $true # --require-release-ready true",
+        ),
+        (
+            "publish omits legal asset",
+            "            release-bundle/assets/Youtube-Downloaderbs-v1.3.1-legal.zip\n",
+            "",
+        ),
+        (
+            "publish omits source asset",
+            "            release-bundle/assets/Youtube-Downloaderbs-v1.3.1-aria2-source.zip\n",
+            "",
+        ),
+        (
+            "publish allows unmatched files",
+            "          fail_on_unmatched_files: true",
+            "          fail_on_unmatched_files: false",
+        ),
+        (
+            "empty source placeholder",
+            "      - name: Create and verify release bundle",
+            "      - name: Create empty source placeholder\n"
+            "        run: New-Item release/source-assets/empty.zip\n"
+            "      - name: Create and verify release bundle",
+        ),
+    ):
+        mutated = copy.deepcopy(documents)
+        mutated[release] = _replace_once(mutated[release], old, new)
+        mutations.append((label, mutated))
 
     mutated = copy.deepcopy(documents)
     mutated[ci] = _replace_once(

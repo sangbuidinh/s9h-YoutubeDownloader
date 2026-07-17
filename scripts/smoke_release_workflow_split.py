@@ -22,6 +22,18 @@ class ReleaseContract:
     def zip_name(self) -> str:
         return f"Youtube-Downloaderbs-{self.tag}.zip"
 
+    @property
+    def legal_name(self) -> str:
+        return f"Youtube-Downloaderbs-{self.tag}-legal.zip"
+
+    @property
+    def aria2_source_name(self) -> str:
+        return f"Youtube-Downloaderbs-{self.tag}-aria2-source.zip"
+
+    @property
+    def ffmpeg_source_name(self) -> str:
+        return f"Youtube-Downloaderbs-{self.tag}-ffmpeg-source.zip"
+
 
 CONTRACTS = (
     ReleaseContract(
@@ -141,6 +153,7 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
     legal_gate = _named_step(build_steps, "Enforce fail-closed release legal gate")
     installer = _named_step(build_steps, "Install locked build dependencies")
     build_step = _named_step(build_steps, contract.build_step)
+    legal_payload_step = _named_step(build_steps, "Prepare and verify release legal payload")
     bundle_step = _named_step(build_steps, "Create and verify release bundle")
     upload = _single_action_step(build_steps, "actions/upload-artifact")
     _validate_legal_gate(contract, build_steps, legal_gate)
@@ -152,10 +165,57 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
         < build_steps.index(build_step),
         f"{contract.path} legal gate and build order is invalid",
     )
-    _require(build_steps.index(build_step) < build_steps.index(bundle_step) < build_steps.index(upload), f"{contract.path} build/bundle/upload order is invalid")
+    _require(
+        build_steps.index(build_step)
+        < build_steps.index(legal_payload_step)
+        < build_steps.index(bundle_step)
+        < build_steps.index(upload),
+        f"{contract.path} build/legal/bundle/upload order is invalid",
+    )
     _require(contract.build_command in "\n".join(build_step), f"{contract.path} build command changed")
-    _require("prepare_release_bundle.py create" in "\n".join(bundle_step), f"{contract.path} bundle create is missing")
-    _require("prepare_release_bundle.py verify" in "\n".join(bundle_step), f"{contract.path} bundle verify is missing")
+    legal_payload_text = "\n".join(legal_payload_step)
+    legal_tool = (
+        "..\\control\\scripts\\prepare_release_legal_payload.py"
+        if contract.fixed_tag
+        else "scripts/prepare_release_legal_payload.py"
+    )
+    for required in (
+        f"python {legal_tool} create",
+        f"python {legal_tool} verify",
+        "--control-root " + ("..\\control" if contract.fixed_tag else "."),
+        f"--portable-zip release/assets/{contract.zip_name}",
+        f"--output-zip release/assets/{contract.legal_name}",
+        "--release-notes release/RELEASE_NOTES.md",
+        f"--tag {contract.tag}",
+    ):
+        _require(required in legal_payload_text, f"{contract.path} legal payload step is missing: {required}")
+    _require(
+        "\n".join(build).count("Prepare and verify release legal payload") == 1
+        and "\n".join(build).count("prepare_release_legal_payload.py create") == 1
+        and "\n".join(build).count("prepare_release_legal_payload.py verify") == 1
+        and legal_payload_text.count("--release-notes release/RELEASE_NOTES.md") == 2,
+        f"{contract.path} legal payload step count changed",
+    )
+    bundle_text = "\n".join(bundle_step)
+    for required in (
+        "prepare_release_bundle.py create",
+        "prepare_release_bundle.py verify",
+        "release-assets-v2.json",
+        f"--legal-payload release/assets/{contract.legal_name}",
+        "--source-assets-root release/source-assets",
+        "--require-release-ready false",
+    ):
+        _require(required in bundle_text, f"{contract.path} bundle v2 step is missing: {required}")
+    for forbidden in ("New-Item", "SYNTHETIC_SOURCE_FIXTURE", "SOURCE_MANIFEST.json"):
+        _require(forbidden not in legal_payload_text + bundle_text, f"{contract.path} creates a source placeholder")
+    _require(
+        re.search(
+            r"(?i)(?:New-Item|Set-Content|write_bytes|writestr)[^\n]*source-assets",
+            "\n".join(build),
+        )
+        is None,
+        f"{contract.path} creates an empty source placeholder",
+    )
     _require("softprops/action-gh-release@" not in "\n".join(build), f"{contract.path} build must not publish")
     _require("actions/download-artifact@" not in "\n".join(build), f"{contract.path} build must not download artifacts")
 
@@ -178,6 +238,37 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
     )
     report = "\n".join(_named_step(build_steps, "Report immutable release bundle handoff"))
     _require("ARTIFACT_DIGEST" in report and "^[0-9a-f]{64}$" in report, f"{contract.path} artifact digest validation is missing")
+
+    publish_checkout = _single_action_step(publish_steps, "actions/checkout")
+    publish_checkout_with = _direct_mapping_pairs(
+        _mapping_block(publish_checkout, "with", 8), 10
+    )
+    _require(
+        publish_checkout_with
+        == [
+            ("ref", "${{ needs.build.outputs.control-commit }}"),
+            ("path", "control"),
+            ("persist-credentials", "false"),
+        ],
+        f"{contract.path} publish control checkout is invalid",
+    )
+    publish_setup = _single_action_step(publish_steps, "actions/setup-python")
+    _require(
+        _direct_mapping_pairs(_mapping_block(publish_setup, "with", 8), 10)
+        == [("python-version", "3.11.9")],
+        f"{contract.path} publish Python selector changed",
+    )
+    publish_python_check = _named_step(publish_steps, "Verify publish Python version")
+    publish_python_check_text = "\n".join(publish_python_check)
+    for required in (
+        "python --version",
+        '$VersionOutput = (& python --version 2>&1 | Out-String).Trim()',
+        'if ($VersionOutput -ne "Python 3.11.9")',
+    ):
+        _require(
+            required in publish_python_check_text,
+            f"{contract.path} publish Python verification is missing: {required}",
+        )
 
     download = _single_action_step(publish_steps, "actions/download-artifact")
     download_with_block = _mapping_block(download, "with", 8)
@@ -202,10 +293,16 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
     verifier = _named_step(publish_steps, "Verify downloaded release bundle")
     verifier_text = "\n".join(verifier)
     for required in (
-        "Release bundle handoff verified",
+        "Release bundle v2 handoff verified",
         "Get-FileHash",
         "ConvertFrom-Json",
-        "s9h-release-bundle-v1",
+        "s9h-release-bundle-v2",
+        "legal-payload",
+        "aria2-source",
+        "ffmpeg-source",
+        contract.legal_name,
+        contract.aria2_source_name,
+        contract.ffmpeg_source_name,
         "SHA256SUMS.txt",
         "RELEASE_NOTES.md",
         "ReparsePoint",
@@ -214,11 +311,63 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
         '$bundle = [IO.Path]::GetFullPath((Join-Path $workspace "release-bundle"))',
     ):
         _require(required in verifier_text, f"{contract.path} inline verifier is missing: {required}")
-    for forbidden in ("Invoke-Expression", "Start-Process", "&", "python ", ".ps1", ".cmd", ".bat"):
+    for forbidden in ("Invoke-Expression", "Start-Process", "& release-bundle", ".ps1", ".cmd", ".bat"):
         _require(forbidden not in verifier_text, f"{contract.path} inline verifier may execute downloaded code: {forbidden}")
+
+    publish_ready = _named_step(publish_steps, "Enforce publish-ready release bundle")
+    publish_ready_text = "\n".join(publish_ready)
+    _require(
+        len(
+            re.findall(
+                r"(?m)^\s*python control/scripts/prepare_release_bundle\.py verify\s*`?\s*$",
+                publish_ready_text,
+            )
+        )
+        == 1,
+        f"{contract.path} must execute exactly one real publish-ready verifier",
+    )
+    for required in (
+        "--bundle-root release-bundle",
+        f"--tag {contract.tag}",
+        '--source-commit "${{ needs.build.outputs.source-commit }}"',
+        '--control-commit "${{ needs.build.outputs.control-commit }}"',
+        f"--prerelease {contract.prerelease}",
+        "--policy control/legal/release-policy.json",
+        "--asset-contract control/legal/release-assets-v2.json",
+        f"--legal-payload release-bundle/assets/{contract.legal_name}",
+        "--source-assets-root release-bundle/assets",
+        "--require-release-ready true",
+        "release bundle is not approved for publishing",
+    ):
+        _require(
+            required in publish_ready_text,
+            f"{contract.path} publish-ready verifier is missing: {required}",
+        )
+    _require(
+        re.search(r"(?m)^\s+(?:continue-on-error|if)\s*:", publish_ready_text) is None,
+        f"{contract.path} publish-ready verifier contains a YAML bypass",
+    )
+    for forbidden in ("SilentlyContinue", "-ErrorAction Ignore", "2>$null", "||", "; exit 0"):
+        _require(
+            forbidden not in publish_ready_text,
+            f"{contract.path} publish-ready verifier contains a bypass: {forbidden}",
+        )
 
     absence = _named_step(publish_steps, "Confirm release absence immediately before publishing")
     release = _single_action_step(publish_steps, "softprops/action-gh-release")
+    output_validation_step = _named_step(publish_steps, "Validate immutable build outputs")
+    _require(
+        publish_steps.index(output_validation_step)
+        < publish_steps.index(publish_checkout)
+        < publish_steps.index(publish_setup)
+        < publish_steps.index(publish_python_check)
+        < publish_steps.index(download)
+        < publish_steps.index(verifier)
+        < publish_steps.index(publish_ready)
+        < publish_steps.index(absence)
+        < publish_steps.index(release),
+        f"{contract.path} publish verification order is invalid",
+    )
     _require(publish_steps.index(absence) + 1 == publish_steps.index(release), f"{contract.path} final absence check must immediately precede release")
     absence_text = "\n".join(absence)
     _require(f"gh release view $tag" in absence_text and f'$tag = "{contract.tag}"' in absence_text, f"{contract.path} final release absence check changed")
@@ -226,18 +375,21 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
 
     publish_text = "\n".join(publish)
     for forbidden in (
-        "actions/checkout@",
-        "actions/setup-python@",
         "actions/upload-artifact@",
         "Install locked build dependencies",
-        "prepare_release_bundle.py",
+        "install_build_dependencies.py",
         contract.build_command,
         "pip install",
         "python -m pip",
-        "python ",
         "continue-on-error",
     ):
         _require(forbidden not in publish_text, f"{contract.path} publish contains forbidden behavior: {forbidden}")
+    direct_python_commands = re.findall(r"(?m)^\s*python\s+([^\r\n]+)$", publish_text)
+    _require(
+        direct_python_commands
+        == ["--version", "control/scripts/prepare_release_bundle.py verify `"],
+        f"{contract.path} publish Python command allowlist changed",
+    )
 
     release_with = _direct_mapping_pairs(_mapping_block(release, "with", 8), 10)
     expected_release_inputs = [
@@ -262,6 +414,9 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
         == [
             "release-bundle/assets/Youtube.Downloaderbs.exe",
             f"release-bundle/assets/{contract.zip_name}",
+            f"release-bundle/assets/{contract.legal_name}",
+            f"release-bundle/assets/{contract.aria2_source_name}",
+            f"release-bundle/assets/{contract.ffmpeg_source_name}",
             "release-bundle/assets/SHA256SUMS.txt",
             "release-bundle/RELEASE_MANIFEST.json",
         ],
@@ -298,7 +453,7 @@ def _validate_legal_gate(
         _require(required in gate_text, f"{contract.path} legal gate is missing: {required}")
     build_text = "\n".join("\n".join(step) for step in build_steps)
     _require(build_text.count("verify_release_legal_gate.py") == 1, f"{contract.path} legal gate count changed")
-    _require(build_text.count("release-policy.json") == 1, f"{contract.path} release policy path count changed")
+    _require(build_text.count("release-policy.json") == 3, f"{contract.path} release policy path count changed")
     _require(
         re.search(r"(?m)^\s+(?:continue-on-error|if|env)\s*:", gate_text) is None,
         f"{contract.path} legal gate contains a YAML bypass",
@@ -325,10 +480,34 @@ def _test_negative_mutations(documents: dict[str, str]) -> None:
         ("publish read permission", legacy.path, "  publish:\n    needs: build\n    permissions:\n      contents: write", "  publish:\n    needs: build\n    permissions:\n      contents: read"),
         ("missing needs", legacy.path, "    needs: build\n", ""),
         ("release action in build", legacy.path, "      - name: Create and verify release bundle", "      - uses: softprops/action-gh-release@" + "0" * 40 + " # v2\n      - name: Create and verify release bundle"),
-        ("checkout in publish", legacy.path, "    steps:\n      - name: Validate immutable build outputs", "    steps:\n      - uses: actions/checkout@" + "0" * 40 + " # v4\n      - name: Validate immutable build outputs"),
-        ("setup Python in publish", legacy.path, "    steps:\n      - name: Validate immutable build outputs", "    steps:\n      - uses: actions/setup-python@" + "0" * 40 + " # v5\n      - name: Validate immutable build outputs"),
-        ("Python in publish", legacy.path, "      - name: Validate immutable build outputs\n        shell: pwsh", "      - name: Validate immutable build outputs\n        run: python downloaded.py\n        shell: pwsh"),
-        ("artifact execution", legacy.path, "          Write-Host \"Release bundle handoff verified\"", "          & release-bundle/assets/Youtube.Downloaderbs.exe\n          Write-Host \"Release bundle handoff verified\""),
+        ("artifact execution", legacy.path, "          Write-Host \"Release bundle v2 handoff verified\"", "          & release-bundle/assets/Youtube.Downloaderbs.exe\n          Write-Host \"Release bundle v2 handoff verified\""),
+        ("missing legal payload step", legacy.path, "      - name: Prepare and verify release legal payload", "      - name: Removed legal payload step"),
+        ("bundle v1", legacy.path, "s9h-release-bundle-v2", "s9h-release-bundle-v1"),
+        (
+            "real publish verifier replaced by previous comment-only pattern",
+            legacy.path,
+            "          python control/scripts/prepare_release_bundle.py verify `",
+            "          $requireReleaseReady = $true # --require-release-ready true",
+        ),
+        (
+            "publish verifier only in comment",
+            legacy.path,
+            "          python control/scripts/prepare_release_bundle.py verify `",
+            "          # python control/scripts/prepare_release_bundle.py verify --require-release-ready true",
+        ),
+        (
+            "publish verifier only in variable",
+            legacy.path,
+            "          python control/scripts/prepare_release_bundle.py verify `",
+            '          $Verifier = "python control/scripts/prepare_release_bundle.py verify --require-release-ready true"',
+        ),
+        (
+            "publish verifier only in documentation text",
+            legacy.path,
+            "          python control/scripts/prepare_release_bundle.py verify `",
+            '          Write-Host "python control/scripts/prepare_release_bundle.py verify --require-release-ready true"',
+        ),
+        ("empty source placeholder", legacy.path, "      - name: Create and verify release bundle", "      - name: Create empty source placeholder\n        run: New-Item release/source-assets/empty.zip\n      - name: Create and verify release bundle"),
         ("upload compression", legacy.path, "          compression-level: 0", "          compression-level: 6"),
         ("missing merge-multiple", legacy.path, "          merge-multiple: true\n", ""),
         ("false merge-multiple", legacy.path, "          merge-multiple: true", "          merge-multiple: false"),
@@ -348,6 +527,10 @@ def _test_negative_mutations(documents: dict[str, str]) -> None:
         ("notes outside bundle", legacy.path, "          body_path: release-bundle/RELEASE_NOTES.md", "          body_path: release/RELEASE_NOTES.md"),
         ("missing checksum asset", legacy.path, "            release-bundle/assets/SHA256SUMS.txt\n", ""),
         ("missing manifest asset", legacy.path, "            release-bundle/RELEASE_MANIFEST.json\n", ""),
+        ("missing legal publish asset", legacy.path, f"            release-bundle/assets/{legacy.legal_name}\n", ""),
+        ("missing aria2 source publish asset", legacy.path, f"            release-bundle/assets/{legacy.aria2_source_name}\n", ""),
+        ("missing FFmpeg source publish asset", legacy.path, f"            release-bundle/assets/{legacy.ffmpeg_source_name}\n", ""),
+        ("unmatched files allowed", legacy.path, "          fail_on_unmatched_files: true", "          fail_on_unmatched_files: false"),
         ("absence not final", legacy.path, "      - name: Publish GitHub prerelease", "      - name: Extra publish step\n        shell: pwsh\n        run: Write-Host extra\n      - name: Publish GitHub prerelease"),
         ("automatic trigger", legacy.path, "on:\n  workflow_dispatch:", "on:\n  push:\n    branches:\n      - main"),
         ("fixed tag changed", fixed.path, f"          ref: {fixed.tag}", "          ref: main"),
@@ -384,6 +567,16 @@ def _test_negative_mutations(documents: dict[str, str]) -> None:
                 documents[contract.path],
                 "Enforce fail-closed release legal gate",
                 contract.build_step,
+            ),
+        )
+    )
+    extra.append(
+        (
+            "legal payload before build",
+            _move_named_step_after(
+                documents[contract.path],
+                contract.build_step,
+                "Prepare and verify release legal payload",
             ),
         )
     )

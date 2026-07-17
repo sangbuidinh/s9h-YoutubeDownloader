@@ -18,6 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP_PATH = REPO_ROOT / "requirements-build-bootstrap.txt"
 BUILD_PATH = REPO_ROOT / "requirements-build.txt"
 INVENTORY_PATH = REPO_ROOT / ".github" / "build-dependencies.json"
+ACTION_PIN_INVENTORY_PATH = REPO_ROOT / ".github" / "actions-pins.json"
 INSTALLER_PATH = REPO_ROOT / "scripts" / "install_build_dependencies.py"
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 WORKFLOW_PATHS = (
@@ -32,6 +33,12 @@ FIXED_TAG_WORKFLOWS = {
     ".github/workflows/prerelease-v1.3.0-rc.1.yml": "v1.3.0-rc.1",
     ".github/workflows/release-v1.3.0.yml": "v1.3.0",
     ".github/workflows/release-v1.3.1.yml": "v1.3.1",
+}
+RELEASE_WORKFLOW_METADATA = {
+    LEGACY_WORKFLOW: ("v1.2.7-rc.1", "true"),
+    ".github/workflows/prerelease-v1.3.0-rc.1.yml": ("v1.3.0-rc.1", "true"),
+    ".github/workflows/release-v1.3.0.yml": ("v1.3.0", "false"),
+    ".github/workflows/release-v1.3.1.yml": ("v1.3.1", "false"),
 }
 OFFICIAL_INDEX = "https://pypi.org/simple"
 HASH = re.compile(r"[0-9a-f]{64}\Z")
@@ -582,6 +589,19 @@ def _expect_installer_error(installer, callback, label: str) -> None:
 
 def _validate_workflow_usage(workflows: dict[str, str]) -> None:
     _require(tuple(sorted(workflows)) == tuple(sorted(WORKFLOW_PATHS)), "workflow inventory")
+    action_inventory = json.loads(_read_lf_text(ACTION_PIN_INVENTORY_PATH))
+    action_pins = action_inventory.get("actions")
+    _require(isinstance(action_pins, dict), "action pin inventory")
+    checkout_sha = action_pins.get("actions/checkout", {}).get("commit")
+    setup_sha = action_pins.get("actions/setup-python", {}).get("commit")
+    _require(
+        isinstance(checkout_sha, str) and re.fullmatch(r"[0-9a-f]{40}", checkout_sha) is not None,
+        "checkout action pin",
+    )
+    _require(
+        isinstance(setup_sha, str) and re.fullmatch(r"[0-9a-f]{40}", setup_sha) is not None,
+        "setup-python action pin",
+    )
     direct_pip = re.compile(
         r"(?im)^\s*(?:run:\s*)?(?:python\s+-m\s+)?pip\s+install\b"
     )
@@ -597,15 +617,28 @@ def _validate_workflow_usage(workflows: dict[str, str]) -> None:
         "CI installer must run after smoke suite",
     )
     legacy = workflows[LEGACY_WORKFLOW]
+    legacy_build, legacy_publish = legacy.split("\n  publish:\n", 1)
     _require(
-        legacy.count("python scripts/install_build_dependencies.py") == 1,
+        legacy_build.count("python scripts/install_build_dependencies.py") == 1,
         "legacy workflow must call installer once",
     )
-    _require(legacy.count("uses: actions/checkout@") == 1, "legacy checkout count")
     _require(
-        legacy.index("Install locked build dependencies")
-        < legacy.index(r".\scripts\build_prerelease_v1_2_7_rc1.ps1"),
+        "install_build_dependencies.py" not in legacy_publish,
+        "legacy publish must not call dependency installer",
+    )
+    _require(legacy.count("uses: actions/checkout@") == 2, "legacy checkout count")
+    _require(legacy_build.count("uses: actions/checkout@") == 1, "legacy build checkout count")
+    _require(legacy_publish.count("uses: actions/checkout@") == 1, "legacy publish checkout count")
+    _require(
+        legacy_build.index("Install locked build dependencies")
+        < legacy_build.index(r".\scripts\build_prerelease_v1_2_7_rc1.ps1"),
         "legacy installer order",
+    )
+    _validate_publish_control(
+        LEGACY_WORKFLOW,
+        legacy_publish,
+        checkout_sha,
+        setup_sha,
     )
     for path, tag in FIXED_TAG_WORKFLOWS.items():
         workflow = workflows[path]
@@ -618,11 +651,9 @@ def _validate_workflow_usage(workflows: dict[str, str]) -> None:
             "install_build_dependencies.py" not in publish,
             f"{path} publish must not call dependency installer",
         )
-        _require(
-            re.search(r"(?im)^\s*(?:run:\s*)?python\b", publish) is None,
-            f"{path} publish must not invoke Python",
-        )
-        _require(workflow.count("uses: actions/checkout@") == 2, f"{path} checkout count")
+        _require(workflow.count("uses: actions/checkout@") == 3, f"{path} checkout count")
+        _require(build.count("uses: actions/checkout@") == 2, f"{path} build checkout count")
+        _require(publish.count("uses: actions/checkout@") == 1, f"{path} publish checkout count")
         _require(
             workflow.index("Check out workflow control source")
             < workflow.index("Install locked build dependencies")
@@ -644,6 +675,100 @@ def _validate_workflow_usage(workflows: dict[str, str]) -> None:
             "python ..\\control\\scripts\\prepare_release_bundle.py" in build,
             f"{path} bundle builder must come from control source",
         )
+        _validate_publish_control(path, publish, checkout_sha, setup_sha)
+
+
+def _validate_publish_control(
+    path: str,
+    publish: str,
+    checkout_sha: str,
+    setup_sha: str,
+) -> None:
+    tag, prerelease = RELEASE_WORKFLOW_METADATA[path]
+    checkout = _named_step_text(publish, "Check out publish workflow controls")
+    _require(
+        checkout
+        == (
+            "      - name: Check out publish workflow controls\n"
+            f"        uses: actions/checkout@{checkout_sha} # v4\n"
+            "        with:\n"
+            "          ref: ${{ needs.build.outputs.control-commit }}\n"
+            "          path: control\n"
+            "          persist-credentials: false\n"
+        ),
+        f"{path} publish control checkout contract",
+    )
+    setup = _named_step_text(publish, "Set up publish Python")
+    _require(
+        setup
+        == (
+            "      - name: Set up publish Python\n"
+            f"        uses: actions/setup-python@{setup_sha} # v5\n"
+            "        with:\n"
+            '          python-version: "3.11.9"\n'
+        ),
+        f"{path} publish setup-python contract",
+    )
+    version_check = _named_step_text(publish, "Verify publish Python version")
+    for required in (
+        "python --version",
+        '$VersionOutput = (& python --version 2>&1 | Out-String).Trim()',
+        'if ($VersionOutput -ne "Python 3.11.9")',
+    ):
+        _require(required in version_check, f"{path} publish Python version check")
+
+    verifier = _named_step_text(publish, "Enforce publish-ready release bundle")
+    _require(
+        len(
+            re.findall(
+                r"(?m)^\s*python control/scripts/prepare_release_bundle\.py verify\s*`?\s*$",
+                verifier,
+            )
+        )
+        == 1,
+        f"{path} real publish verifier command",
+    )
+    for required in (
+        "--bundle-root release-bundle",
+        f"--tag {tag}",
+        '--source-commit "${{ needs.build.outputs.source-commit }}"',
+        '--control-commit "${{ needs.build.outputs.control-commit }}"',
+        f"--prerelease {prerelease}",
+        "--policy control/legal/release-policy.json",
+        "--asset-contract control/legal/release-assets-v2.json",
+        f"--legal-payload release-bundle/assets/Youtube-Downloaderbs-{tag}-legal.zip",
+        "--source-assets-root release-bundle/assets",
+        "--require-release-ready true",
+    ):
+        _require(required in verifier, f"{path} publish verifier argument: {required}")
+    _require(
+        re.search(r"(?m)^\s+(?:continue-on-error|if)\s*:", verifier) is None,
+        f"{path} publish verifier YAML bypass",
+    )
+    _require("install_build_dependencies.py" not in publish, f"{path} publish installer")
+    direct_python_commands = re.findall(
+        r"(?m)^\s*(?:run:\s*)?python\s+([^\r\n]+)$",
+        publish,
+    )
+    _require(
+        direct_python_commands
+        == ["--version", "control/scripts/prepare_release_bundle.py verify `"],
+        f"{path} publish Python command allowlist",
+    )
+
+    ordered_steps = (
+        "Validate immutable build outputs",
+        "Check out publish workflow controls",
+        "Set up publish Python",
+        "Verify publish Python version",
+        "Download release bundle by artifact ID",
+        "Verify downloaded release bundle",
+        "Enforce publish-ready release bundle",
+        "Confirm release absence immediately before publishing",
+    )
+    positions = [publish.index(_named_step_text(publish, name)) for name in ordered_steps]
+    release_position = publish.index("uses: softprops/action-gh-release@")
+    _require(positions == sorted(positions) and positions[-1] < release_position, f"{path} publish order")
 
 
 def _test_negative_mutations(
@@ -708,6 +833,75 @@ def _test_negative_mutations(
     )
     mutations.append(("installer in publish", bootstrap, build, inventory, publish_installer))
 
+    comment_only_verifier = copy.deepcopy(workflows)
+    comment_only_verifier[LEGACY_WORKFLOW] = comment_only_verifier[LEGACY_WORKFLOW].replace(
+        "          python control/scripts/prepare_release_bundle.py verify `",
+        "          $requireReleaseReady = $true # --require-release-ready true",
+        1,
+    )
+    mutations.append((
+        "comment-only publish verifier",
+        bootstrap,
+        build,
+        inventory,
+        comment_only_verifier,
+    ))
+
+    extra_publish_python = copy.deepcopy(workflows)
+    extra_publish_python[LEGACY_WORKFLOW] = extra_publish_python[LEGACY_WORKFLOW].replace(
+        "      - name: Enforce publish-ready release bundle\n",
+        "      - name: Unexpected publish Python\n"
+        "        run: python unexpected.py\n"
+        "      - name: Enforce publish-ready release bundle\n",
+        1,
+    )
+    mutations.append((
+        "unexpected publish Python",
+        bootstrap,
+        build,
+        inventory,
+        extra_publish_python,
+    ))
+
+    wrong_publish_checkout = copy.deepcopy(workflows)
+    publish_checkout = _named_step_text(
+        wrong_publish_checkout[LEGACY_WORKFLOW],
+        "Check out publish workflow controls",
+    )
+    wrong_publish_checkout[LEGACY_WORKFLOW] = wrong_publish_checkout[LEGACY_WORKFLOW].replace(
+        publish_checkout,
+        publish_checkout.replace(
+            "          ref: ${{ needs.build.outputs.control-commit }}",
+            "          ref: main",
+        ),
+        1,
+    )
+    mutations.append((
+        "publish checkout wrong ref",
+        bootstrap,
+        build,
+        inventory,
+        wrong_publish_checkout,
+    ))
+
+    broad_publish_python = copy.deepcopy(workflows)
+    publish_setup = _named_step_text(
+        broad_publish_python[LEGACY_WORKFLOW],
+        "Set up publish Python",
+    )
+    broad_publish_python[LEGACY_WORKFLOW] = broad_publish_python[LEGACY_WORKFLOW].replace(
+        publish_setup,
+        publish_setup.replace('python-version: "3.11.9"', 'python-version: "3.11"'),
+        1,
+    )
+    mutations.append((
+        "broad publish Python selector",
+        bootstrap,
+        build,
+        inventory,
+        broad_publish_python,
+    ))
+
     early_source = copy.deepcopy(workflows)
     early_source[".github/workflows/release-v1.3.1.yml"] = _move_named_step_after(
         early_source[".github/workflows/release-v1.3.1.yml"],
@@ -722,6 +916,19 @@ def _test_negative_mutations(
         "Check out workflow control source",
     )
     mutations.append(("missing control checkout", bootstrap, build, inventory, missing_control))
+
+    missing_publish_control = copy.deepcopy(workflows)
+    missing_publish_control[LEGACY_WORKFLOW] = _remove_named_step(
+        missing_publish_control[LEGACY_WORKFLOW],
+        "Check out publish workflow controls",
+    )
+    mutations.append((
+        "missing publish control checkout",
+        bootstrap,
+        build,
+        inventory,
+        missing_publish_control,
+    ))
 
     missing_source = copy.deepcopy(workflows)
     missing_source[".github/workflows/release-v1.3.1.yml"] = _remove_named_step(
@@ -764,6 +971,15 @@ def _move_named_step_after(workflow: str, name: str, target: str) -> str:
     target_match = target_pattern.search(without)
     _require(target_match is not None, f"mutation target is missing: {target}")
     return without[: target_match.end()] + block + without[target_match.end() :]
+
+
+def _named_step_text(workflow: str, name: str) -> str:
+    pattern = re.compile(
+        rf"(?ms)^      - name:\s*{re.escape(name)}\s*$\n.*?(?=^      - |\Z)"
+    )
+    match = pattern.search(workflow)
+    _require(match is not None, f"named workflow step is missing: {name}")
+    return match.group(0).rstrip("\n") + "\n"
 
 
 def _remove_named_step(workflow: str, name: str) -> str:

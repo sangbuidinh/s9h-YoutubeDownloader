@@ -1,0 +1,798 @@
+{
+  "schema_version": 1,
+  "target_phase": "6B2B2A3",
+  "baseline_commit": "3c3bd8de7ca77fb5f0ecb9a132a76f1aec1e799c",
+  "evidence_scope": {
+    "mode": "offline",
+    "network_access_allowed": false,
+    "new_primary_research_allowed": false,
+    "source_downloads_allowed": false,
+    "binary_downloads_allowed": false,
+    "source_asset_creation_allowed": false,
+    "build_execution_allowed": false,
+    "runtime_execution_allowed": false,
+    "consolidation_only": true,
+    "claims_boundary": "This phase consolidates accepted evidence and records a blocked assembly decision; it does not establish legal compliance or source-kit completeness."
+  },
+  "authoritative_inputs": [
+    {
+      "path": "legal/ffmpeg-provider-build-feasibility.json",
+      "role": "ffmpeg-provider-build-feasibility",
+      "sha256": "32e8c037c127d720c5a808297983d1953d7a4f8640eb4d6dced7995fb43ea81a",
+      "status": "accepted-input"
+    },
+    {
+      "path": "legal/primary-source-evidence-aria2.json",
+      "role": "aria2-primary-source-evidence",
+      "sha256": "6a266ecd2f4abfb2056119e4314288ec4e05c4643951ebf0fc90d4beb3ebff8e",
+      "status": "accepted-input"
+    },
+    {
+      "path": "legal/primary-source-evidence-ffmpeg-codecs.json",
+      "role": "ffmpeg-codec-primary-source-evidence",
+      "sha256": "70f4165b51ac18f81785a4cd314b267b21437dcca9ee72f2e96e1ebccde4c069",
+      "status": "accepted-input"
+    },
+    {
+      "path": "legal/primary-source-evidence-ffmpeg-hardware-system.json",
+      "role": "ffmpeg-hardware-system-primary-source-evidence",
+      "sha256": "8f240ccfe1b1f29224f1986d9b324ac47319f452a46fd3e6f1720598c7ccaf8c",
+      "status": "accepted-input"
+    },
+    {
+      "path": "legal/primary-source-evidence-ffmpeg-remaining-libraries.json",
+      "role": "ffmpeg-remaining-library-primary-source-evidence",
+      "sha256": "c3e98242a4b7adb006fddab7a5147073968fa195ebdcaf8beb07bd237f1e8dc5",
+      "status": "accepted-input"
+    },
+    {
+      "path": "legal/primary-source-evidence-ffmpeg-support.json",
+      "role": "ffmpeg-support-primary-source-evidence",
+      "sha256": "2fbbe6a839f364205e9b07b67ed8c96a8413bde7ce4a246f86df967d0eedf7fb",
+      "status": "accepted-input"
+    },
+    {
+      "path": "legal/release-assets-v2.json",
+      "role": "release-asset-contract",
+      "sha256": "f47281a9bc1acd04633e7e93852f2abe2fba2c0e5341d0a3ce978c79a858df2b",
+      "status": "accepted-input"
+    },
+    {
+      "path": "legal/release-policy.json",
+      "role": "release-policy",
+      "sha256": "0b9db38340bced9137e45fe88af59bd1691faa12d042adc488dccde6043efeb1",
+      "status": "accepted-input"
+    },
+    {
+      "path": "legal/source-correspondence.json",
+      "role": "source-correspondence",
+      "sha256": "5836e243640a7a8b8d997d527be2a1ac7dcb4bb190eb4fd692360c0d79f19f26",
+      "status": "accepted-input"
+    },
+    {
+      "path": "legal/source-input-inventory.json",
+      "role": "source-input-inventory",
+      "sha256": "fc0b87bdae593a30df7c34164d525b207dc9e5f43ecfca5a0b54b1582a47c499",
+      "status": "accepted-input"
+    },
+    {
+      "path": "legal/source-kit-feasibility.json",
+      "role": "source-kit-feasibility",
+      "sha256": "6f6cb8149cf116a184c14c4091436debee6db04f6217e5bd1343b955429aa6c3",
+      "status": "accepted-input"
+    },
+    {
+      "path": "legal/source-kit-requirements.json",
+      "role": "source-kit-requirements",
+      "sha256": "25ce542aaea1b39ed816b8fb889d6e2b2d4ce558f542f3d928ee2924874918cb",
+      "status": "accepted-input"
+    }
+  ],
+  "packages": [
+    {
+      "package_id": "aria2",
+      "evidence_sources": [
+        "legal/primary-source-evidence-aria2.json",
+        "legal/source-input-inventory.json",
+        "legal/source-kit-feasibility.json"
+      ],
+      "external_components_total": 6,
+      "verified_immutable_inputs": 5,
+      "partial_inputs": 1,
+      "identified_name_only_inputs": 0,
+      "system_component_candidates": 0,
+      "provider_versions_complete": false,
+      "immutable_component_inputs_complete": false,
+      "component_level_evidence_coverage_complete": true,
+      "toolchain_complete": false,
+      "configure_complete": false,
+      "build_orchestration_complete": false,
+      "patch_evidence_complete": false,
+      "reproducibility_complete": false,
+      "source_assets_created": false,
+      "source_kit_ready": false,
+      "assembly_eligible": false,
+      "package_status": "blocked",
+      "blockers": [
+        "Exact build orchestration remains incomplete.",
+        "Exact provider toolchain remains incomplete.",
+        "No legal or release approval exists.",
+        "Source assets were not created.",
+        "Source kit was not assembled.",
+        "aria2/gmp immutable-input identity remains partial."
+      ]
+    },
+    {
+      "package_id": "ffmpeg",
+      "evidence_sources": [
+        "legal/ffmpeg-provider-build-feasibility.json",
+        "legal/primary-source-evidence-ffmpeg-codecs.json",
+        "legal/primary-source-evidence-ffmpeg-hardware-system.json",
+        "legal/primary-source-evidence-ffmpeg-remaining-libraries.json",
+        "legal/primary-source-evidence-ffmpeg-support.json",
+        "legal/source-input-inventory.json",
+        "legal/source-kit-feasibility.json"
+      ],
+      "external_components_total": 55,
+      "verified_immutable_inputs": 0,
+      "partial_inputs": 0,
+      "identified_name_only_inputs": 50,
+      "system_component_candidates": 5,
+      "provider_versions_complete": false,
+      "immutable_component_inputs_complete": false,
+      "component_level_evidence_coverage_complete": true,
+      "toolchain_complete": false,
+      "configure_complete": false,
+      "build_orchestration_complete": false,
+      "patch_evidence_complete": false,
+      "reproducibility_complete": false,
+      "source_assets_created": false,
+      "source_kit_ready": false,
+      "assembly_eligible": false,
+      "package_status": "blocked",
+      "blockers": [
+        "5 system-component treatments remain unresolved.",
+        "50 static provider versions and immutable inputs remain unresolved.",
+        "Dependency acquisition and build order remain unresolved.",
+        "Exact compiler and supporting-tool versions remain unresolved.",
+        "Exact configure command and environment remain unresolved.",
+        "Exact package repository snapshot remains unresolved.",
+        "Historical provider recipe remains unresolved.",
+        "No legal or release approval exists.",
+        "Patch or explicit no-patch evidence remains unresolved.",
+        "Reproducible entrypoint remains unresolved.",
+        "Source assets were not created.",
+        "Source kit was not assembled."
+      ]
+    }
+  ],
+  "input_disposition": [
+    {
+      "disposition_code": "partial-immutable-input",
+      "count": 1,
+      "items": [
+        {
+          "package_id": "aria2",
+          "component_id": "gmp"
+        }
+      ],
+      "evidence_meaning": "Project and version evidence is partial, but immutable identity or correspondence remains incomplete.",
+      "blocking_effect": "Assembly must not begin while an immutable package-scoped input remains partial.",
+      "required_next_evidence": "Resolve or formally disposition the remaining immutable-input identity gap."
+    },
+    {
+      "disposition_code": "provider-version-unresolved",
+      "count": 50,
+      "items": [
+        {
+          "package_id": "ffmpeg",
+          "component_id": "amf"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "avisynth"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "bzlib"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "cairo"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "cuda"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "cuda-llvm"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "cuvid"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "ffnvcodec"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "gmp"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "gnutls"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "iconv"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libaom"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libass"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libfontconfig"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libfreetype"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libfribidi"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libgme"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libgsm"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libharfbuzz"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libmfx"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libmp3lame"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libopencore-amrnb"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libopencore-amrwb"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libopenjpeg"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libopenmpt"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libopus"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "librubberband"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libspeex"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libsrt"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libssh"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libtheora"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libvidstab"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libvmaf"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libvo-amrwbenc"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libvorbis"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libvpl"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libvpx"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libwebp"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libx264"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libx265"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libxml2"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libxvid"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libzimg"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "libzmq"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "lzma"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "nvdec"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "nvenc"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "openal"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "sdl2"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "zlib"
+        }
+      ],
+      "evidence_meaning": "Provider-listed component names and static linkage are known, but exact provider-selected versions are unresolved.",
+      "blocking_effect": "No immutable provider input or source archive may be selected or assembled.",
+      "required_next_evidence": "Establish the exact provider-selected version and immutable input for every component."
+    },
+    {
+      "disposition_code": "system-interface-review-required",
+      "count": 5,
+      "items": [
+        {
+          "package_id": "ffmpeg",
+          "component_id": "d3d11va"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "d3d12va"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "dxva2"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "mediafoundation"
+        },
+        {
+          "package_id": "ffmpeg",
+          "component_id": "vaapi"
+        }
+      ],
+      "evidence_meaning": "The component is a system-interface candidate whose exact SDK, provider, or system mapping remains unresolved.",
+      "blocking_effect": "Final source-kit treatment requires explicit build and legal review and is not resolved.",
+      "required_next_evidence": "Record an explicit final treatment supported by package-specific build and legal evidence."
+    },
+    {
+      "disposition_code": "verified-immutable-input",
+      "count": 5,
+      "items": [
+        {
+          "package_id": "aria2",
+          "component_id": "c-ares"
+        },
+        {
+          "package_id": "aria2",
+          "component_id": "expat"
+        },
+        {
+          "package_id": "aria2",
+          "component_id": "libssh2"
+        },
+        {
+          "package_id": "aria2",
+          "component_id": "sqlite"
+        },
+        {
+          "package_id": "aria2",
+          "component_id": "zlib"
+        }
+      ],
+      "evidence_meaning": "Accepted immutable upstream input evidence exists, but no source asset has been created.",
+      "blocking_effect": "The package source kit remains blocked by other incomplete requirements.",
+      "required_next_evidence": "Preserve accepted identity and complete the remaining package requirements before separately authorized assembly."
+    }
+  ],
+  "cross_package_summary": {
+    "packages_total": 2,
+    "external_components_total": 61,
+    "verified_immutable_inputs": 5,
+    "partial_inputs": 1,
+    "identified_name_only_inputs": 50,
+    "system_component_candidates": 5,
+    "disposition_union_total": 61,
+    "duplicate_dispositions": 0,
+    "omitted_inputs": 0,
+    "all_required_inputs_resolved": false,
+    "source_assets_created": false,
+    "source_kits_ready": false
+  },
+  "package_material_disposition": [
+    {
+      "package_id": "aria2",
+      "materials": [
+        {
+          "material": "toolchain",
+          "status": "unresolved",
+          "accepted_evidence": [
+            "legal/primary-source-evidence-aria2.json",
+            "legal/source-input-inventory.json",
+            "legal/source-kit-feasibility.json"
+          ],
+          "unresolved_requirement": "Establish the exact provider toolchain and supporting-tool versions.",
+          "assembly_effect": "Incomplete material keeps source-asset assembly blocked."
+        },
+        {
+          "material": "configure",
+          "status": "not-independently-resolved",
+          "accepted_evidence": [
+            "legal/primary-source-evidence-aria2.json",
+            "legal/source-input-inventory.json",
+            "legal/source-kit-feasibility.json"
+          ],
+          "unresolved_requirement": "Separately establish exact configure inputs if required by an authorized assembly procedure.",
+          "assembly_effect": "Incomplete material keeps source-asset assembly blocked."
+        },
+        {
+          "material": "build-orchestration",
+          "status": "unresolved",
+          "accepted_evidence": [
+            "legal/primary-source-evidence-aria2.json",
+            "legal/source-input-inventory.json",
+            "legal/source-kit-feasibility.json"
+          ],
+          "unresolved_requirement": "Establish complete immutable build orchestration and a reproducible entrypoint.",
+          "assembly_effect": "Incomplete material keeps source-asset assembly blocked."
+        },
+        {
+          "material": "patch-evidence",
+          "status": "not-independently-resolved",
+          "accepted_evidence": [
+            "legal/primary-source-evidence-aria2.json",
+            "legal/source-input-inventory.json",
+            "legal/source-kit-feasibility.json"
+          ],
+          "unresolved_requirement": "Separately resolve patch or explicit no-modification evidence.",
+          "assembly_effect": "Incomplete material keeps source-asset assembly blocked."
+        },
+        {
+          "material": "reproducibility",
+          "status": "not-independently-resolved",
+          "accepted_evidence": [
+            "legal/primary-source-evidence-aria2.json",
+            "legal/source-input-inventory.json",
+            "legal/source-kit-feasibility.json"
+          ],
+          "unresolved_requirement": "Separately establish reproducibility controls and binary correspondence.",
+          "assembly_effect": "Incomplete material keeps source-asset assembly blocked."
+        },
+        {
+          "material": "source-asset-creation",
+          "status": "not-started",
+          "accepted_evidence": [
+            "legal/source-kit-feasibility.json"
+          ],
+          "unresolved_requirement": "Create source assets only under a separately authorized phase.",
+          "assembly_effect": "Incomplete material keeps source-asset assembly blocked."
+        },
+        {
+          "material": "legal-release-review",
+          "status": "blocked",
+          "accepted_evidence": [
+            "legal/release-assets-v2.json",
+            "legal/release-policy.json"
+          ],
+          "unresolved_requirement": "Complete explicit legal and release review after all source-kit prerequisites are satisfied.",
+          "assembly_effect": "Incomplete material keeps source-asset assembly blocked."
+        }
+      ],
+      "complete": false,
+      "blockers": [
+        "Exact build orchestration remains incomplete.",
+        "Exact provider toolchain remains incomplete.",
+        "No legal or release approval exists.",
+        "Source assets were not created.",
+        "Source kit was not assembled.",
+        "aria2/gmp immutable-input identity remains partial."
+      ]
+    },
+    {
+      "package_id": "ffmpeg",
+      "materials": [
+        {
+          "material": "toolchain",
+          "status": "unresolved",
+          "accepted_evidence": [
+            "legal/ffmpeg-provider-build-feasibility.json",
+            "legal/primary-source-evidence-ffmpeg-codecs.json",
+            "legal/primary-source-evidence-ffmpeg-hardware-system.json",
+            "legal/primary-source-evidence-ffmpeg-remaining-libraries.json",
+            "legal/primary-source-evidence-ffmpeg-support.json",
+            "legal/source-input-inventory.json",
+            "legal/source-kit-feasibility.json"
+          ],
+          "unresolved_requirement": "Resolve the exact compiler, supporting tools, and package repository snapshot.",
+          "assembly_effect": "Incomplete material keeps source-asset assembly blocked."
+        },
+        {
+          "material": "configure",
+          "status": "partial",
+          "accepted_evidence": [
+            "legal/ffmpeg-provider-build-feasibility.json",
+            "legal/primary-source-evidence-ffmpeg-codecs.json",
+            "legal/primary-source-evidence-ffmpeg-hardware-system.json",
+            "legal/primary-source-evidence-ffmpeg-remaining-libraries.json",
+            "legal/primary-source-evidence-ffmpeg-support.json",
+            "legal/source-input-inventory.json",
+            "legal/source-kit-feasibility.json"
+          ],
+          "unresolved_requirement": "Resolve the exact configure command, environment, paths, prefixes, working directory, and wrapper.",
+          "assembly_effect": "Incomplete material keeps source-asset assembly blocked."
+        },
+        {
+          "material": "build-orchestration",
+          "status": "partial",
+          "accepted_evidence": [
+            "legal/ffmpeg-provider-build-feasibility.json",
+            "legal/primary-source-evidence-ffmpeg-codecs.json",
+            "legal/primary-source-evidence-ffmpeg-hardware-system.json",
+            "legal/primary-source-evidence-ffmpeg-remaining-libraries.json",
+            "legal/primary-source-evidence-ffmpeg-support.json",
+            "legal/source-input-inventory.json",
+            "legal/source-kit-feasibility.json"
+          ],
+          "unresolved_requirement": "Resolve dependency acquisition, build order, packaging, and immutable historical recipe.",
+          "assembly_effect": "Incomplete material keeps source-asset assembly blocked."
+        },
+        {
+          "material": "patch-evidence",
+          "status": "unresolved",
+          "accepted_evidence": [
+            "legal/ffmpeg-provider-build-feasibility.json",
+            "legal/primary-source-evidence-ffmpeg-codecs.json",
+            "legal/primary-source-evidence-ffmpeg-hardware-system.json",
+            "legal/primary-source-evidence-ffmpeg-remaining-libraries.json",
+            "legal/primary-source-evidence-ffmpeg-support.json",
+            "legal/source-input-inventory.json",
+            "legal/source-kit-feasibility.json"
+          ],
+          "unresolved_requirement": "Resolve core and dependency patch sets or explicit no-patch evidence.",
+          "assembly_effect": "Incomplete material keeps source-asset assembly blocked."
+        },
+        {
+          "material": "reproducibility",
+          "status": "unresolved",
+          "accepted_evidence": [
+            "legal/ffmpeg-provider-build-feasibility.json",
+            "legal/primary-source-evidence-ffmpeg-codecs.json",
+            "legal/primary-source-evidence-ffmpeg-hardware-system.json",
+            "legal/primary-source-evidence-ffmpeg-remaining-libraries.json",
+            "legal/primary-source-evidence-ffmpeg-support.json",
+            "legal/source-input-inventory.json",
+            "legal/source-kit-feasibility.json"
+          ],
+          "unresolved_requirement": "Establish a reproducible entrypoint, deterministic controls, and binary comparison method.",
+          "assembly_effect": "Incomplete material keeps source-asset assembly blocked."
+        },
+        {
+          "material": "source-asset-creation",
+          "status": "not-started",
+          "accepted_evidence": [
+            "legal/source-kit-feasibility.json"
+          ],
+          "unresolved_requirement": "Create source assets only under a separately authorized phase.",
+          "assembly_effect": "Incomplete material keeps source-asset assembly blocked."
+        },
+        {
+          "material": "legal-release-review",
+          "status": "blocked",
+          "accepted_evidence": [
+            "legal/release-assets-v2.json",
+            "legal/release-policy.json"
+          ],
+          "unresolved_requirement": "Complete explicit legal and release review after all source-kit prerequisites are satisfied.",
+          "assembly_effect": "Incomplete material keeps source-asset assembly blocked."
+        }
+      ],
+      "complete": false,
+      "blockers": [
+        "5 system-component treatments remain unresolved.",
+        "50 static provider versions and immutable inputs remain unresolved.",
+        "Dependency acquisition and build order remain unresolved.",
+        "Exact compiler and supporting-tool versions remain unresolved.",
+        "Exact configure command and environment remain unresolved.",
+        "Exact package repository snapshot remains unresolved.",
+        "Historical provider recipe remains unresolved.",
+        "No legal or release approval exists.",
+        "Patch or explicit no-patch evidence remains unresolved.",
+        "Reproducible entrypoint remains unresolved.",
+        "Source assets were not created.",
+        "Source kit was not assembled."
+      ]
+    }
+  ],
+  "assembly_decision": {
+    "decision": "do-not-assemble",
+    "decision_status": "blocked",
+    "source_asset_assembly_authorized": false,
+    "source_kit_assembly_authorized": false,
+    "packages_authorized": [],
+    "packages_blocked": [
+      "aria2",
+      "ffmpeg"
+    ],
+    "decision_basis": [
+      "FFmpeg patch and reproducibility evidence remain incomplete.",
+      "FFmpeg toolchain, configure, and build orchestration remain incomplete.",
+      "Fifty FFmpeg static inputs remain provider-version-unresolved.",
+      "Five FFmpeg system candidates require final treatment.",
+      "Legal compliance is not certified.",
+      "No source assets exist.",
+      "No source kits exist.",
+      "One aria2 input remains partial.",
+      "Only 5 of 61 external component inputs have verified immutable evidence.",
+      "aria2 toolchain and build orchestration remain incomplete."
+    ],
+    "prohibited_actions": [
+      "assemble source kits",
+      "create source archives",
+      "enable release gates",
+      "publish releases",
+      "represent source assets as complete",
+      "retroactively certify existing releases"
+    ],
+    "next_permitted_work": [
+      "assembly-procedure design without creating assets",
+      "controlled remote publication of accepted evidence after explicit authorization",
+      "further evidence recovery under a separately approved phase",
+      "policy or legal review"
+    ]
+  },
+  "reconsideration_prerequisites": [
+    {
+      "order": 1,
+      "prerequisite": "Resolve or formally disposition aria2/gmp immutable-input identity.",
+      "status": "incomplete",
+      "owning_package": "aria2",
+      "evidence_required": "Accepted package-scoped immutable identity or formal disposition evidence for aria2/gmp.",
+      "blocks_assembly": true
+    },
+    {
+      "order": 2,
+      "prerequisite": "Establish exact provider-selected versions and immutable inputs for all required FFmpeg static components.",
+      "status": "incomplete",
+      "owning_package": "ffmpeg",
+      "evidence_required": "Package-specific provider version, immutable identity, and archive evidence for all required static inputs.",
+      "blocks_assembly": true
+    },
+    {
+      "order": 3,
+      "prerequisite": "Complete explicit treatment decisions for all five FFmpeg system component candidates.",
+      "status": "incomplete",
+      "owning_package": "ffmpeg",
+      "evidence_required": "Build and legal treatment evidence for d3d11va, d3d12va, dxva2, mediafoundation, and vaapi.",
+      "blocks_assembly": true
+    },
+    {
+      "order": 4,
+      "prerequisite": "Establish sufficient package build materials for aria2.",
+      "status": "incomplete",
+      "owning_package": "aria2",
+      "evidence_required": "Accepted toolchain, build-orchestration, and other required package-material evidence.",
+      "blocks_assembly": true
+    },
+    {
+      "order": 5,
+      "prerequisite": "Establish sufficient package build materials for FFmpeg, including toolchain, configuration, dependency orchestration and patch disposition.",
+      "status": "incomplete",
+      "owning_package": "ffmpeg",
+      "evidence_required": "Accepted exact toolchain, configure, dependency, recipe, and patch-disposition evidence.",
+      "blocks_assembly": true
+    },
+    {
+      "order": 6,
+      "prerequisite": "Define and verify source-asset assembly procedures.",
+      "status": "incomplete",
+      "owning_package": "cross-package",
+      "evidence_required": "Reviewed deterministic assembly and verification procedures without creating assets in this phase.",
+      "blocks_assembly": true
+    },
+    {
+      "order": 7,
+      "prerequisite": "Create source assets only under a separately authorized phase.",
+      "status": "incomplete",
+      "owning_package": "cross-package",
+      "evidence_required": "Explicit authorization for controlled source-asset creation after prerequisite completion.",
+      "blocks_assembly": true
+    },
+    {
+      "order": 8,
+      "prerequisite": "Verify assembled source assets against the accepted evidence.",
+      "status": "incomplete",
+      "owning_package": "cross-package",
+      "evidence_required": "Byte-level manifests and correspondence verification for separately assembled assets.",
+      "blocks_assembly": true
+    },
+    {
+      "order": 9,
+      "prerequisite": "Perform explicit legal review of source availability and license obligations.",
+      "status": "incomplete",
+      "owning_package": "cross-package",
+      "evidence_required": "Documented legal review after exact source inputs and assembled assets are available.",
+      "blocks_assembly": true
+    },
+    {
+      "order": 10,
+      "prerequisite": "Re-run release gates only after all required source-kit prerequisites are satisfied.",
+      "status": "incomplete",
+      "owning_package": "cross-package",
+      "evidence_required": "Evidence that every prerequisite is complete before any gate reconsideration.",
+      "blocks_assembly": true
+    }
+  ],
+  "gate_state": {
+    "legal_compliance_certified": false,
+    "source_availability_certified": false,
+    "source_assets_created": false,
+    "source_kits_ready": false,
+    "assembly_authorized": false,
+    "release_gate_reconsideration_allowed": false,
+    "release_ready": false,
+    "publishing_allowed": false
+  }
+}
