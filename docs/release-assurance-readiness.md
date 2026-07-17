@@ -228,4 +228,4 @@ The exact action commit is implementation-specific evidence. Both `action.yml` a
 
 The readiness baseline is complete only as a reviewed policy design. Authenticode implementation and readiness are false. SBOM implementation, generator selection, generation, validation, and readiness are false. Provenance implementation, permission integration, attestation generation, verification, and readiness are false. Combined release-assurance readiness and every assurance claim are false.
 
-The next permitted work is independent review of this four-file checkpoint. No signing, credential provisioning, SBOM generation, attestation, workflow integration, push, release, or publishing action is authorized by this document.
+The next permitted work is independent review of this five-file checkpoint. No signing, credential provisioning, SBOM generation, attestation, workflow integration, push, release, or publishing action is authorized by this document.
