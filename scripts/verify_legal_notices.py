@@ -175,7 +175,7 @@ CANONICAL_DOCUMENT_PATHS = (
     "docs/source-kit-feasibility.md",
     "legal/README.md",
 )
-EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT = 16
+EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT = 17
 
 NOTICE_HEADINGS = {
     "aria2": "### aria2 1.37.0",

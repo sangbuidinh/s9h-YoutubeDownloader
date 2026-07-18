@@ -1,0 +1,1118 @@
+{
+  "assessment_baseline": "887219aaf37ac5470a6b1f3f4393f1fd85350c4e",
+  "blockers": [
+    "SPDX schema validation not implemented",
+    "SPDX semantic validation not implemented",
+    "checksum reconciliation not implemented",
+    "comparator binary not approved or executed",
+    "deterministic generator not implemented",
+    "external runtime reconciliation not implemented",
+    "final Python package inventory not implemented",
+    "final package inventory contract not implemented",
+    "final portable-package inventory not implemented",
+    "production SBOM not generated",
+    "release integration not authorized",
+    "release-manifest reconciliation not implemented"
+  ],
+  "candidates": [
+    {
+      "candidate_release": "not-applicable-prototype-contract-only",
+      "capabilities": {
+        "checksum-file-reconciliation": "established",
+        "declared-license-evidence": "established",
+        "deterministic-serialization": "established",
+        "distributed-python-package-awareness": "partially-established",
+        "embedded-python-runtime-awareness": "partially-established",
+        "expose-unresolved-components": "established",
+        "external-runtime-binary-awareness": "partially-established",
+        "file-to-package-relationship-support": "established",
+        "final-file-sha256-coverage": "established",
+        "independent-comparator-suitability": "not-applicable",
+        "maintenance-and-update-burden": "partially-established",
+        "native-dll-pyd-awareness": "partially-established",
+        "new-privileged-dependency-risk": "established",
+        "non-fabricated-concluded-license-handling": "established",
+        "offline-generation-capability": "established",
+        "offline-validation-capability": "partially-established",
+        "operate-without-publishing": "established",
+        "package-url-when-authoritative": "established",
+        "portable-package-file-coverage": "established",
+        "pyinstaller-one-file-awareness": "partially-established",
+        "reject-incomplete-coverage": "established",
+        "release-checksum-provenance-availability": "not-applicable",
+        "release-manifest-reconciliation": "established",
+        "spdx-2.3-json-capability": "established",
+        "spdx-noassertion-support": "established",
+        "stable-package-ordering": "established",
+        "stable-relationship-ordering": "established",
+        "supplier-origin-evidence": "established",
+        "version-and-binary-pinning": "established",
+        "windows-ci-compatibility": "established"
+      },
+      "evidence_retrieved_at_utc": "2026-07-18T01:14:55Z",
+      "execution_status": "contract-only-not-implemented",
+      "id": "project-owned-deterministic-spdx-generator",
+      "immutable_commit": "887219aaf37ac5470a6b1f3f4393f1fd85350c4e",
+      "license_blob_sha1": "not-applicable",
+      "license_path": "not-applicable",
+      "limitations": [
+        "No generator implementation or production SBOM exists.",
+        "Schema validation and semantic reconciliation are not implemented.",
+        "The design requires authoritative final-package evidence that is not yet assembled."
+      ],
+      "maintenance_status": "Repository-controlled architecture proposal; implementation and maintenance have not been authorized.",
+      "official_sources": [
+        "https://github.com/sangbuidinh/s9h-YoutubeDownloader/blob/887219aaf37ac5470a6b1f3f4393f1fd85350c4e/legal/built-artifact-inventory.json",
+        "https://github.com/sangbuidinh/s9h-YoutubeDownloader/blob/887219aaf37ac5470a6b1f3f4393f1fd85350c4e/legal/release-assurance-policy.json",
+        "https://github.com/sangbuidinh/s9h-YoutubeDownloader/blob/887219aaf37ac5470a6b1f3f4393f1fd85350c4e/scripts/package_windows.py",
+        "https://github.com/spdx/spdx-spec/blob/aadf3b0b8dbbabdb4d880b0fc714255fea436ff7/schemas/spdx-schema.json"
+      ],
+      "release_checksums_or_provenance": "Not applicable: this candidate is a repository-owned architecture contract and no generator artifact exists.",
+      "release_publication_date": "not-applicable",
+      "repository": "sangbuidinh/s9h-YoutubeDownloader"
+    },
+    {
+      "candidate_release": "v1.48.0",
+      "capabilities": {
+        "checksum-file-reconciliation": "not-established",
+        "declared-license-evidence": "established",
+        "deterministic-serialization": "not-established",
+        "distributed-python-package-awareness": "established",
+        "embedded-python-runtime-awareness": "partially-established",
+        "expose-unresolved-components": "partially-established",
+        "external-runtime-binary-awareness": "partially-established",
+        "file-to-package-relationship-support": "established",
+        "final-file-sha256-coverage": "partially-established",
+        "independent-comparator-suitability": "established",
+        "maintenance-and-update-burden": "established",
+        "native-dll-pyd-awareness": "partially-established",
+        "new-privileged-dependency-risk": "partially-established",
+        "non-fabricated-concluded-license-handling": "partially-established",
+        "offline-generation-capability": "partially-established",
+        "offline-validation-capability": "not-established",
+        "operate-without-publishing": "established",
+        "package-url-when-authoritative": "established",
+        "portable-package-file-coverage": "established",
+        "pyinstaller-one-file-awareness": "not-established",
+        "reject-incomplete-coverage": "not-established",
+        "release-checksum-provenance-availability": "established",
+        "release-manifest-reconciliation": "not-established",
+        "spdx-2.3-json-capability": "established",
+        "spdx-noassertion-support": "established",
+        "stable-package-ordering": "partially-established",
+        "stable-relationship-ordering": "partially-established",
+        "supplier-origin-evidence": "partially-established",
+        "version-and-binary-pinning": "established",
+        "windows-ci-compatibility": "established"
+      },
+      "evidence_retrieved_at_utc": "2026-07-18T01:14:55Z",
+      "execution_status": "not-downloaded-not-executed",
+      "id": "anchore-syft",
+      "immutable_commit": "3e2bc6ed095f7ec1a415fb38cfe1c319e95dfed6",
+      "license_blob_sha1": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+      "license_path": "LICENSE",
+      "limitations": [
+        "Complete PyInstaller one-file interpretation is not established by the reviewed sources.",
+        "Deterministic canonical output and repository-specific reconciliation require a separate wrapper and experiment.",
+        "Optional remote license enrichment must be disabled for a strictly offline experiment."
+      ],
+      "maintenance_status": "Active upstream project with a recent pinned release at the assessment time.",
+      "official_sources": [
+        "https://github.com/anchore/syft/blob/3e2bc6ed095f7ec1a415fb38cfe1c319e95dfed6/LICENSE",
+        "https://github.com/anchore/syft/blob/3e2bc6ed095f7ec1a415fb38cfe1c319e95dfed6/README.md",
+        "https://github.com/anchore/syft/blob/3e2bc6ed095f7ec1a415fb38cfe1c319e95dfed6/schema/spdx-json/spdx-schema-2.3.json",
+        "https://github.com/anchore/syft/releases/tag/v1.48.0"
+      ],
+      "release_checksums_or_provenance": "The pinned release lists GitHub asset digests, a checksums file, and signature material; none was downloaded or verified in this phase.",
+      "release_publication_date": "2026-07-16T14:47:52Z",
+      "repository": "anchore/syft"
+    },
+    {
+      "candidate_release": "v4.1.5",
+      "capabilities": {
+        "checksum-file-reconciliation": "not-established",
+        "declared-license-evidence": "partially-established",
+        "deterministic-serialization": "not-established",
+        "distributed-python-package-awareness": "partially-established",
+        "embedded-python-runtime-awareness": "partially-established",
+        "expose-unresolved-components": "partially-established",
+        "external-runtime-binary-awareness": "partially-established",
+        "file-to-package-relationship-support": "established",
+        "final-file-sha256-coverage": "established",
+        "independent-comparator-suitability": "partially-established",
+        "maintenance-and-update-burden": "partially-established",
+        "native-dll-pyd-awareness": "partially-established",
+        "new-privileged-dependency-risk": "partially-established",
+        "non-fabricated-concluded-license-handling": "partially-established",
+        "offline-generation-capability": "partially-established",
+        "offline-validation-capability": "partially-established",
+        "operate-without-publishing": "established",
+        "package-url-when-authoritative": "partially-established",
+        "portable-package-file-coverage": "established",
+        "pyinstaller-one-file-awareness": "not-established",
+        "reject-incomplete-coverage": "partially-established",
+        "release-checksum-provenance-availability": "partially-established",
+        "release-manifest-reconciliation": "not-established",
+        "spdx-2.3-json-capability": "not-established",
+        "spdx-noassertion-support": "not-established",
+        "stable-package-ordering": "partially-established",
+        "stable-relationship-ordering": "partially-established",
+        "supplier-origin-evidence": "established",
+        "version-and-binary-pinning": "established",
+        "windows-ci-compatibility": "established"
+      },
+      "evidence_retrieved_at_utc": "2026-07-18T01:14:55Z",
+      "execution_status": "not-downloaded-not-executed",
+      "id": "microsoft-sbom-tool",
+      "immutable_commit": "c83b43dee2dd70b4d6ba16a97cde6b43f971d9c3",
+      "license_blob_sha1": "9e841e7a26e4eb057b24511e7b92d42b257a80e5",
+      "license_path": "LICENSE",
+      "limitations": [
+        "Exact PyInstaller one-file and repository-specific reconciliation coverage is not established.",
+        "Optional ClearlyDefined enrichment introduces a network-dependent path unless disabled.",
+        "The pinned release documents SPDX 2.2 and SPDX 3.0 rather than the required SPDX 2.3 target."
+      ],
+      "maintenance_status": "Maintained upstream project with a pinned release predating the assessment.",
+      "official_sources": [
+        "https://github.com/microsoft/sbom-tool/blob/c83b43dee2dd70b4d6ba16a97cde6b43f971d9c3/LICENSE",
+        "https://github.com/microsoft/sbom-tool/blob/c83b43dee2dd70b4d6ba16a97cde6b43f971d9c3/README.md",
+        "https://github.com/microsoft/sbom-tool/releases/tag/v4.1.5"
+      ],
+      "release_checksums_or_provenance": "The pinned GitHub release lists asset digests; a separate release checksums file was not established and no asset was downloaded.",
+      "release_publication_date": "2025-12-15T21:40:14Z",
+      "repository": "microsoft/sbom-tool"
+    }
+  ],
+  "claims": {
+    "checksum_file_reconciled": false,
+    "complete_sbom": false,
+    "external_comparator_executed": false,
+    "legal_compliance_certified": false,
+    "production_generator_selected": false,
+    "production_sbom_generated": false,
+    "production_sbom_validated": false,
+    "publishing_allowed": false,
+    "release_bundle_integrated": false,
+    "release_manifest_reconciled": false,
+    "release_ready": false,
+    "source_availability_certified": false
+  },
+  "comparison_criteria": [
+    {
+      "id": "spdx-2.3-json-capability",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires spdx-2.3-json-capability and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "Syft has an SPDX 2.3 JSON encoder and a repository-pinned SPDX 2.3 schema."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "not-established",
+          "limitation": "The reviewed official evidence does not establish this criterion.",
+          "result": "The pinned sbom-tool documentation lists SPDX 2.2 and SPDX 3.0 output, not SPDX 2.3."
+        }
+      ]
+    },
+    {
+      "id": "deterministic-serialization",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires deterministic-serialization and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "not-established",
+          "limitation": "The reviewed official evidence does not establish this criterion.",
+          "result": "The pinned Syft sources do not establish byte-identical canonical serialization for this repository contract."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "not-established",
+          "limitation": "The reviewed official evidence does not establish this criterion.",
+          "result": "The pinned sbom-tool sources do not establish byte-identical canonical serialization for this repository contract."
+        }
+      ]
+    },
+    {
+      "id": "stable-package-ordering",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires stable-package-ordering and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "Syft emits structured SPDX packages, but the reviewed sources do not promise this contract's stable package order."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "sbom-tool emits structured packages, but the reviewed sources do not promise this contract's stable package order."
+        }
+      ]
+    },
+    {
+      "id": "stable-relationship-ordering",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires stable-relationship-ordering and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "Syft emits SPDX relationships, but the reviewed sources do not promise this contract's stable relationship order."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "sbom-tool emits SPDX relationships, but the reviewed sources do not promise this contract's stable relationship order."
+        }
+      ]
+    },
+    {
+      "id": "final-file-sha256-coverage",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires final-file-sha256-coverage and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "Syft supports file cataloging and checksums, but complete coverage of every final release file requires separate reconciliation."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "sbom-tool states that files in the scanned drop are hashed, but the release bundle boundary still requires separate reconciliation."
+        }
+      ]
+    },
+    {
+      "id": "pyinstaller-one-file-awareness",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "partially-established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The project-owned architecture can address pyinstaller-one-file-awareness, but current repository evidence is incomplete."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "not-established",
+          "limitation": "The reviewed official evidence does not establish this criterion.",
+          "result": "No reviewed Syft source establishes complete PyInstaller one-file CArchive interpretation for this repository."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "not-established",
+          "limitation": "The reviewed official evidence does not establish this criterion.",
+          "result": "No reviewed sbom-tool source establishes complete PyInstaller one-file CArchive interpretation for this repository."
+        }
+      ]
+    },
+    {
+      "id": "embedded-python-runtime-awareness",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "partially-established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The project-owned architecture can address embedded-python-runtime-awareness, but current repository evidence is incomplete."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "Syft has Python ecosystem catalogers, but complete attribution of the embedded interpreter inside a one-file EXE is not established."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "Component Detection can discover components in scanned paths, but embedded interpreter attribution inside a one-file EXE is not established."
+        }
+      ]
+    },
+    {
+      "id": "distributed-python-package-awareness",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "partially-established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The project-owned architecture can address distributed-python-package-awareness, but current repository evidence is incomplete."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "Syft officially supports Python package cataloging from filesystem and archive evidence."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "Component Detection supports dependency discovery, but exact coverage for this packaged application needs an experiment."
+        }
+      ]
+    },
+    {
+      "id": "native-dll-pyd-awareness",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "partially-established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The project-owned architecture can address native-dll-pyd-awareness, but current repository evidence is incomplete."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "Syft has native binary and PE cataloging, but component attribution for every DLL and PYD is not established."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "File hashing covers native files in scope, but package attribution for every DLL and PYD is not established."
+        }
+      ]
+    },
+    {
+      "id": "external-runtime-binary-awareness",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "partially-established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The project-owned architecture can address external-runtime-binary-awareness, but current repository evidence is incomplete."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "Syft can catalog filesystem binaries, but authoritative identity for yt-dlp, FFmpeg, ffprobe, Deno, and aria2 must come from release evidence."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "sbom-tool can scan release paths, but authoritative identity for all five external runtimes must come from release evidence."
+        }
+      ]
+    },
+    {
+      "id": "portable-package-file-coverage",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires portable-package-file-coverage and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "Syft can scan directories and archives, including an extracted portable package tree."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "sbom-tool accepts a build or drop path and hashes files in that scanned boundary."
+        }
+      ]
+    },
+    {
+      "id": "supplier-origin-evidence",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires supplier-origin-evidence and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "Syft can emit supplier metadata when discovered, but repository-specific authoritative origin evidence still needs reconciliation."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "sbom-tool accepts supplier metadata and component evidence, subject to repository-specific reconciliation."
+        }
+      ]
+    },
+    {
+      "id": "declared-license-evidence",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires declared-license-evidence and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "Syft supports declared license evidence from package metadata and optional enrichment."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "sbom-tool supports license evidence through Component Detection and optional ClearlyDefined enrichment."
+        }
+      ]
+    },
+    {
+      "id": "non-fabricated-concluded-license-handling",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires non-fabricated-concluded-license-handling and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "Syft can report discovered licenses, but this repository must independently enforce that concluded licenses are never invented."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "sbom-tool can report discovered or enriched licenses, but this repository must independently enforce non-fabrication."
+        }
+      ]
+    },
+    {
+      "id": "spdx-noassertion-support",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires spdx-noassertion-support and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "The Syft SPDX 2.3 model can represent SPDX NOASSERTION values."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "not-established",
+          "limitation": "The reviewed official evidence does not establish this criterion.",
+          "result": "The pinned output-format evidence does not establish SPDX 2.3 NOASSERTION handling."
+        }
+      ]
+    },
+    {
+      "id": "package-url-when-authoritative",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires package-url-when-authoritative and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "Syft emits package URLs for supported cataloged ecosystems when available."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "Component Detection can provide package URLs for supported ecosystems, but authority must be reconciled."
+        }
+      ]
+    },
+    {
+      "id": "file-to-package-relationship-support",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires file-to-package-relationship-support and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "Syft's SPDX output supports package, file, and relationship records."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "sbom-tool supports SPDX package and relationship records for discovered components and files."
+        }
+      ]
+    },
+    {
+      "id": "release-manifest-reconciliation",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires release-manifest-reconciliation and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "not-established",
+          "limitation": "The reviewed official evidence does not establish this criterion.",
+          "result": "Syft does not establish reconciliation against this repository's release manifest."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "not-established",
+          "limitation": "The reviewed official evidence does not establish this criterion.",
+          "result": "sbom-tool does not establish reconciliation against this repository's release manifest."
+        }
+      ]
+    },
+    {
+      "id": "checksum-file-reconciliation",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires checksum-file-reconciliation and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "not-established",
+          "limitation": "The reviewed official evidence does not establish this criterion.",
+          "result": "Syft release provenance does not establish reconciliation against this product's checksum file."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "not-established",
+          "limitation": "The reviewed official evidence does not establish this criterion.",
+          "result": "sbom-tool does not establish reconciliation against this product's checksum file."
+        }
+      ]
+    },
+    {
+      "id": "offline-generation-capability",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires offline-generation-capability and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "Syft can catalog local inputs offline when optional remote license lookup is disabled."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "sbom-tool can scan local inputs, but network enrichment paths require explicit offline controls."
+        }
+      ]
+    },
+    {
+      "id": "offline-validation-capability",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "partially-established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The project-owned architecture can address offline-validation-capability, but current repository evidence is incomplete."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "not-established",
+          "limitation": "The reviewed official evidence does not establish this criterion.",
+          "result": "The reviewed Syft evidence does not establish this repository's required offline schema and semantic validation gate."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "The reviewed sbom-tool evidence does not establish this repository's SPDX 2.3 offline validation gate."
+        }
+      ]
+    },
+    {
+      "id": "version-and-binary-pinning",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires version-and-binary-pinning and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "Syft publishes versioned releases and immutable source commits suitable for a later pinned experiment."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "sbom-tool publishes versioned releases and immutable source commits suitable for a later pinned experiment."
+        }
+      ]
+    },
+    {
+      "id": "release-checksum-provenance-availability",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "not-applicable",
+          "limitation": "The project-owned design cannot provide independent implementation comparison.",
+          "result": "This criterion does not apply to scoring the project-owned architecture as an independent external comparator."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "The pinned Syft release publishes checksums and GitHub asset digests, with signature material also listed."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "The pinned GitHub release exposes asset digests, but no separate checksums file was established in this review."
+        }
+      ]
+    },
+    {
+      "id": "windows-ci-compatibility",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires windows-ci-compatibility and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "Syft publishes Windows release archives and documents command-line filesystem scans."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "sbom-tool publishes a Windows executable and documents Windows command-line generation."
+        }
+      ]
+    },
+    {
+      "id": "maintenance-and-update-burden",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "partially-established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The project-owned architecture can address maintenance-and-update-burden, but current repository evidence is incomplete."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "Using Syft as a comparator requires periodic external pin, checksum, capability, and license review."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "Using sbom-tool requires periodic external pin, digest, capability, runtime, and license review."
+        }
+      ]
+    },
+    {
+      "id": "new-privileged-dependency-risk",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires new-privileged-dependency-risk and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "Running Syft would add a separately obtained comparator binary, isolated from the primary generation path."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "Running sbom-tool would add a separately obtained executable and its runtime behavior."
+        }
+      ]
+    },
+    {
+      "id": "reject-incomplete-coverage",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires reject-incomplete-coverage and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "not-established",
+          "limitation": "The reviewed official evidence does not establish this criterion.",
+          "result": "Syft can expose catalog results, but the reviewed sources do not establish rejection of this repository's complete required inventory boundary."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "Package-discovery failure controls are partial evidence, but complete repository-specific coverage rejection is not established."
+        }
+      ]
+    },
+    {
+      "id": "expose-unresolved-components",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires expose-unresolved-components and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "Syft can emit discovered evidence, but repository-specific unresolved records and reasons need a wrapper contract."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "sbom-tool can expose component findings, but repository-specific unresolved records and reasons need a wrapper contract."
+        }
+      ]
+    },
+    {
+      "id": "operate-without-publishing",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "established",
+          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "result": "The prototype contract explicitly requires operate-without-publishing and places its enforcement under repository control."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "Syft operates locally and does not require publishing an SBOM."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "sbom-tool operates locally and does not require publishing an SBOM."
+        }
+      ]
+    },
+    {
+      "id": "independent-comparator-suitability",
+      "results": [
+        {
+          "candidate_id": "project-owned-deterministic-spdx-generator",
+          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "evidence_status": "not-applicable",
+          "limitation": "The project-owned design cannot provide independent implementation comparison.",
+          "result": "This criterion does not apply to scoring the project-owned architecture as an independent external comparator."
+        },
+        {
+          "candidate_id": "anchore-syft",
+          "decision_impact": "Contributes to selecting Syft only as a later independent comparator; execution remains unauthorized.",
+          "evidence_status": "established",
+          "limitation": "Capability evidence does not prove complete repository-specific coverage or reconciliation.",
+          "result": "Syft is independent of the project-owned generator and directly supports the target SPDX 2.3 JSON format."
+        },
+        {
+          "candidate_id": "microsoft-sbom-tool",
+          "decision_impact": "Keeps sbom-tool as the unselected secondary candidate and does not authorize execution.",
+          "evidence_status": "partially-established",
+          "limitation": "The reviewed official evidence is incomplete for the repository-specific contract.",
+          "result": "sbom-tool is independent, but its pinned output-format mismatch makes it a weaker comparator for SPDX 2.3."
+        }
+      ]
+    }
+  ],
+  "current_inputs": {
+    "external_runtime_boundary": [
+      "aria2",
+      "Deno",
+      "FFmpeg",
+      "ffprobe",
+      "yt-dlp"
+    ],
+    "historical_executable_inventory_is_current_final_release_evidence": false,
+    "historical_executable_inventory_source_commit": "988c07f9d3e099b3ff157e33d880c0bad73ad112",
+    "production_policy_fail_closed": true,
+    "production_sbom_generation_implemented": false,
+    "production_sbom_validation_implemented": false,
+    "release_bundle_has_production_sbom": false,
+    "release_manifest_reconciles_production_sbom": false,
+    "required_future_input_boundary": [
+      "release identity",
+      "source and control commits",
+      "final artifact inventory",
+      "portable-package extracted file inventory",
+      "PyInstaller executable inventory",
+      "Python package inventory",
+      "native member inventory",
+      "external runtime inventory",
+      "authoritative legal-component evidence",
+      "release manifest",
+      "checksum file",
+      "final standalone executable identity and SHA-256",
+      "release tag and version association",
+      "unresolved component records"
+    ],
+    "source_kit_assembly_blocked": true
+  },
+  "decision": {
+    "architecture_status": "prototype-architecture-recommended",
+    "external_comparator_execution_authorized": false,
+    "primary_generator": "project-owned-deterministic-spdx-generator",
+    "production_generator_selected": false,
+    "production_sbom_generation_authorized": false,
+    "prototype_implementation_authorized": false,
+    "release_integration_authorized": false,
+    "secondary_candidate": "microsoft-sbom-tool",
+    "selected_comparator": "anchore-syft",
+    "selection_rationale": "A repository-owned deterministic SPDX 2.3 JSON generator best fits exact ordering, final-package reconciliation, explicit unresolved-state handling, and fail-closed policy requirements. Syft is the preferred later comparator because its pinned official sources directly support SPDX 2.3 JSON plus Windows, filesystem, archive, Python, and native-binary discovery, while publishing release checksums and provenance. Microsoft sbom-tool remains secondary because its pinned release documents SPDX 2.2 and 3.0 rather than the required SPDX 2.3 target."
+  },
+  "document_id": "s9h-sbom-generator-feasibility-v1",
+  "product": "Youtube Downloaderbs",
+  "prototype_contract": {
+    "data_license": "CC0-1.0",
+    "deterministic_document_namespace": true,
+    "fail_closed_conditions": [
+      "final package inventory absent",
+      "final checksum absent",
+      "checksum mismatch",
+      "duplicate canonical path",
+      "unsafe path",
+      "final release manifest mismatch",
+      "unresolved distributed file without explicit unresolved record",
+      "external runtime omitted",
+      "Python runtime omitted",
+      "PyInstaller inventory source mismatch",
+      "source/control commit malformed",
+      "release tag malformed",
+      "package/file relationship incomplete",
+      "non-deterministic output",
+      "schema validation unavailable",
+      "semantic reconciliation unavailable"
+    ],
+    "filename_template": "Youtube-Downloaderbs-v{version}.spdx.json",
+    "input_classes": [
+      "release identity",
+      "source and control commits",
+      "final artifact inventory",
+      "portable-package extracted file inventory",
+      "PyInstaller executable inventory",
+      "Python package inventory",
+      "native member inventory",
+      "external runtime inventory",
+      "authoritative legal-component evidence",
+      "release manifest",
+      "checksum file"
+    ],
+    "input_properties": [
+      "canonical relative path",
+      "file type",
+      "size",
+      "SHA-256",
+      "component association",
+      "version evidence",
+      "supplier/origin evidence",
+      "declared-license evidence",
+      "concluded license or NOASSERTION",
+      "download location or NOASSERTION",
+      "package URL or absence with reason",
+      "provenance of each field",
+      "unresolved-state reason"
+    ],
+    "output_format": "SPDX-2.3-json",
+    "output_properties": [
+      "deterministic document namespace",
+      "deterministic creation-info ordering",
+      "deterministic package ordering",
+      "deterministic file ordering",
+      "deterministic relationship ordering",
+      "SHA-256 checksums",
+      "explicit DESCRIBES relationships",
+      "explicit package/file containment relationships",
+      "no fabricated supplier",
+      "no fabricated license",
+      "no fabricated version",
+      "no fabricated download location",
+      "NOASSERTION where required",
+      "final artifact association",
+      "source commit",
+      "control commit",
+      "release tag",
+      "generator identity and pinned version",
+      "canonical UTF-8 JSON",
+      "LF-only",
+      "no BOM",
+      "exactly one final newline"
+    ],
+    "schema_validation_implemented": false,
+    "semantic_reconciliation_implemented": false,
+    "spdx_version": "SPDX-2.3"
+  },
+  "repository": "sangbuidinh/s9h-YoutubeDownloader",
+  "schema_version": 1,
+  "scope": "prototype-feasibility-only",
+  "target": {
+    "filename_template": "Youtube-Downloaderbs-v{version}.spdx.json",
+    "format": "SPDX-2.3-json",
+    "predicate_type": "https://spdx.dev/Document/v2.3",
+    "spdx_version": "SPDX-2.3"
+  },
+  "version": "1.3.1"
+}
