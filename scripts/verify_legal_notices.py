@@ -159,6 +159,7 @@ GITATTRIBUTES_LINES = (
     "/.gitattributes text eol=lf",
     "/README.md text eol=lf",
     "/docs/source-kit-feasibility.md text eol=lf",
+    "/docs/sbom-generator-feasibility.md text eol=lf",
     "/legal/*.json text eol=lf",
     "/legal/README.md text eol=lf",
     "/legal/built-artifact-inventory.json text eol=lf",
@@ -173,6 +174,7 @@ GITATTRIBUTES_BYTES = ("\n".join(GITATTRIBUTES_LINES) + "\n").encode("utf-8")
 CANONICAL_DOCUMENT_PATHS = (
     "README.md",
     "docs/source-kit-feasibility.md",
+    "docs/sbom-generator-feasibility.md",
     "legal/README.md",
 )
 EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT = 17

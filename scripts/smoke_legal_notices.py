@@ -42,6 +42,10 @@ def _verify_positive_repository() -> None:
         (REPO_ROOT / verifier.GITATTRIBUTES_PATH).read_bytes() == verifier.GITATTRIBUTES_BYTES,
         ".gitattributes policy changed",
     )
+    _assert(
+        verifier.CANONICAL_DOCUMENT_PATHS.count("docs/sbom-generator-feasibility.md") == 1,
+        "SBOM feasibility document canonical path count changed",
+    )
     _assert_effective_attributes(REPO_ROOT)
     components = inventory["components"]
     _assert(len(components) == 7, "known direct component count changed")
@@ -109,6 +113,16 @@ def _run_checkout_policy_tests() -> None:
         ("legal README eol=crlf", _legal_readme_eol_crlf, "checkout rules"),
         ("missing feasibility document rule", _missing_feasibility_document_rule, "checkout rules"),
         ("feasibility document eol=crlf", _feasibility_document_eol_crlf, "checkout rules"),
+        (
+            "missing SBOM feasibility document rule",
+            _missing_sbom_feasibility_document_rule,
+            "checkout rules",
+        ),
+        (
+            "SBOM feasibility document eol=crlf",
+            _sbom_feasibility_document_eol_crlf,
+            "checkout rules",
+        ),
         ("missing built inventory rule", _missing_built_inventory_rule, "checkout rules"),
         ("missing components rule", _missing_components_rule, "checkout rules"),
         ("missing release assets rule", _missing_release_assets_rule, "checkout rules"),
@@ -395,6 +409,10 @@ def _copy_fixture(root: Path) -> None:
         REPO_ROOT / "docs/source-kit-feasibility.md",
         root / "docs/source-kit-feasibility.md",
     )
+    shutil.copy2(
+        REPO_ROOT / "docs/sbom-generator-feasibility.md",
+        root / "docs/sbom-generator-feasibility.md",
+    )
 
     (root / ".github").mkdir()
     shutil.copy2(REPO_ROOT / ".github/build-dependencies.json", root / ".github/build-dependencies.json")
@@ -509,6 +527,27 @@ def _feasibility_document_eol_crlf(root: Path) -> None:
             b"/docs/source-kit-feasibility.md text eol=crlf",
         ),
     )
+
+
+def _missing_sbom_feasibility_document_rule(root: Path) -> None:
+    target = b"/docs/sbom-generator-feasibility.md text eol=lf\n"
+
+    def transform(data: bytes) -> bytes:
+        _assert(data.count(target) == 1, "SBOM feasibility document rule target count changed")
+        return data.replace(target, b"", 1)
+
+    _rewrite_gitattributes(root, transform)
+
+
+def _sbom_feasibility_document_eol_crlf(root: Path) -> None:
+    target = b"/docs/sbom-generator-feasibility.md text eol=lf"
+    replacement = b"/docs/sbom-generator-feasibility.md text eol=crlf"
+
+    def transform(data: bytes) -> bytes:
+        _assert(data.count(target) == 1, "SBOM feasibility document eol target count changed")
+        return data.replace(target, replacement, 1)
+
+    _rewrite_gitattributes(root, transform)
 
 
 def _verify_later_override_rejected(
