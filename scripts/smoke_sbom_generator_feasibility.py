@@ -105,6 +105,46 @@ def _set_candidate(data: dict[str, object], index: int, key: str, value: object)
     candidate[key] = value
 
 
+def _replace_project_spdx_source(data: dict[str, object], old: str, new: str) -> None:
+    candidates = data["candidates"]
+    assert isinstance(candidates, list) and isinstance(candidates[0], dict)
+    sources = candidates[0]["official_sources"]
+    assert isinstance(sources, list)
+    matching = [index for index, source in enumerate(sources) if source == verifier.SPDX_SCHEMA_URL]
+    if len(matching) != 1:
+        raise AssertionError("expected exactly one canonical SPDX schema source")
+    index = matching[0]
+    source = sources[index]
+    assert isinstance(source, str)
+    if source.count(old) != 1:
+        raise AssertionError("SPDX source mutation target is not unique")
+    changed = source.replace(old, new, 1)
+    if changed == source:
+        raise AssertionError("SPDX source mutation did not change the source")
+    sources[index] = changed
+    sources.sort()
+    if source in sources or changed not in sources:
+        raise AssertionError("SPDX source mutation was not applied")
+
+
+def _document_replacement(old: str, new: str) -> Callable[[Path, dict[str, object]], None]:
+    def mutate(root: Path, baseline: dict[str, object]) -> None:
+        del baseline
+        path = root / verifier.DOCUMENT_PATH
+        original = path.read_bytes()
+        text = original.decode("utf-8")
+        if text.count(old) != 1:
+            raise AssertionError("document mutation target is not unique")
+        changed = text.replace(old, new, 1).encode("utf-8")
+        if changed == original:
+            raise AssertionError("document mutation did not change the copied document")
+        path.write_bytes(changed)
+        if path.read_bytes() != changed:
+            raise AssertionError("document mutation was not applied")
+
+    return mutate
+
+
 def _set_decision(data: dict[str, object], key: str, value: object) -> None:
     decision = data["decision"]
     assert isinstance(decision, dict)
@@ -256,6 +296,12 @@ def _cases() -> list[NegativeCase]:
         NegativeCase("mutable-candidate-ref", "mutable-ref", "mutable evidence references are forbidden", _data_mutation(_insert_mutable_ref)),
         NegativeCase("immutable-commit-malformed", "candidate-commit", "candidate immutable commit is malformed: anchore-syft", _data_mutation(lambda data: _set_candidate(data, 1, "immutable_commit", "not-a-commit"))),
         NegativeCase("immutable-commit-changed", "candidate-pin", "candidate immutable commit changed: anchore-syft", _data_mutation(lambda data: _set_candidate(data, 1, "immutable_commit", "0" * 40))),
+        NegativeCase("sbom-tool-immutable-commit-changed", "candidate-pin", "candidate immutable commit changed: microsoft-sbom-tool", _data_mutation(lambda data: _set_candidate(data, 2, "immutable_commit", "d83b43dee2dd70b4d6ba16a97cde6b43f971d9c3"))),
+        NegativeCase("spdx-commit-malformed", "spdx-evidence-commit", "SPDX specification commit is malformed", _data_mutation(lambda data: _replace_project_spdx_source(data, verifier.SPDX_SPEC_COMMIT, "not-a-commit"))),
+        NegativeCase("spdx-commit-changed", "spdx-evidence-pin", "SPDX specification commit changed", _data_mutation(lambda data: _replace_project_spdx_source(data, verifier.SPDX_SPEC_COMMIT, "badf3b0b8dbbabdb4d880b0fc714255fea436ff7"))),
+        NegativeCase("spdx-schema-path-changed", "spdx-evidence-path", "SPDX schema path changed", _data_mutation(lambda data: _replace_project_spdx_source(data, verifier.SPDX_SCHEMA_PATH, "schemas/changed-schema.json"))),
+        NegativeCase("spdx-release-marker-changed", "spdx-release-pin", "SPDX specification release changed", _document_replacement("spdx/spdx-spec` tag `v2.3`", "spdx/spdx-spec` tag `v2.4`")),
+        NegativeCase("spdx-schema-blob-marker-changed", "spdx-schema-pin", "SPDX schema blob changed", _document_replacement(verifier.SPDX_SCHEMA_BLOB_SHA1, "fe61e6686e885f8139c132647fd0b4f483b8fb81")),
         NegativeCase("candidate-release-changed", "candidate-release", "candidate release changed: anchore-syft", _data_mutation(lambda data: _set_candidate(data, 1, "candidate_release", "v0.0.0"))),
         NegativeCase("license-path-changed", "candidate-license", "candidate license path changed: anchore-syft", _data_mutation(lambda data: _set_candidate(data, 1, "license_path", "COPYING"))),
         NegativeCase("license-blob-sha-changed", "candidate-license", "candidate license blob SHA changed: anchore-syft", _data_mutation(lambda data: _set_candidate(data, 1, "license_blob_sha1", "0" * 40))),
@@ -287,8 +333,8 @@ def main() -> int:
     verifier.verify_feasibility_file(ROOT)
     positive_count = 1
     cases = _cases()
-    if len(cases) != 50:
-        raise AssertionError(f"expected 50 negative cases, found {len(cases)}")
+    if len(cases) != 56:
+        raise AssertionError(f"expected 56 negative cases, found {len(cases)}")
 
     with tempfile.TemporaryDirectory(prefix="sbom-feasibility-smoke-") as temporary:
         temp_root = Path(temporary)
@@ -312,7 +358,7 @@ def main() -> int:
 
     if positive_count != 2:
         raise AssertionError(f"expected 2 positive cases, found {positive_count}")
-    print("SBOM generator feasibility smoke passed: 2 positive, 50 negative")
+    print("SBOM generator feasibility smoke passed: 2 positive, 56 negative")
     return 0
 
 

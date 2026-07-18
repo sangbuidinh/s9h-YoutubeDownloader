@@ -26,6 +26,19 @@ SBOM_TOOL_COMMIT = "c83b43dee2dd70b4d6ba16a97cde6b43f971d9c3"
 SBOM_TOOL_LICENSE_PATH = "LICENSE"
 SBOM_TOOL_LICENSE_BLOB_SHA1 = "9e841e7a26e4eb057b24511e7b92d42b257a80e5"
 
+SPDX_SPEC_RELEASE = "v2.3"
+SPDX_SPEC_COMMIT = "aadf3b0b8dbbabdb4d880b0fc714255fea436ff7"
+SPDX_SCHEMA_PATH = "schemas/spdx-schema.json"
+SPDX_SCHEMA_BLOB_SHA1 = "ee61e6686e885f8139c132647fd0b4f483b8fb81"
+SPDX_SCHEMA_URL = "https://github.com/spdx/spdx-spec/blob/aadf3b0b8dbbabdb4d880b0fc714255fea436ff7/schemas/spdx-schema.json"
+
+PROJECT_OWNED_OFFICIAL_SOURCES = (
+    "https://github.com/sangbuidinh/s9h-YoutubeDownloader/blob/887219aaf37ac5470a6b1f3f4393f1fd85350c4e/legal/built-artifact-inventory.json",
+    "https://github.com/sangbuidinh/s9h-YoutubeDownloader/blob/887219aaf37ac5470a6b1f3f4393f1fd85350c4e/legal/release-assurance-policy.json",
+    "https://github.com/sangbuidinh/s9h-YoutubeDownloader/blob/887219aaf37ac5470a6b1f3f4393f1fd85350c4e/scripts/package_windows.py",
+    "https://github.com/spdx/spdx-spec/blob/aadf3b0b8dbbabdb4d880b0fc714255fea436ff7/schemas/spdx-schema.json",
+)
+
 TOP_LEVEL_KEYS = (
     "assessment_baseline",
     "blockers",
@@ -407,6 +420,32 @@ def _scan_forbidden(value: Any, path: str = "feasibility") -> None:
             _fail("unsupported-claim", "unsupported production-ready claim")
 
 
+def _validate_project_owned_sources(sources: list[str]) -> None:
+    if len(sources) != len(set(sources)):
+        _fail("official-sources", "project-owned official sources changed")
+
+    spdx_sources = [source for source in sources if source.startswith("https://github.com/spdx/")]
+    if len(spdx_sources) != 1:
+        _fail("official-sources", "project-owned official sources changed")
+
+    match = re.fullmatch(
+        r"https://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+)",
+        spdx_sources[0],
+    )
+    if match is None or f"{match.group(1)}/{match.group(2)}" != "spdx/spdx-spec":
+        _fail("official-sources", "project-owned official sources changed")
+
+    commit = match.group(3)
+    if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        _fail("spdx-evidence-commit", "SPDX specification commit is malformed")
+    if commit != SPDX_SPEC_COMMIT:
+        _fail("spdx-evidence-pin", "SPDX specification commit changed")
+    if match.group(4) != SPDX_SCHEMA_PATH:
+        _fail("spdx-evidence-path", "SPDX schema path changed")
+    if tuple(sources) != PROJECT_OWNED_OFFICIAL_SOURCES:
+        _fail("official-sources", "project-owned official sources changed")
+
+
 def _validate_candidates(value: Any) -> dict[str, dict[str, str]]:
     if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
         _fail("candidate-set", "candidate set is invalid")
@@ -441,6 +480,8 @@ def _validate_candidates(value: Any) -> dict[str, dict[str, str]]:
         )
         if not sources or sources != sorted(sources):
             _fail("candidate-schema", f"candidate sources are invalid: {candidate_id}")
+        if candidate_id == CANDIDATE_IDS[0]:
+            _validate_project_owned_sources(sources)
         _require_string(candidate["maintenance_status"], "candidate-schema", "candidate maintenance status is invalid")
         _require_string(
             candidate["release_checksums_or_provenance"],
@@ -619,6 +660,14 @@ def _validate_cross_checks(root: Path) -> None:
     except UnicodeDecodeError as exc:
         _fail("document", "feasibility document is not UTF-8")
         raise AssertionError from exc
+    if f"spdx/spdx-spec` tag `{SPDX_SPEC_RELEASE}`" not in document:
+        _fail("spdx-release-pin", "SPDX specification release changed")
+    if f"commit `{SPDX_SPEC_COMMIT}`" not in document:
+        _fail("spdx-evidence-pin", "SPDX specification commit changed")
+    if f"schema blob `{SPDX_SCHEMA_BLOB_SHA1}`" not in document:
+        _fail("spdx-schema-pin", "SPDX schema blob changed")
+    if SPDX_SCHEMA_URL not in document:
+        _fail("spdx-evidence-path", "SPDX schema path changed")
     required_markers = (
         "# SBOM Generator Feasibility",
         "## Current SBOM Input Boundary",
