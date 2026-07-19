@@ -20,11 +20,22 @@ SYFT_RELEASE = "v1.48.0"
 SYFT_COMMIT = "3e2bc6ed095f7ec1a415fb38cfe1c319e95dfed6"
 SYFT_LICENSE_PATH = "LICENSE"
 SYFT_LICENSE_BLOB_SHA1 = "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64"
+SYFT_OFFICIAL_SOURCES = (
+    "https://github.com/anchore/syft/blob/3e2bc6ed095f7ec1a415fb38cfe1c319e95dfed6/LICENSE",
+    "https://github.com/anchore/syft/blob/3e2bc6ed095f7ec1a415fb38cfe1c319e95dfed6/README.md",
+    "https://github.com/anchore/syft/blob/3e2bc6ed095f7ec1a415fb38cfe1c319e95dfed6/schema/spdx-json/spdx-schema-2.3.json",
+    "https://github.com/anchore/syft/releases/tag/v1.48.0",
+)
 
 SBOM_TOOL_RELEASE = "v4.1.5"
 SBOM_TOOL_COMMIT = "c83b43dee2dd70b4d6ba16a97cde6b43f971d9c3"
 SBOM_TOOL_LICENSE_PATH = "LICENSE"
 SBOM_TOOL_LICENSE_BLOB_SHA1 = "9e841e7a26e4eb057b24511e7b92d42b257a80e5"
+SBOM_TOOL_OFFICIAL_SOURCES = (
+    "https://github.com/microsoft/sbom-tool/blob/c83b43dee2dd70b4d6ba16a97cde6b43f971d9c3/LICENSE",
+    "https://github.com/microsoft/sbom-tool/blob/c83b43dee2dd70b4d6ba16a97cde6b43f971d9c3/README.md",
+    "https://github.com/microsoft/sbom-tool/releases/tag/v4.1.5",
+)
 
 SPDX_SPEC_RELEASE = "v2.3"
 SPDX_SPEC_COMMIT = "aadf3b0b8dbbabdb4d880b0fc714255fea436ff7"
@@ -271,6 +282,7 @@ EXTERNAL_PINS = {
         "immutable_commit": SYFT_COMMIT,
         "license_blob_sha1": SYFT_LICENSE_BLOB_SHA1,
         "license_path": SYFT_LICENSE_PATH,
+        "official_sources": SYFT_OFFICIAL_SOURCES,
         "repository": "anchore/syft",
     },
     "microsoft-sbom-tool": {
@@ -278,6 +290,7 @@ EXTERNAL_PINS = {
         "immutable_commit": SBOM_TOOL_COMMIT,
         "license_blob_sha1": SBOM_TOOL_LICENSE_BLOB_SHA1,
         "license_path": SBOM_TOOL_LICENSE_PATH,
+        "official_sources": SBOM_TOOL_OFFICIAL_SOURCES,
         "repository": "microsoft/sbom-tool",
     },
 }
@@ -498,6 +511,8 @@ def _validate_candidates(value: Any) -> dict[str, dict[str, str]]:
             pin = EXTERNAL_PINS[candidate_id]
             if candidate["repository"] != pin["repository"]:
                 _fail("candidate-repository", f"candidate repository changed: {candidate_id}")
+            if tuple(sources) != pin["official_sources"]:
+                _fail("candidate-sources", f"candidate official sources changed: {candidate_id}")
             commit = candidate["immutable_commit"]
             if not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
                 _fail("candidate-commit", f"candidate immutable commit is malformed: {candidate_id}")
