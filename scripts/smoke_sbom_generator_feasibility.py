@@ -127,6 +127,51 @@ def _replace_project_spdx_source(data: dict[str, object], old: str, new: str) ->
         raise AssertionError("SPDX source mutation was not applied")
 
 
+def _external_sources(data: dict[str, object], index: int, expected_id: str) -> list[str]:
+    candidates = data["candidates"]
+    if not isinstance(candidates, list) or index >= len(candidates):
+        raise AssertionError("external candidate index is invalid")
+    candidate = candidates[index]
+    if not isinstance(candidate, dict) or candidate.get("id") != expected_id:
+        raise AssertionError(f"expected external candidate at index {index}: {expected_id}")
+    sources = candidate.get("official_sources")
+    if not isinstance(sources, list) or any(not isinstance(source, str) for source in sources):
+        raise AssertionError(f"official sources are invalid: {expected_id}")
+    return sources
+
+
+def _replace_external_source(
+    data: dict[str, object], index: int, expected_id: str, old: str, new: str
+) -> None:
+    sources = _external_sources(data, index, expected_id)
+    if sources.count(old) != 1 or new in sources:
+        raise AssertionError(f"external source replacement target is not unique: {expected_id}")
+    sources[sources.index(old)] = new
+    sources.sort()
+    if old in sources or sources.count(new) != 1:
+        raise AssertionError(f"external source replacement was not applied: {expected_id}")
+
+
+def _remove_external_source(data: dict[str, object], index: int, expected_id: str, source: str) -> None:
+    sources = _external_sources(data, index, expected_id)
+    if sources.count(source) != 1:
+        raise AssertionError(f"external source removal target is not unique: {expected_id}")
+    sources.remove(source)
+    sources.sort()
+    if source in sources:
+        raise AssertionError(f"external source removal was not applied: {expected_id}")
+
+
+def _add_external_source(data: dict[str, object], index: int, expected_id: str, source: str) -> None:
+    sources = _external_sources(data, index, expected_id)
+    if source in sources:
+        raise AssertionError(f"external source addition target already exists: {expected_id}")
+    sources.append(source)
+    sources.sort()
+    if sources.count(source) != 1:
+        raise AssertionError(f"external source addition was not applied: {expected_id}")
+
+
 def _document_replacement(old: str, new: str) -> Callable[[Path, dict[str, object]], None]:
     def mutate(root: Path, baseline: dict[str, object]) -> None:
         del baseline
@@ -297,6 +342,12 @@ def _cases() -> list[NegativeCase]:
         NegativeCase("immutable-commit-malformed", "candidate-commit", "candidate immutable commit is malformed: anchore-syft", _data_mutation(lambda data: _set_candidate(data, 1, "immutable_commit", "not-a-commit"))),
         NegativeCase("immutable-commit-changed", "candidate-pin", "candidate immutable commit changed: anchore-syft", _data_mutation(lambda data: _set_candidate(data, 1, "immutable_commit", "0" * 40))),
         NegativeCase("sbom-tool-immutable-commit-changed", "candidate-pin", "candidate immutable commit changed: microsoft-sbom-tool", _data_mutation(lambda data: _set_candidate(data, 2, "immutable_commit", "d83b43dee2dd70b4d6ba16a97cde6b43f971d9c3"))),
+        NegativeCase("syft-official-source-replaced", "candidate-sources", "candidate official sources changed: anchore-syft", _data_mutation(lambda data: _replace_external_source(data, 1, "anchore-syft", "https://github.com/anchore/syft/blob/3e2bc6ed095f7ec1a415fb38cfe1c319e95dfed6/schema/spdx-json/spdx-schema-2.3.json", "https://github.com/spdx/spdx-spec/blob/aadf3b0b8dbbabdb4d880b0fc714255fea436ff7/schemas/spdx-schema.json"))),
+        NegativeCase("syft-official-source-removed", "candidate-sources", "candidate official sources changed: anchore-syft", _data_mutation(lambda data: _remove_external_source(data, 1, "anchore-syft", "https://github.com/anchore/syft/blob/3e2bc6ed095f7ec1a415fb38cfe1c319e95dfed6/README.md"))),
+        NegativeCase("syft-official-source-added", "candidate-sources", "candidate official sources changed: anchore-syft", _data_mutation(lambda data: _add_external_source(data, 1, "anchore-syft", "https://github.com/anchore/syft/blob/3e2bc6ed095f7ec1a415fb38cfe1c319e95dfed6/go.mod"))),
+        NegativeCase("sbom-tool-official-source-replaced", "candidate-sources", "candidate official sources changed: microsoft-sbom-tool", _data_mutation(lambda data: _replace_external_source(data, 2, "microsoft-sbom-tool", "https://github.com/microsoft/sbom-tool/blob/c83b43dee2dd70b4d6ba16a97cde6b43f971d9c3/README.md", "https://github.com/microsoft/sbom-tool/tree/c83b43dee2dd70b4d6ba16a97cde6b43f971d9c3"))),
+        NegativeCase("sbom-tool-official-source-removed", "candidate-sources", "candidate official sources changed: microsoft-sbom-tool", _data_mutation(lambda data: _remove_external_source(data, 2, "microsoft-sbom-tool", "https://github.com/microsoft/sbom-tool/blob/c83b43dee2dd70b4d6ba16a97cde6b43f971d9c3/README.md"))),
+        NegativeCase("sbom-tool-official-source-added", "candidate-sources", "candidate official sources changed: microsoft-sbom-tool", _data_mutation(lambda data: _add_external_source(data, 2, "microsoft-sbom-tool", "https://github.com/microsoft/sbom-tool/tree/c83b43dee2dd70b4d6ba16a97cde6b43f971d9c3"))),
         NegativeCase("spdx-commit-malformed", "spdx-evidence-commit", "SPDX specification commit is malformed", _data_mutation(lambda data: _replace_project_spdx_source(data, verifier.SPDX_SPEC_COMMIT, "not-a-commit"))),
         NegativeCase("spdx-commit-changed", "spdx-evidence-pin", "SPDX specification commit changed", _data_mutation(lambda data: _replace_project_spdx_source(data, verifier.SPDX_SPEC_COMMIT, "badf3b0b8dbbabdb4d880b0fc714255fea436ff7"))),
         NegativeCase("spdx-schema-path-changed", "spdx-evidence-path", "SPDX schema path changed", _data_mutation(lambda data: _replace_project_spdx_source(data, verifier.SPDX_SCHEMA_PATH, "schemas/changed-schema.json"))),
@@ -333,8 +384,8 @@ def main() -> int:
     verifier.verify_feasibility_file(ROOT)
     positive_count = 1
     cases = _cases()
-    if len(cases) != 56:
-        raise AssertionError(f"expected 56 negative cases, found {len(cases)}")
+    if len(cases) != 62:
+        raise AssertionError(f"expected 62 negative cases, found {len(cases)}")
 
     with tempfile.TemporaryDirectory(prefix="sbom-feasibility-smoke-") as temporary:
         temp_root = Path(temporary)
@@ -358,7 +409,7 @@ def main() -> int:
 
     if positive_count != 2:
         raise AssertionError(f"expected 2 positive cases, found {positive_count}")
-    print("SBOM generator feasibility smoke passed: 2 positive, 56 negative")
+    print("SBOM generator feasibility smoke passed: 2 positive, 62 negative")
     return 0
 
 
