@@ -19,7 +19,9 @@ import release_sbom
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TOOL_PATH = REPO_ROOT / "scripts" / "prepare_release_bundle.py"
 POLICY_PATH = REPO_ROOT / "legal" / "release-policy.json"
-CONTRACT_PATH = REPO_ROOT / "legal" / "release-assets-v2.json"
+V2_CONTRACT_PATH = REPO_ROOT / "legal" / "release-assets-v2.json"
+V3_CONTRACT_PATH = REPO_ROOT / "legal" / "release-assets-v3.json"
+BASELINE_COMMIT = "9ca319d01164c4bb353816175f429d564e41ee7d"
 SOURCE_COMMIT = "1" * 40
 CONTROL_COMMIT = "2" * 40
 RC_TAG = "v1.3.0-rc.1"
@@ -29,15 +31,16 @@ CI_TAG = "v0.0.0-ci"
 
 def main() -> int:
     bundle = _load_bundle_module()
-    with tempfile.TemporaryDirectory(prefix="s9h-release-bundle-v2-smoke-") as temp:
+    with tempfile.TemporaryDirectory(prefix="s9h-release-bundle-versioned-smoke-") as temp:
         root = Path(temp)
+        _test_v2_compatibility(bundle, root)
         _test_positive_contract(bundle, root)
         _test_missing_and_invalid_inputs(bundle, root)
         _test_bundle_mutations(bundle, root)
         _test_source_zip_mutations(bundle, root)
         _test_nonempty_output(bundle, root)
         _test_symlink_input(bundle, root)
-    print("release bundle smoke tests passed")
+    print("release bundle smoke tests passed: v2 compatibility and v3 SBOM integration")
     return 0
 
 
@@ -49,7 +52,182 @@ def _load_bundle_module():
     return module
 
 
+def _test_v2_compatibility(bundle, root: Path) -> None:
+    baseline_contract = subprocess.run(
+        ["git", "show", f"{BASELINE_COMMIT}:legal/release-assets-v2.json"],
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    ).stdout
+    _require(
+        V2_CONTRACT_PATH.read_bytes() == baseline_contract,
+        "release assets v2 contract changed from the pre-R1 baseline",
+    )
+
+    fixture = _release_fixture(root / "v2-fixture", RC_TAG)
+    v2_bundle = root / "v2-bundle"
+    create_output = _run_cli(
+        "create",
+        *_v2_create_cli_arguments(fixture, v2_bundle, RC_TAG, True),
+    )
+    _require(
+        create_output == "Release bundle v2 created and verified",
+        "historical v2 create output changed",
+    )
+    baseline_tool = root / "baseline-prepare-release-bundle.py"
+    baseline_tool.write_bytes(
+        subprocess.run(
+            ["git", "show", f"{BASELINE_COMMIT}:scripts/prepare_release_bundle.py"],
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        ).stdout
+    )
+    baseline_bundle = root / "baseline-v2-bundle"
+    baseline_result = subprocess.run(
+        [
+            sys.executable,
+            str(baseline_tool),
+            "create",
+            *_v2_create_cli_arguments(fixture, baseline_bundle, RC_TAG, True),
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "PYTHONPATH": str(REPO_ROOT / "scripts"),
+        },
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=True,
+    )
+    _require(
+        baseline_result.stdout.strip() == "Release bundle v2 created and verified"
+        and not baseline_result.stderr,
+        "pre-R1 baseline v2 fixture failed",
+    )
+    _require(
+        _tree_bytes(v2_bundle) == _tree_bytes(baseline_bundle),
+        "historical v2 output bytes changed from the pre-R1 implementation",
+    )
+    verify_output = _run_cli(
+        "verify",
+        *_v2_verify_cli_arguments(v2_bundle, RC_TAG, True, require_ready=False),
+    )
+    _require(verify_output == "Release bundle v2 verified", "historical v2 verify output changed")
+    _validate_v2_generated_files(v2_bundle, RC_TAG, True)
+
+    failed = _run_cli_result(
+        "verify",
+        *_v2_verify_cli_arguments(v2_bundle, RC_TAG, True, require_ready=True),
+    )
+    _require(failed.returncode == 1, "historical v2 publish-ready verification passed")
+    _require(
+        "release bundle is not approved for publishing" in failed.stderr,
+        "historical v2 publish-ready failure changed",
+    )
+
+    _expect_bundle_error(
+        bundle,
+        "v3 evidence accepted by v2",
+        lambda: bundle.verify_bundle(
+            bundle_root=v2_bundle,
+            tag=RC_TAG,
+            source_commit=SOURCE_COMMIT,
+            control_commit=CONTROL_COMMIT,
+            prerelease=True,
+            policy=POLICY_PATH,
+            asset_contract=V2_CONTRACT_PATH,
+            legal_payload_path=v2_bundle / "assets" / _legal_name(RC_TAG),
+            source_assets_root=v2_bundle / "assets",
+            require_release_ready=False,
+            sbom_input=Path(fixture["sbom_input"]),
+        ),
+    )
+    _expect_bundle_error(
+        bundle,
+        "missing v3 SBOM input",
+        lambda: bundle.create_bundle(
+            release_root=Path(fixture["release"]),
+            bundle_root=root / "v3-without-evidence",
+            tag=RC_TAG,
+            source_commit=SOURCE_COMMIT,
+            control_commit=CONTROL_COMMIT,
+            prerelease=True,
+            policy=POLICY_PATH,
+            asset_contract=V3_CONTRACT_PATH,
+            legal_payload_path=Path(fixture["legal"]),
+            source_assets_root=Path(fixture["sources"]),
+        ),
+    )
+
+    v3_bundle = root / "v3-cross-contract"
+    _create_bundle(bundle, fixture, v3_bundle, RC_TAG, True)
+    _expect_bundle_error(
+        bundle,
+        "v2 bundle accepted as v3",
+        lambda: bundle.verify_bundle(
+            bundle_root=v2_bundle,
+            tag=RC_TAG,
+            source_commit=SOURCE_COMMIT,
+            control_commit=CONTROL_COMMIT,
+            prerelease=True,
+            policy=POLICY_PATH,
+            asset_contract=V3_CONTRACT_PATH,
+            legal_payload_path=v2_bundle / "assets" / _legal_name(RC_TAG),
+            source_assets_root=v2_bundle / "assets",
+            require_release_ready=False,
+            sbom_input=Path(fixture["sbom_input"]),
+        ),
+    )
+    _expect_bundle_error(
+        bundle,
+        "v3 bundle accepted as v2",
+        lambda: bundle.verify_bundle(
+            bundle_root=v3_bundle,
+            tag=RC_TAG,
+            source_commit=SOURCE_COMMIT,
+            control_commit=CONTROL_COMMIT,
+            prerelease=True,
+            policy=POLICY_PATH,
+            asset_contract=V2_CONTRACT_PATH,
+            legal_payload_path=v3_bundle / "assets" / _legal_name(RC_TAG),
+            source_assets_root=v3_bundle / "assets",
+            require_release_ready=False,
+        ),
+    )
+
+
 def _test_positive_contract(bundle, root: Path) -> None:
+    contract = json.loads(V3_CONTRACT_PATH.read_text(encoding="utf-8"))
+    _require(contract["bundle_format"] == "s9h-release-bundle-v3", "v3 contract format")
+    _require(contract["bundle_manifest_schema_version"] == 3, "v3 manifest schema")
+    _require(contract["sbom_input_required"] is True, "v3 SBOM input requirement")
+    _require(
+        [item["role"] for item in contract["release_assets"]]
+        == [
+            "application-executable",
+            "portable-package",
+            "legal-payload",
+            "aria2-source",
+            "ffmpeg-source",
+            "release-sbom",
+        ],
+        "v3 release asset declarations",
+    )
+    _require(
+        next(
+            item for item in contract["release_assets"] if item["role"] == "release-sbom"
+        )
+        == {
+            "role": "release-sbom",
+            "filename": "Youtube-Downloaderbs-{tag}.spdx.json",
+            "required": True,
+        },
+        "v3 SBOM asset declaration",
+    )
     fixture_a = _release_fixture(root / "fixture-a", RC_TAG)
     fixture_b = _release_fixture(root / "fixture-b", RC_TAG)
     bundle_a = root / "bundle-a"
@@ -59,7 +237,7 @@ def _test_positive_contract(bundle, root: Path) -> None:
         *_create_cli_arguments(fixture_a, bundle_a, RC_TAG, True),
     )
     _require(
-        create_output == "Release bundle v2 created and verified",
+        create_output == "Release bundle v3 created and verified",
         "create success output changed",
     )
     shutil.copy2(Path(fixture_a["sbom_input"]), _sbom_input_path(bundle_a))
@@ -73,7 +251,7 @@ def _test_positive_contract(bundle, root: Path) -> None:
             require_ready=False,
         ),
     )
-    _require(verify_output == "Release bundle v2 verified", "verify success output changed")
+    _require(verify_output == "Release bundle v3 verified", "verify success output changed")
     _create_bundle(bundle, fixture_b, bundle_b, RC_TAG, True)
     _require(_tree_bytes(bundle_a) == _tree_bytes(bundle_b), "bundle output is not deterministic")
     _validate_generated_files(bundle_a, RC_TAG, True)
@@ -217,7 +395,7 @@ def _test_bundle_mutations(bundle, root: Path) -> None:
                 control_commit=control_commit,
                 prerelease=prerelease,
                 policy=POLICY_PATH,
-                asset_contract=CONTRACT_PATH,
+                asset_contract=V3_CONTRACT_PATH,
                 legal_payload_path=pristine / "assets" / _legal_name(tag),
                 source_assets_root=pristine / "assets",
                 sbom_input=_sbom_input_path(pristine),
@@ -331,7 +509,7 @@ def _release_fixture(root: Path, tag: str) -> dict[str, Path | str]:
         control_commit=CONTROL_COMMIT,
         prerelease=tag != STABLE_TAG,
         policy=POLICY_PATH,
-        asset_contract=CONTRACT_PATH,
+        asset_contract=V3_CONTRACT_PATH,
     )
     sbom_input.write_bytes(release_sbom.canonical_json_bytes(evidence))
     return {
@@ -399,7 +577,7 @@ def _create_bundle(bundle, fixture, output: Path, tag: str, prerelease: bool) ->
         control_commit=CONTROL_COMMIT,
         prerelease=prerelease,
         policy=POLICY_PATH,
-        asset_contract=CONTRACT_PATH,
+        asset_contract=V3_CONTRACT_PATH,
         legal_payload_path=Path(fixture["legal"]),
         source_assets_root=Path(fixture["sources"]),
         sbom_input=_sbom_input_path(output),
@@ -414,7 +592,7 @@ def _verify_bundle(bundle, root: Path, tag: str, prerelease: bool, *, require_re
         control_commit=CONTROL_COMMIT,
         prerelease=prerelease,
         policy=POLICY_PATH,
-        asset_contract=CONTRACT_PATH,
+        asset_contract=V3_CONTRACT_PATH,
         legal_payload_path=root / "assets" / _legal_name(tag),
         source_assets_root=root / "assets",
         sbom_input=_sbom_input_path(root),
@@ -431,10 +609,46 @@ def _create_cli_arguments(fixture, output: Path, tag: str, prerelease: bool) -> 
         "--control-commit", CONTROL_COMMIT,
         "--prerelease", str(prerelease).lower(),
         "--policy", str(POLICY_PATH),
-        "--asset-contract", str(CONTRACT_PATH),
+        "--asset-contract", str(V3_CONTRACT_PATH),
         "--legal-payload", str(fixture["legal"]),
         "--source-assets-root", str(fixture["sources"]),
         "--sbom-input", str(fixture["sbom_input"]),
+    )
+
+
+def _v2_create_cli_arguments(fixture, output: Path, tag: str, prerelease: bool) -> tuple[str, ...]:
+    return (
+        "--release-root", str(fixture["release"]),
+        "--bundle-root", str(output),
+        "--tag", tag,
+        "--source-commit", SOURCE_COMMIT,
+        "--control-commit", CONTROL_COMMIT,
+        "--prerelease", str(prerelease).lower(),
+        "--policy", str(POLICY_PATH),
+        "--asset-contract", str(V2_CONTRACT_PATH),
+        "--legal-payload", str(fixture["legal"]),
+        "--source-assets-root", str(fixture["sources"]),
+    )
+
+
+def _v2_verify_cli_arguments(
+    root: Path,
+    tag: str,
+    prerelease: bool,
+    *,
+    require_ready: bool,
+) -> tuple[str, ...]:
+    return (
+        "--bundle-root", str(root),
+        "--tag", tag,
+        "--source-commit", SOURCE_COMMIT,
+        "--control-commit", CONTROL_COMMIT,
+        "--prerelease", str(prerelease).lower(),
+        "--policy", str(POLICY_PATH),
+        "--asset-contract", str(V2_CONTRACT_PATH),
+        "--legal-payload", str(root / "assets" / _legal_name(tag)),
+        "--source-assets-root", str(root / "assets"),
+        "--require-release-ready", str(require_ready).lower(),
     )
 
 
@@ -453,7 +667,7 @@ def _verify_cli_arguments(
         "--control-commit", CONTROL_COMMIT,
         "--prerelease", str(prerelease).lower(),
         "--policy", str(POLICY_PATH),
-        "--asset-contract", str(CONTRACT_PATH),
+        "--asset-contract", str(V3_CONTRACT_PATH),
         "--legal-payload", str(root / "assets" / _legal_name(tag)),
         "--source-assets-root", str(root / "assets"),
         "--sbom-input", str(sbom_input),
@@ -483,8 +697,8 @@ def _validate_generated_files(root: Path, tag: str, prerelease: bool) -> None:
     manifest_bytes = (root / "RELEASE_MANIFEST.json").read_bytes()
     _require(b"\r" not in manifest_bytes and manifest_bytes.endswith(b"\n"), "manifest EOL")
     manifest = json.loads(manifest_bytes)
-    _require(manifest["schema_version"] == 2, "manifest schema")
-    _require(manifest["bundle_format"] == "s9h-release-bundle-v2", "manifest format")
+    _require(manifest["schema_version"] == 3, "manifest schema")
+    _require(manifest["bundle_format"] == "s9h-release-bundle-v3", "manifest format")
     _require(manifest["release_tag"] == tag, "manifest tag")
     _require(manifest["prerelease"] is prerelease, "manifest prerelease")
     _require(manifest["source_commit"] == SOURCE_COMMIT, "manifest source commit")
@@ -515,6 +729,47 @@ def _validate_generated_files(root: Path, tag: str, prerelease: bool) -> None:
     )
     portable_record = next(item for item in manifest["assets"] if item["role"] == "portable-package")
     _require(recorded == portable_record["sha256"], "release notes/manifest portable checksum")
+
+
+def _validate_v2_generated_files(root: Path, tag: str, prerelease: bool) -> None:
+    asset_names = {
+        "Youtube.Downloaderbs.exe",
+        f"Youtube-Downloaderbs-{tag}.zip",
+        _legal_name(tag),
+        _source_name(tag, "aria2"),
+        _source_name(tag, "ffmpeg"),
+    }
+    expected = {"RELEASE_MANIFEST.json", "RELEASE_NOTES.md", "assets/SHA256SUMS.txt"}
+    expected.update(f"assets/{name}" for name in asset_names)
+    _require(set(_tree_bytes(root)) == expected, "historical v2 file set changed")
+    checksum_lines = (root / "assets" / "SHA256SUMS.txt").read_text(
+        encoding="ascii"
+    ).splitlines()
+    _require(len(checksum_lines) == 5, "historical v2 checksum count changed")
+    _require(
+        [line.split("  ", 1)[1] for line in checksum_lines] == sorted(asset_names),
+        "historical v2 checksum layout changed",
+    )
+    manifest = _manifest(root)
+    _require(manifest["schema_version"] == 2, "historical v2 manifest schema changed")
+    _require(
+        manifest["bundle_format"] == "s9h-release-bundle-v2",
+        "historical v2 manifest format changed",
+    )
+    _require(manifest["prerelease"] is prerelease, "historical v2 prerelease changed")
+    roles = {item["role"] for item in manifest["assets"]}
+    _require(
+        roles
+        == {
+            "application-executable",
+            "portable-package",
+            "legal-payload",
+            "aria2-source",
+            "ffmpeg-source",
+        },
+        "historical v2 asset roles changed",
+    )
+    _require("release-sbom" not in roles, "historical v2 claims SBOM integration")
 
 
 def _source_path(fixture, tag: str, component: str) -> Path:
@@ -611,15 +866,20 @@ def _sbom_input_path(bundle_root: Path) -> Path:
 
 
 def _run_cli(*args: str) -> str:
-    result = subprocess.run(
+    result = _run_cli_result(*args)
+    result.check_returncode()
+    _require(not result.stderr, "bundle CLI wrote stderr on success")
+    return result.stdout.strip()
+
+
+def _run_cli_result(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         [sys.executable, str(TOOL_PATH), *args],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        check=True,
+        check=False,
     )
-    _require(not result.stderr, "bundle CLI wrote stderr on success")
-    return result.stdout.strip()
 
 
 def _tree_bytes(root: Path) -> dict[str, bytes]:

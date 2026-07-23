@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from datetime import datetime
+from importlib import metadata as importlib_metadata
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -13,6 +14,10 @@ GENERATOR_VERSION = "1.0.0"
 SPDX_VERSION = "SPDX-2.3"
 DATA_LICENSE = "CC0-1.0"
 PREDICATE_TYPE = "https://spdx.dev/Document/v2.3"
+VALIDATOR_DISTRIBUTION = "fastjsonschema"
+VALIDATOR_VERSION = "2.21.2"
+BUNDLE_MANIFEST_SCHEMA_VERSION = 3
+BUNDLE_FORMAT = "s9h-release-bundle-v3"
 SCHEMA_BLOB_SHA1 = "ee61e6686e885f8139c132647fd0b4f483b8fb81"
 SCHEMA_REPOSITORY = "spdx/spdx-spec"
 SCHEMA_TAG = "v2.3"
@@ -377,6 +382,16 @@ def validate_schema(document: object, *, schema_path: Path = SCHEMA_PATH) -> Non
     schema_bytes = schema_path.read_bytes()
     if _git_blob_sha1(schema_bytes) != SCHEMA_BLOB_SHA1:
         raise SbomError("SPDX schema immutable identity is invalid")
+    try:
+        installed_version = importlib_metadata.version(VALIDATOR_DISTRIBUTION)
+    except Exception as exc:
+        raise SbomError(
+            f"{VALIDATOR_DISTRIBUTION} distribution metadata is unavailable"
+        ) from exc
+    if installed_version != VALIDATOR_VERSION:
+        raise SbomError(
+            f"{VALIDATOR_DISTRIBUTION} version must be exactly {VALIDATOR_VERSION}"
+        )
     try:
         import fastjsonschema
     except ImportError as exc:
@@ -750,8 +765,8 @@ def _validate_release_manifest(
     }
     manifest = _require_object(value, expected_keys, "release manifest evidence")
     if (
-        manifest["schema_version"] != 2
-        or manifest["bundle_format"] != "s9h-release-bundle-v2"
+        manifest["schema_version"] != BUNDLE_MANIFEST_SCHEMA_VERSION
+        or manifest["bundle_format"] != BUNDLE_FORMAT
         or manifest["release_tag"] != release["tag"]
         or manifest["source_commit"] != release["source_commit"]
         or manifest["control_commit"] != release["control_commit"]

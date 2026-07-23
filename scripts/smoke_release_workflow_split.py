@@ -1,11 +1,16 @@
 import re
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+import smoke_release_bundle as bundle_smoke
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 FULL_SHA = re.compile(r"[0-9a-f]{40}\Z")
+BASELINE_COMMIT = "9ca319d01164c4bb353816175f429d564e41ee7d"
 
 
 @dataclass(frozen=True)
@@ -85,8 +90,9 @@ def main() -> int:
         for contract in CONTRACTS
     }
     validate_contracts(documents)
+    _validate_historical_bundle_commands()
     _test_negative_mutations(documents)
-    print("release workflow split smoke tests passed")
+    print("release workflow split smoke tests passed: 4 historical v2 command paths exercised")
     return 0
 
 
@@ -197,6 +203,7 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
         f"{contract.path} legal payload step count changed",
     )
     bundle_text = "\n".join(bundle_step)
+    _require("--sbom-input" not in bundle_text, f"{contract.path} silently switched bundle contract")
     for required in (
         "prepare_release_bundle.py create",
         "prepare_release_bundle.py verify",
@@ -469,6 +476,93 @@ def _validate_legal_gate(
         "ALLOW_RELEASE",
     ):
         _require(forbidden not in gate_text, f"{contract.path} legal gate contains a bypass: {forbidden}")
+
+
+def _validate_historical_bundle_commands() -> None:
+    for contract in CONTRACTS:
+        current_blob = subprocess.run(
+            ["git", "rev-parse", f"HEAD:{contract.path}"],
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        baseline_blob = subprocess.run(
+            ["git", "rev-parse", f"{BASELINE_COMMIT}:{contract.path}"],
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        _require(
+            current_blob == baseline_blob,
+            f"{contract.path} Git blob changed from the pre-R1 baseline",
+        )
+        worktree_diff = subprocess.run(
+            ["git", "diff", "--exit-code", "--", contract.path],
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        _require(worktree_diff.returncode == 0, f"{contract.path} has a working-tree change")
+
+    with tempfile.TemporaryDirectory(prefix="s9h-historical-workflow-v2-") as temp:
+        root = Path(temp)
+        for index, contract in enumerate(CONTRACTS):
+            fixture = bundle_smoke._release_fixture(
+                root / f"fixture-{index}",
+                contract.tag,
+            )
+            bundle_root = root / f"bundle-{index}"
+            prerelease = contract.prerelease == "true"
+            create_output = bundle_smoke._run_cli(
+                "create",
+                *bundle_smoke._v2_create_cli_arguments(
+                    fixture,
+                    bundle_root,
+                    contract.tag,
+                    prerelease,
+                ),
+            )
+            _require(
+                create_output == "Release bundle v2 created and verified",
+                f"{contract.path} create command failed",
+            )
+            verify_output = bundle_smoke._run_cli(
+                "verify",
+                *bundle_smoke._v2_verify_cli_arguments(
+                    bundle_root,
+                    contract.tag,
+                    prerelease,
+                    require_ready=False,
+                ),
+            )
+            _require(
+                verify_output == "Release bundle v2 verified",
+                f"{contract.path} verify command failed",
+            )
+            bundle_smoke._validate_v2_generated_files(
+                bundle_root,
+                contract.tag,
+                prerelease,
+            )
+            publish_ready = bundle_smoke._run_cli_result(
+                "verify",
+                *bundle_smoke._v2_verify_cli_arguments(
+                    bundle_root,
+                    contract.tag,
+                    prerelease,
+                    require_ready=True,
+                ),
+            )
+            _require(
+                publish_ready.returncode == 1
+                and "release bundle is not approved for publishing" in publish_ready.stderr,
+                f"{contract.path} historical publish gate did not remain fail-closed",
+            )
 
 
 def _test_negative_mutations(documents: dict[str, str]) -> None:

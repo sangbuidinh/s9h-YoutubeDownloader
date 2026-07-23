@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "bundle_format": "s9h-release-bundle-v3",
+  "bundle_manifest_schema_version": 3,
+  "sbom_input_required": true,
+  "legal_payload_format": "s9h-release-legal-payload-v1",
+  "release_readiness": "blocked",
+  "legal_compliance_certified": false,
+  "source_availability_certified": false,
+  "source_kits_ready": false,
+  "portable_legal_root": "legal",
+  "release_assets": [
+    {
+      "role": "application-executable",
+      "filename": "Youtube.Downloaderbs.exe",
+      "required": true
+    },
+    {
+      "role": "portable-package",
+      "filename": "Youtube-Downloaderbs-{tag}.zip",
+      "required": true
+    },
+    {
+      "role": "legal-payload",
+      "filename": "Youtube-Downloaderbs-{tag}-legal.zip",
+      "required": true
+    },
+    {
+      "role": "aria2-source",
+      "filename": "Youtube-Downloaderbs-{tag}-aria2-source.zip",
+      "required": true
+    },
+    {
+      "role": "ffmpeg-source",
+      "filename": "Youtube-Downloaderbs-{tag}-ffmpeg-source.zip",
+      "required": true
+    },
+    {
+      "role": "release-sbom",
+      "filename": "Youtube-Downloaderbs-{tag}.spdx.json",
+      "required": true
+    }
+  ],
+  "legal_payload_files": [
+    "THIRD_PARTY_NOTICES.md",
+    "legal/README.md",
+    "legal/built-artifact-inventory.json",
+    "legal/components.json",
+    "legal/release-policy.json",
+    "legal/source-correspondence.json",
+    "legal/source-kit-requirements.json",
+    "legal/licenses/Apache-2.0.txt",
+    "legal/licenses/Deno-2.7.14-MIT.txt",
+    "legal/licenses/FFmpeg-8.1.2-GPLv3.txt",
+    "legal/licenses/PyInstaller-6.21.0-COPYING.txt",
+    "legal/licenses/Python-3.11.9-LICENSE.txt",
+    "legal/licenses/Tcl-Tk-license.terms",
+    "legal/licenses/aria2-1.37.0-GPLv2.txt",
+    "legal/licenses/yt-dlp-2026.03.17-UNLICENSE.txt"
+  ],
+  "release_blockers": [
+    "aria2-source-kit-not-ready",
+    "ffmpeg-source-kit-not-ready",
+    "source-assets-not-integrated",
+    "release-policy-fail-closed"
+  ]
+}

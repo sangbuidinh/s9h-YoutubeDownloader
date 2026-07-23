@@ -127,6 +127,12 @@ def _attestation_before_final_bytes(policy: dict[str, Any]) -> None:
     sequence.insert(1, attestation)
 
 
+def _sbom_before_signing(policy: dict[str, Any]) -> None:
+    sequence = policy["release_integration"]["sequence"]
+    sbom = sequence.pop(6)
+    sequence.insert(1, sbom)
+
+
 def main() -> int:
     root = Path(__file__).resolve().parent.parent
     repository_policy, repository_raw = _load_repository_policy(root)
@@ -175,6 +181,7 @@ def main() -> int:
         ("empty provenance blockers", "provenance-blockers", {"mutation": _set(("provenance", "blockers"), [])}),
         ("final-byte ordering disabled", "final-byte-order", {"mutation": _set(("release_integration", "all_byte_changes_before_finalization"), False)}),
         ("checksum before signing", "final-byte-order", {"mutation": _checksum_before_signing}),
+        ("final SBOM before signing", "final-byte-order", {"mutation": _sbom_before_signing}),
         ("attestation before final byte changes", "final-byte-order", {"mutation": _attestation_before_final_bytes}),
         ("release-assurance readiness true", "integration-readiness", {"mutation": _set(("release_integration", "readiness", "release_assurance_ready"), True)}),
         ("claim set true", "claims", {"mutation": _set(("claims", "sbom_generated"), True)}),

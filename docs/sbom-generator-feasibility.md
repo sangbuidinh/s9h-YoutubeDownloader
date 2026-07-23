@@ -15,7 +15,7 @@ The generator now requires a canonical explicit evidence document covering the c
 - The package script uses PyInstaller one-file output and assembles a portable release ZIP.
 - Distributed external runtimes include yt-dlp, FFmpeg, ffprobe, Deno, and aria2.
 - `legal/components.json` and the legal license corpus provide authoritative legal-component evidence for their controlled scope.
-- Release assets v2 require an SBOM evidence input and include a generated SBOM in the controlled synthetic bundle, but no production SBOM is currently integrated or reconciled.
+- Historical release assets v2 remain a five-asset compatibility contract without SBOM input or an SBOM integration claim. Release assets v3 explicitly declare the SBOM asset and require SBOM evidence for controlled synthetic integration, but no production SBOM is currently integrated or reconciled.
 - The build dependency inputs are `requirements-build.txt` and its controlled bootstrap process; no `requirements-build.lock` is present at this baseline.
 - The historical executable inventory is not current final-release evidence.
 
@@ -92,7 +92,9 @@ Generator implementation, SPDX schema validation, semantic reconciliation, and s
 
 Key unresolved risks are final-build PyInstaller extraction, Python package ownership, native-member attribution, external runtime version/origin evidence, absent final package inventory, and maintenance drift in external candidate pins. Schema and semantic validation are implemented, but they have not yet processed a real final application build.
 
-Phase 7B-R2 should collect controlled inventories from one final build, create a production evidence document, generate and verify the production SPDX document, and reconcile it against final immutable manifest/checksum bytes without publishing. A separate comparator experiment could later obtain exactly the pinned Syft artifact through an approved provenance process. Comparator execution is not authorized by this checkpoint.
+The next Phase 7B checkpoint is a bounded pre-signing foundation: implement a controlled provisional inventory collector and exercise it only with synthetic or provisional dry-run evidence. A provisional inventory is not production evidence. A synthetic SBOM is non-production and non-distributable. A production SBOM cannot be final while signing or downstream package bytes may change. A final signed production SBOM is deferred until the first-party executable has been Authenticode-signed and verified, the portable package has been assembled from the signed executable, and final manifest and checksum bytes exist. The release-assurance policy sequence remains authoritative; unsigned bytes must not be called final immutable release bytes.
+
+A separate comparator experiment could later obtain exactly the pinned Syft artifact through an approved provenance process. Comparator execution is not authorized by this checkpoint.
 
 ## Explicit Non-Claims
 

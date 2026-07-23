@@ -238,7 +238,7 @@ def validate_workflow(workflow: str) -> None:
         "--control-commit $Commit",
         "--prerelease true",
         "--policy legal/release-policy.json",
-        "--asset-contract legal/release-assets-v2.json",
+        "--asset-contract legal/release-assets-v3.json",
         "--legal-payload",
         "--source-assets-root",
         "--sbom-input $SbomInput",
@@ -370,12 +370,12 @@ def validate_workflow(workflow: str) -> None:
     )
     verifier_text = "\n".join(verifier)
     for required in (
-        "Synthetic release bundle v2 handoff verified",
+        "Synthetic release bundle v3 handoff verified",
         "v0.0.0-ci",
         "${{ github.sha }}",
         "Get-FileHash",
         "ConvertFrom-Json",
-        "s9h-release-bundle-v2",
+        "s9h-release-bundle-v3",
         "release_ready",
         "legal_compliance_certified",
         "source_availability_certified",
@@ -789,7 +789,7 @@ def _test_negative_mutations(workflow: str) -> None:
         ),
         (
             "bundle v1 consumer",
-            _replace_once(workflow, "s9h-release-bundle-v2", "s9h-release-bundle-v1"),
+            _replace_once(workflow, "s9h-release-bundle-v3", "s9h-release-bundle-v1"),
             "handoff verifier",
         ),
         (

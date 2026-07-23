@@ -183,7 +183,7 @@ CANONICAL_DOCUMENT_PATHS = (
     "docs/sbom-generator-feasibility.md",
     "legal/README.md",
 )
-EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT = 17
+EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT = 18
 
 NOTICE_HEADINGS = {
     "aria2": "### aria2 1.37.0",
@@ -311,6 +311,9 @@ def verify_repository(root: Path) -> dict[str, Any]:
             "legal/release-policy.json": (root / "legal/release-policy.json").read_text(encoding="utf-8"),
             "legal/release-assets-v2.json": (
                 root / "legal/release-assets-v2.json"
+            ).read_text(encoding="utf-8"),
+            "legal/release-assets-v3.json": (
+                root / "legal/release-assets-v3.json"
             ).read_text(encoding="utf-8"),
             "legal/source-correspondence.json": (
                 root / "legal/source-correspondence.json"

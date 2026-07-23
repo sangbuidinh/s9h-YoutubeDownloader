@@ -97,6 +97,8 @@ def build_synthetic_input(
 ) -> dict[str, Any]:
     release_bundle._validate_metadata(tag, source_commit, control_commit, prerelease)
     control = release_bundle._load_control_state(policy, asset_contract, tag)
+    if not control["requires_sbom"] or control["bundle_format"] != release_bundle.V3_BUNDLE_FORMAT:
+        raise SyntheticInputError("synthetic SBOM evidence requires the release assets v3 contract")
     release_root = release_bundle._require_directory_root(release_root, "release root")
     source_assets_root = release_bundle._require_directory_root(
         source_assets_root, "source assets root"
@@ -140,8 +142,8 @@ def build_synthetic_input(
     notes_path = release_root / release_bundle.NOTES_NAME
     release_bundle._require_regular_input(notes_path, release_root, release_bundle.NOTES_NAME)
     release_manifest = {
-        "schema_version": release_bundle.SCHEMA_VERSION,
-        "bundle_format": release_bundle.BUNDLE_FORMAT,
+        "schema_version": control["manifest_schema_version"],
+        "bundle_format": control["bundle_format"],
         "release_tag": tag,
         "prerelease": prerelease,
         "source_commit": source_commit,

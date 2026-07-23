@@ -308,7 +308,7 @@ jobs:
             --control-commit $Commit `
             --prerelease true `
             --policy legal/release-policy.json `
-            --asset-contract legal/release-assets-v2.json `
+            --asset-contract legal/release-assets-v3.json `
             --output $SbomInput
           if ($LASTEXITCODE -ne 0) {
               throw "Synthetic release SBOM evidence creation failed"
@@ -322,7 +322,7 @@ jobs:
             --control-commit $Commit `
             --prerelease true `
             --policy legal/release-policy.json `
-            --asset-contract legal/release-assets-v2.json `
+            --asset-contract legal/release-assets-v3.json `
             --legal-payload $LegalPayload `
             --source-assets-root $SourceAssetsRoot `
             --sbom-input $SbomInput
@@ -337,7 +337,7 @@ jobs:
             --control-commit $Commit `
             --prerelease true `
             --policy legal/release-policy.json `
-            --asset-contract legal/release-assets-v2.json `
+            --asset-contract legal/release-assets-v3.json `
             --legal-payload (Join-Path $BundleRoot "assets\Youtube-Downloaderbs-v0.0.0-ci-legal.zip") `
             --source-assets-root (Join-Path $BundleRoot "assets") `
             --sbom-input $SbomInput `
@@ -357,7 +357,7 @@ jobs:
                 --control-commit $Commit `
                 --prerelease true `
                 --policy legal/release-policy.json `
-                --asset-contract legal/release-assets-v2.json `
+                --asset-contract legal/release-assets-v3.json `
                 --legal-payload (Join-Path $BundleRoot "assets\Youtube-Downloaderbs-v0.0.0-ci-legal.zip") `
                 --source-assets-root (Join-Path $BundleRoot "assets") `
                 --sbom-input $SbomInput `
@@ -529,7 +529,7 @@ jobs:
               "release_notes", "release_ready", "release_tag", "schema_version",
               "source_availability_certified", "source_commit"
           ) "Release manifest"
-          if ([int]$manifest.schema_version -ne 2 -or $manifest.bundle_format -cne "s9h-release-bundle-v2") {
+          if ([int]$manifest.schema_version -ne 3 -or $manifest.bundle_format -cne "s9h-release-bundle-v3") {
               throw "Release manifest contract is invalid"
           }
           if ($manifest.release_tag -cne "v0.0.0-ci" -or -not [bool]$manifest.prerelease) {
@@ -590,4 +590,4 @@ jobs:
                   throw "Synthetic required archive is empty: $requiredArchive"
               }
           }
-          Write-Host "Synthetic release bundle v2 handoff verified"
+          Write-Host "Synthetic release bundle v3 handoff verified"

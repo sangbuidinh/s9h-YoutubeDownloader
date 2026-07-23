@@ -28,6 +28,13 @@ def main() -> int:
         fixture = bundle_smoke._release_fixture(root / "fixture", bundle_smoke.RC_TAG)
         evidence_path = Path(fixture["sbom_input"])
         evidence = release_sbom.load_input(evidence_path)
+        _require(release_sbom.VALIDATOR_DISTRIBUTION == "fastjsonschema")
+        _require(release_sbom.VALIDATOR_VERSION == "2.21.2")
+        _require(
+            release_sbom.importlib_metadata.version(release_sbom.VALIDATOR_DISTRIBUTION)
+            == release_sbom.VALIDATOR_VERSION
+        )
+        positive += 1
 
         sbom_path = root / release_sbom.expected_filename(evidence["release"]["version"])
         output = _run(GENERATOR, "--input", evidence_path, "--output", sbom_path)
@@ -41,6 +48,8 @@ def main() -> int:
         _verify_canonical_document(sbom_bytes, document, evidence)
         positive += 1
         _verify_immutable_notices()
+        positive += 1
+        _verify_staged_release_sequence()
         positive += 1
 
         repeated = release_sbom.generate_bytes(evidence)
@@ -87,6 +96,32 @@ def main() -> int:
                 lambda raw=raw: release_sbom.verify_document(raw, evidence),
             )
             negative += 1
+
+        with mock.patch.object(
+            release_sbom.importlib_metadata,
+            "version",
+            side_effect=release_sbom.importlib_metadata.PackageNotFoundError(
+                release_sbom.VALIDATOR_DISTRIBUTION
+            ),
+        ):
+            _expect_error(
+                "validator distribution metadata unavailable",
+                "fastjsonschema distribution metadata is unavailable",
+                lambda: release_sbom.generate_bytes(evidence),
+            )
+        negative += 1
+
+        with mock.patch.object(
+            release_sbom.importlib_metadata,
+            "version",
+            return_value="2.21.1",
+        ):
+            _expect_error(
+                "wrong validator version",
+                "fastjsonschema version must be exactly 2.21.2",
+                lambda: release_sbom.generate_bytes(evidence),
+            )
+        negative += 1
 
         missing_schema_import = builtins.__import__
 
@@ -288,6 +323,53 @@ def _verify_immutable_notices() -> None:
     identity = json.loads(identity_raw)
     _require(identity_raw == release_sbom.canonical_json_bytes(identity))
     _require(identity["schema_blob_sha1"] == release_sbom.SCHEMA_BLOB_SHA1)
+
+
+def _verify_staged_release_sequence() -> None:
+    policy = json.loads(
+        (REPO_ROOT / "legal" / "release-assurance-policy.json").read_text(encoding="utf-8")
+    )
+    sequence = policy["release_integration"]["sequence"]
+    ordered = [
+        "Authenticode-sign first-party executable",
+        "verify Authenticode signature and timestamp",
+        "assemble the portable package using the signed executable",
+        "calculate final artifact checksums",
+        "generate and validate the final SBOM",
+        "synchronize checksums, release notes and release manifest",
+        "generate provenance and SBOM attestations over final immutable subjects",
+    ]
+    _require([sequence.index(item) for item in ordered] == sorted(sequence.index(item) for item in ordered))
+
+    for value in policy["claims"].values():
+        _require(value is False)
+    for value in policy["release_integration"]["readiness"].values():
+        _require(value is False)
+    _require(
+        policy["sbom"]["implementation_evidence"]["production_sbom_generated"] is False
+    )
+    _require(
+        policy["sbom"]["implementation_evidence"]["production_sbom_reconciled"] is False
+    )
+
+    release_doc = (REPO_ROOT / "docs" / "release-sbom.md").read_text(encoding="utf-8")
+    feasibility_doc = (
+        REPO_ROOT / "docs" / "sbom-generator-feasibility.md"
+    ).read_text(encoding="utf-8")
+    combined = release_doc + "\n" + feasibility_doc
+    for phrase in (
+        "provisional inventory",
+        "synthetic SBOM",
+        "production SBOM",
+        "final signed production SBOM",
+        "Authenticode-signed",
+        "unsigned bytes must not be called final immutable release bytes",
+    ):
+        _require(phrase in combined)
+    _require(
+        "Phase 7B-R2 is limited to controlled final-build inventory collection"
+        not in combined
+    )
     schema_license = REPO_ROOT / "schemas" / "spdx-2.3" / "LICENSE"
     _require(
         release_sbom._git_blob_sha1(schema_license.read_bytes())
@@ -403,6 +485,7 @@ def _input_cases(evidence: dict) -> list[tuple[str, str, dict]]:
     add("final executable hash changed", "final executable identity does not match", lambda d: d["final_executable"].__setitem__("sha256", "0" * 64))
     add("component duplicate", "component IDs are duplicated", lambda d: d["legal_components"].append(copy.deepcopy(d["legal_components"][0])))
     add("schema identity malformed", "SBOM input fields are invalid", lambda d: d.__setitem__("unexpected", False))
+    add("v2 evidence passed as v3", "release manifest mismatch", lambda d: d["release_manifest"].update({"schema_version": 2, "bundle_format": "s9h-release-bundle-v2"}))
     return cases
 
 

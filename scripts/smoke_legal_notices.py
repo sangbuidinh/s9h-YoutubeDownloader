@@ -315,6 +315,11 @@ def _run_phase6b2a_mutations() -> None:
 
 def _run_phase6b2b1_mutations() -> None:
     _expect_failure("missing release-assets contract", _missing_release_assets, "top-level legal JSON count")
+    _expect_failure(
+        "missing release-assets v3 contract",
+        _missing_release_assets_v3,
+        "top-level legal JSON count",
+    )
     _expect_failure("wrong bundle format", _wrong_bundle_format, "asset contract")
     _expect_failure("wrong legal payload format", _wrong_legal_payload_format, "asset contract")
     _expect_failure("release readiness ready", _release_readiness_ready, "asset contract")
@@ -636,6 +641,10 @@ def _missing_source_kit_requirements(root: Path) -> None:
 
 def _missing_release_assets(root: Path) -> None:
     (root / verifier.release_payload.CONTRACT_PATH).unlink()
+
+
+def _missing_release_assets_v3(root: Path) -> None:
+    (root / "legal" / "release-assets-v3.json").unlink()
 
 
 def _mutate_release_assets(root: Path, mutation: Callable[[dict], None]) -> None:

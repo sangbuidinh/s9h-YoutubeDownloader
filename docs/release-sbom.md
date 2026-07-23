@@ -4,7 +4,7 @@
 
 The repository-owned generator produces deterministic SPDX 2.3 JSON from explicit evidence. It does not scan, infer release identity, or treat historical build inventory as current final-release evidence.
 
-The generator identity is `s9h-project-owned-deterministic-spdx-generator` version `1.0.0`. Genuine JSON Schema validation uses `fastjsonschema` `2.21.2` against the vendored official SPDX 2.3 schema pinned to:
+The generator identity is `s9h-project-owned-deterministic-spdx-generator` version `1.0.0`. Genuine JSON Schema validation requires installed distribution metadata for exactly `fastjsonschema` `2.21.2` and uses that locked validator against the vendored official SPDX 2.3 schema pinned to:
 
 - repository `spdx/spdx-spec`;
 - tag `v2.3`;
@@ -14,6 +14,8 @@ The generator identity is `s9h-project-owned-deterministic-spdx-generator` versi
 The corresponding SPDX specification license is preserved byte-for-byte at `schemas/spdx-2.3/LICENSE` from Git blob `44a22d370bba8d13c7dd7449d71b40ea8842788e` under CC-BY-3.0. The `fastjsonschema` BSD license from the exact `2.21.2` wheel is preserved at `scripts/vendor-notices/fastjsonschema-2.21.2-LICENSE.txt`.
 
 ## Commands
+
+Run generation and verification only from the repository's locked build/tooling environment created from `requirements-build.txt`. A different or metadata-less `fastjsonschema` installation fails closed.
 
 Generate:
 
@@ -27,7 +29,7 @@ Verify the document:
 python scripts/verify_release_sbom.py --input <evidence.json> --sbom <Youtube-Downloaderbs-vVERSION.spdx.json>
 ```
 
-Bundle creation and verification require `--sbom-input`. The bundle creates the SBOM as the `release-sbom` asset and reconciles its exact bytes with `RELEASE_MANIFEST.json` and `SHA256SUMS.txt`.
+The historical `legal/release-assets-v2.json` contract remains a five-asset compatibility contract with no SBOM input or SBOM claim. The explicit `legal/release-assets-v3.json` contract declares all six required assets, including the `release-sbom` role and filename template. Bundle creation and verification require `--sbom-input` only for v3. The v3 bundle creates the SBOM and reconciles its exact bytes with `RELEASE_MANIFEST.json` and `SHA256SUMS.txt`; v2/v3 contract, manifest, evidence, or layout mismatches fail closed.
 
 ## Evidence Contract
 
@@ -46,4 +48,11 @@ The CI fixture is explicitly synthetic and not for distribution. Synthetic succe
 - Authenticode signing exists;
 - release readiness or publishing is allowed.
 
-Phase 7B-R2 is limited to controlled final-build inventory collection, production evidence creation, production SPDX generation/verification, and reconciliation against final immutable bytes without publishing.
+## Staged Byte Boundary
+
+- A **provisional inventory** records controlled pre-signing or dry-run inputs. It is not final release evidence.
+- A **synthetic SBOM** is generated only from explicit non-production fixtures and is not distributable.
+- A **production SBOM** uses production evidence, but it is not final while any signing, package assembly, manifest, or checksum byte can still change.
+- A **final signed production SBOM** can be generated only after the first-party executable is Authenticode-signed and verified, the portable package is assembled from that signed executable, and the final package, manifest, and checksum bytes exist.
+
+The release-assurance policy sequence remains authoritative: signing and signature verification precede final portable-package assembly, checksums, and final SBOM generation. The next Phase 7B checkpoint is limited to a provisional inventory collector and synthetic or provisional dry-run foundation. It must not call unsigned bytes final immutable release bytes or claim a production SBOM. Final signed production SBOM generation remains deferred until signing and downstream final-byte prerequisites are implemented and separately authorized.
