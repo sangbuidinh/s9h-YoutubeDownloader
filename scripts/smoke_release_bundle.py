@@ -12,6 +12,8 @@ from pathlib import Path
 from unittest import mock
 
 import prepare_release_legal_payload as legal_builder
+import create_synthetic_release_sbom_input as sbom_fixture
+import release_sbom
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -60,9 +62,16 @@ def _test_positive_contract(bundle, root: Path) -> None:
         create_output == "Release bundle v2 created and verified",
         "create success output changed",
     )
+    shutil.copy2(Path(fixture_a["sbom_input"]), _sbom_input_path(bundle_a))
     verify_output = _run_cli(
         "verify",
-        *_verify_cli_arguments(bundle_a, RC_TAG, True, require_ready=False),
+        *_verify_cli_arguments(
+            bundle_a,
+            RC_TAG,
+            True,
+            sbom_input=Path(fixture_a["sbom_input"]),
+            require_ready=False,
+        ),
     )
     _require(verify_output == "Release bundle v2 verified", "verify success output changed")
     _create_bundle(bundle, fixture_b, bundle_b, RC_TAG, True)
@@ -154,6 +163,8 @@ def _test_bundle_mutations(bundle, root: Path) -> None:
     mutations = [
         ("extra file", lambda target: (target / "extra.txt").write_bytes(b"extra")),
         ("asset tamper", lambda target: _append(target / "assets" / bundle.EXE_NAME)),
+        ("SBOM tamper", lambda target: _append(target / "assets" / _sbom_name(RC_TAG))),
+        ("missing SBOM asset", lambda target: (target / "assets" / _sbom_name(RC_TAG)).unlink()),
         ("notes tamper", lambda target: _append(target / bundle.NOTES_NAME)),
         ("stale release notes checksum", lambda target: _set_notes_checksum(target, "0" * 64)),
         ("missing release notes checksum", _remove_notes_checksum),
@@ -185,6 +196,7 @@ def _test_bundle_mutations(bundle, root: Path) -> None:
     for index, (label, mutate) in enumerate(mutations):
         target = root / f"mutation-{index}"
         shutil.copytree(pristine, target)
+        shutil.copy2(_sbom_input_path(pristine), _sbom_input_path(target))
         mutate(target)
         _expect_verify_error(bundle, label, target)
 
@@ -208,6 +220,7 @@ def _test_bundle_mutations(bundle, root: Path) -> None:
                 asset_contract=CONTRACT_PATH,
                 legal_payload_path=pristine / "assets" / _legal_name(tag),
                 source_assets_root=pristine / "assets",
+                sbom_input=_sbom_input_path(pristine),
                 require_release_ready=False,
             ),
         )
@@ -278,7 +291,22 @@ def _release_fixture(root: Path, tag: str) -> dict[str, Path | str]:
     sources.mkdir()
     (assets / "Youtube.Downloaderbs.exe").write_bytes(b"MZsynthetic non-executable fixture\n")
     portable = assets / f"Youtube-Downloaderbs-{tag}.zip"
-    _write_zip(portable, {"README.txt": b"synthetic portable package\n"})
+    _write_zip(
+        portable,
+        {
+            "SYNTHETIC.txt": b"synthetic portable package; not for distribution\n",
+            "Youtube.Downloaderbs.exe": b"MZsynthetic packaged application fixture\n",
+            "app.pyz": b"synthetic PyInstaller application archive\n",
+            "data/bin/aria2c.exe": b"MZsynthetic aria2 fixture\n",
+            "data/bin/deno.exe": b"MZsynthetic deno fixture\n",
+            "data/bin/ffmpeg.exe": b"MZsynthetic ffmpeg fixture\n",
+            "data/bin/ffprobe.exe": b"MZsynthetic ffprobe fixture\n",
+            "data/bin/yt-dlp.exe": b"MZsynthetic yt-dlp fixture\n",
+            "native/_tkinter.pyd": b"MZsynthetic native extension fixture\n",
+            "packages/demo/__init__.py": b"VERSION = '1.0.0'\n",
+            "python311.dll": b"MZsynthetic Python runtime fixture\n",
+        },
+    )
     notes = release / "RELEASE_NOTES.md"
     _write_release_notes(notes, portable)
     legal = assets / _legal_name(tag)
@@ -293,7 +321,25 @@ def _release_fixture(root: Path, tag: str) -> dict[str, Path | str]:
     )
     _write_source_zip(sources / _source_name(tag, "aria2"))
     _write_source_zip(sources / _source_name(tag, "ffmpeg"))
-    return {"release": release, "sources": sources, "legal": legal}
+    sbom_input = root / "synthetic-release-sbom-input.json"
+    evidence = sbom_fixture.build_synthetic_input(
+        release_root=release,
+        legal_payload_path=legal,
+        source_assets_root=sources,
+        tag=tag,
+        source_commit=SOURCE_COMMIT,
+        control_commit=CONTROL_COMMIT,
+        prerelease=tag != STABLE_TAG,
+        policy=POLICY_PATH,
+        asset_contract=CONTRACT_PATH,
+    )
+    sbom_input.write_bytes(release_sbom.canonical_json_bytes(evidence))
+    return {
+        "release": release,
+        "sources": sources,
+        "legal": legal,
+        "sbom_input": sbom_input,
+    }
 
 
 def _write_source_zip(path: Path, *, extra_name: str | None = None) -> None:
@@ -344,6 +390,7 @@ def _mutate_first_zip_entry(path: Path) -> None:
 
 
 def _create_bundle(bundle, fixture, output: Path, tag: str, prerelease: bool) -> None:
+    shutil.copy2(Path(fixture["sbom_input"]), _sbom_input_path(output))
     bundle.create_bundle(
         release_root=Path(fixture["release"]),
         bundle_root=output,
@@ -355,6 +402,7 @@ def _create_bundle(bundle, fixture, output: Path, tag: str, prerelease: bool) ->
         asset_contract=CONTRACT_PATH,
         legal_payload_path=Path(fixture["legal"]),
         source_assets_root=Path(fixture["sources"]),
+        sbom_input=_sbom_input_path(output),
     )
 
 
@@ -369,6 +417,7 @@ def _verify_bundle(bundle, root: Path, tag: str, prerelease: bool, *, require_re
         asset_contract=CONTRACT_PATH,
         legal_payload_path=root / "assets" / _legal_name(tag),
         source_assets_root=root / "assets",
+        sbom_input=_sbom_input_path(root),
         require_release_ready=require_ready,
     )
 
@@ -385,10 +434,18 @@ def _create_cli_arguments(fixture, output: Path, tag: str, prerelease: bool) -> 
         "--asset-contract", str(CONTRACT_PATH),
         "--legal-payload", str(fixture["legal"]),
         "--source-assets-root", str(fixture["sources"]),
+        "--sbom-input", str(fixture["sbom_input"]),
     )
 
 
-def _verify_cli_arguments(root: Path, tag: str, prerelease: bool, *, require_ready: bool) -> tuple[str, ...]:
+def _verify_cli_arguments(
+    root: Path,
+    tag: str,
+    prerelease: bool,
+    *,
+    sbom_input: Path,
+    require_ready: bool,
+) -> tuple[str, ...]:
     return (
         "--bundle-root", str(root),
         "--tag", tag,
@@ -399,6 +456,7 @@ def _verify_cli_arguments(root: Path, tag: str, prerelease: bool, *, require_rea
         "--asset-contract", str(CONTRACT_PATH),
         "--legal-payload", str(root / "assets" / _legal_name(tag)),
         "--source-assets-root", str(root / "assets"),
+        "--sbom-input", str(sbom_input),
         "--require-release-ready", str(require_ready).lower(),
     )
 
@@ -410,6 +468,7 @@ def _validate_generated_files(root: Path, tag: str, prerelease: bool) -> None:
         _legal_name(tag),
         _source_name(tag, "aria2"),
         _source_name(tag, "ffmpeg"),
+        f"Youtube-Downloaderbs-{tag}.spdx.json",
     }
     expected = {"RELEASE_MANIFEST.json", "RELEASE_NOTES.md", "assets/SHA256SUMS.txt"}
     expected.update(f"assets/{name}" for name in asset_names)
@@ -418,7 +477,7 @@ def _validate_generated_files(root: Path, tag: str, prerelease: bool) -> None:
     _require(not checksum.startswith(b"\xef\xbb\xbf"), "checksum BOM")
     _require(b"\r" not in checksum and checksum.endswith(b"\n"), "checksum EOL")
     lines = checksum.decode("ascii").splitlines()
-    _require(len(lines) == 5, "checksum line count")
+    _require(len(lines) == 6, "checksum line count")
     names = [line.split("  ", 1)[1] for line in lines]
     _require(names == sorted(names) == sorted(asset_names), "checksum asset set or order")
     manifest_bytes = (root / "RELEASE_MANIFEST.json").read_bytes()
@@ -443,6 +502,7 @@ def _validate_generated_files(root: Path, tag: str, prerelease: bool) -> None:
                 "legal-payload",
                 "aria2-source",
                 "ffmpeg-source",
+                "release-sbom",
             ]
         ),
         "asset roles",
@@ -540,6 +600,14 @@ def _legal_name(tag: str) -> str:
 
 def _source_name(tag: str, component: str) -> str:
     return f"Youtube-Downloaderbs-{tag}-{component}-source.zip"
+
+
+def _sbom_name(tag: str) -> str:
+    return f"Youtube-Downloaderbs-{tag}.spdx.json"
+
+
+def _sbom_input_path(bundle_root: Path) -> Path:
+    return bundle_root.parent / f"{bundle_root.name}.sbom-input.json"
 
 
 def _run_cli(*args: str) -> str:

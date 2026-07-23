@@ -2,6 +2,7 @@
 /README.md text eol=lf
 /docs/source-kit-feasibility.md text eol=lf
 /docs/sbom-generator-feasibility.md text eol=lf
+/docs/release-sbom.md text eol=lf
 /legal/*.json text eol=lf
 /legal/README.md text eol=lf
 /legal/built-artifact-inventory.json text eol=lf
@@ -11,3 +12,7 @@
 /legal/source-correspondence.json text eol=lf
 /legal/source-kit-requirements.json text eol=lf
 /legal/licenses/** -text
+/schemas/spdx-2.3/spdx-schema.json -text
+/schemas/spdx-2.3/LICENSE -text
+/schemas/spdx-2.3/IDENTITY.json text eol=lf
+/scripts/vendor-notices/fastjsonschema-2.21.2-LICENSE.txt -text -whitespace

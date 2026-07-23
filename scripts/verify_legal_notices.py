@@ -160,6 +160,7 @@ GITATTRIBUTES_LINES = (
     "/README.md text eol=lf",
     "/docs/source-kit-feasibility.md text eol=lf",
     "/docs/sbom-generator-feasibility.md text eol=lf",
+    "/docs/release-sbom.md text eol=lf",
     "/legal/*.json text eol=lf",
     "/legal/README.md text eol=lf",
     "/legal/built-artifact-inventory.json text eol=lf",
@@ -169,10 +170,15 @@ GITATTRIBUTES_LINES = (
     "/legal/source-correspondence.json text eol=lf",
     "/legal/source-kit-requirements.json text eol=lf",
     "/legal/licenses/** -text",
+    "/schemas/spdx-2.3/spdx-schema.json -text",
+    "/schemas/spdx-2.3/LICENSE -text",
+    "/schemas/spdx-2.3/IDENTITY.json text eol=lf",
+    "/scripts/vendor-notices/fastjsonschema-2.21.2-LICENSE.txt -text -whitespace",
 )
 GITATTRIBUTES_BYTES = ("\n".join(GITATTRIBUTES_LINES) + "\n").encode("utf-8")
 CANONICAL_DOCUMENT_PATHS = (
     "README.md",
+    "docs/release-sbom.md",
     "docs/source-kit-feasibility.md",
     "docs/sbom-generator-feasibility.md",
     "legal/README.md",
@@ -387,7 +393,10 @@ def _verify_attribute_text_hygiene(text: str) -> None:
         _require(len(fields) >= 2, f"{GITATTRIBUTES_PATH} contains malformed attribute syntax")
         _require("\\" not in fields[0], f"{GITATTRIBUTES_PATH} contains a local or invalid path")
         _require(
-            all(field in {"text", "-text", "eol=lf", "eol=crlf"} for field in fields[1:]),
+            all(
+                field in {"text", "-text", "eol=lf", "eol=crlf", "-whitespace"}
+                for field in fields[1:]
+            ),
             f"{GITATTRIBUTES_PATH} contains malformed or unsupported attributes",
         )
 

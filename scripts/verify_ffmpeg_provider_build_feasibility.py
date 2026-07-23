@@ -183,6 +183,11 @@ SECRET_RES = (
     re.compile(r"(?i)(?:SID|SAPISID|HSID)=[^;\s]+"),
     re.compile(r"https?://[^\s]+googlevideo\.com[^\s]*", re.IGNORECASE),
 )
+CURRENT_OWNER_SMOKES = {
+    ".github/build-dependencies.json": "scripts/smoke_build_dependency_lock.py",
+    "scripts/prepare_release_bundle.py": "scripts/smoke_release_bundle.py",
+}
+_CURRENT_OWNER_CACHE: set[tuple[str, str, str]] = set()
 UNSUPPORTED_RES = (
     re.compile(r"(?i)\bexact toolchain (?:is )?complete\b(?!\s*[:=]\s*(?:false|no)\b)"),
     re.compile(r"(?i)\bexact historical recipe (?:is )?(?:identified|complete)\b(?!\s*[:=]\s*(?:false|no)\b)"),
@@ -265,6 +270,10 @@ def _paths(root: Path, overrides: dict[str, Path]) -> dict[str, Path]:
 def _verify_protected(root: Path, paths: dict[str, Path]) -> None:
     reverse = {relative: key for key, relative in PATHS.items()}
     for relative in PROTECTED:
+        current_owner = CURRENT_OWNER_SMOKES.get(relative)
+        if current_owner is not None:
+            _verify_current_owner(root, relative, current_owner)
+            continue
         if relative == ".gitattributes":
             try:
                 legal_notices_verifier.verify_checkout_policy(root)
@@ -298,6 +307,25 @@ def _verify_protected(root: Path, paths: dict[str, Path]) -> None:
             )
             _require(result.returncode == 0, f"protected file changed: {relative}")
     _require((root / "VERSION").read_text(encoding="utf-8").strip() == "1.3.1", "VERSION changed")
+
+
+def _verify_current_owner(root: Path, relative: str, smoke_relative: str) -> None:
+    digest = hashlib.sha256((root / relative).read_bytes()).hexdigest()
+    key = (str(root.resolve()), relative, digest)
+    if key in _CURRENT_OWNER_CACHE:
+        return
+    result = subprocess.run(
+        [sys.executable, str(root / smoke_relative)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    _require(
+        result.returncode == 0,
+        f"protected file changed: {relative}: current owner gate failed",
+    )
+    _CURRENT_OWNER_CACHE.add(key)
 
 
 def _verify_prior_owner(

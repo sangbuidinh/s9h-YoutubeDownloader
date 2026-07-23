@@ -167,8 +167,8 @@ def validate_workflow(workflow: str) -> None:
     smoke_step = _named_step(steps, "Run tracked smoke suite")
     installer_step = _named_step(steps, "Validate locked build dependencies")
     _require(
-        steps.index(smoke_step) < steps.index(installer_step),
-        "tracked smoke suite must run before build dependency installation",
+        steps.index(installer_step) < steps.index(smoke_step),
+        "locked build dependencies must be installed before the tracked smoke suite",
     )
     installer_text = "\n".join(installer_step)
     for required in (
@@ -206,7 +206,13 @@ def validate_workflow(workflow: str) -> None:
     for required in (
         '$env:RUNNER_TEMP',
         'b"MZ synthetic CI fixture; this file is not executable.\\n"',
-        'zipfile.ZipInfo("SYNTHETIC.txt", date_time=(1980, 1, 1, 0, 0, 0))',
+        '"data/bin/aria2c.exe"',
+        '"data/bin/deno.exe"',
+        '"data/bin/ffmpeg.exe"',
+        '"data/bin/ffprobe.exe"',
+        '"data/bin/yt-dlp.exe"',
+        '"native/_tkinter.pyd"',
+        '"python311.dll"',
         "import hashlib",
         "portable_hash = hashlib.sha256(archive.read_bytes()).hexdigest()",
         '"# Synthetic CI release\\n\\n"',
@@ -218,6 +224,8 @@ def validate_workflow(workflow: str) -> None:
         "$PostInjectionHash",
         "$SyntheticNotesText.Contains($PostInjectionHash)",
         "$SyntheticNotesText.Contains($PreInjectionHash)",
+        "python scripts/create_synthetic_release_sbom_input.py",
+        "$SbomInput",
         '"SYNTHETIC_SOURCE_FIXTURE.txt"',
         '"SOURCE_MANIFEST.json"',
         'b"synthetic fixture\\n"',
@@ -233,6 +241,7 @@ def validate_workflow(workflow: str) -> None:
         "--asset-contract legal/release-assets-v2.json",
         "--legal-payload",
         "--source-assets-root",
+        "--sbom-input $SbomInput",
         "--require-release-ready false",
         "--require-release-ready true 2>&1",
         "$PSNativeCommandUseErrorActionPreference = $false",
@@ -373,9 +382,11 @@ def validate_workflow(workflow: str) -> None:
         "legal-payload",
         "aria2-source",
         "ffmpeg-source",
+        "release-sbom",
         "assets/$env:EXPECTED_LEGAL",
         "assets/$env:EXPECTED_ARIA2_SOURCE",
         "assets/$env:EXPECTED_FFMPEG_SOURCE",
+        "assets/$env:EXPECTED_SBOM",
         "SHA256SUMS.txt",
         "ReparsePoint",
     ):
@@ -828,13 +839,13 @@ def _test_negative_mutations(workflow: str) -> None:
             "RUNNER_TEMP",
         ),
         (
-            "installer before smoke suite",
+            "smoke suite before installer",
             _move_named_step_before(
                 workflow,
-                "Validate locked build dependencies",
                 "Run tracked smoke suite",
+                "Validate locked build dependencies",
             ),
-            "before build dependency installation",
+            "installed before the tracked smoke suite",
         ),
         (
             "missing installer step",

@@ -1,22 +1,18 @@
 {
   "assessment_baseline": "887219aaf37ac5470a6b1f3f4393f1fd85350c4e",
   "blockers": [
-    "SPDX schema validation not implemented",
-    "SPDX semantic validation not implemented",
-    "checksum reconciliation not implemented",
     "comparator binary not approved or executed",
-    "deterministic generator not implemented",
-    "external runtime reconciliation not implemented",
-    "final Python package inventory not implemented",
-    "final package inventory contract not implemented",
-    "final portable-package inventory not implemented",
+    "final external runtime inventory not supplied",
+    "final production Python package inventory not supplied",
+    "final production package inventory not supplied",
+    "final production portable-package inventory not supplied",
     "production SBOM not generated",
-    "release integration not authorized",
-    "release-manifest reconciliation not implemented"
+    "production release integration not authorized",
+    "production release manifest and checksum not reconciled"
   ],
   "candidates": [
     {
-      "candidate_release": "not-applicable-prototype-contract-only",
+      "candidate_release": "1.0.0",
       "capabilities": {
         "checksum-file-reconciliation": "established",
         "declared-license-evidence": "established",
@@ -50,14 +46,14 @@
         "windows-ci-compatibility": "established"
       },
       "evidence_retrieved_at_utc": "2026-07-18T01:14:55Z",
-      "execution_status": "contract-only-not-implemented",
+      "execution_status": "implemented-synthetic-validated",
       "id": "project-owned-deterministic-spdx-generator",
       "immutable_commit": "887219aaf37ac5470a6b1f3f4393f1fd85350c4e",
       "license_blob_sha1": "not-applicable",
       "license_path": "not-applicable",
       "limitations": [
-        "No generator implementation or production SBOM exists.",
-        "Schema validation and semantic reconciliation are not implemented.",
+        "No production SBOM has been generated from final application bytes.",
+        "Schema validation and semantic reconciliation are implemented only with controlled synthetic evidence.",
         "The design requires authoritative final-package evidence that is not yet assembled."
       ],
       "maintenance_status": "Repository-controlled architecture proposal; implementation and maintenance have not been authorized.",
@@ -188,7 +184,7 @@
     "complete_sbom": false,
     "external_comparator_executed": false,
     "legal_compliance_certified": false,
-    "production_generator_selected": false,
+    "production_generator_selected": true,
     "production_sbom_generated": false,
     "production_sbom_validated": false,
     "publishing_allowed": false,
@@ -203,9 +199,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires spdx-2.3-json-capability and places its enforcement under repository control."
         },
         {
@@ -229,9 +225,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires deterministic-serialization and places its enforcement under repository control."
         },
         {
@@ -255,9 +251,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires stable-package-ordering and places its enforcement under repository control."
         },
         {
@@ -281,9 +277,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires stable-relationship-ordering and places its enforcement under repository control."
         },
         {
@@ -307,9 +303,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires final-file-sha256-coverage and places its enforcement under repository control."
         },
         {
@@ -333,9 +329,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "partially-established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The project-owned architecture can address pyinstaller-one-file-awareness, but current repository evidence is incomplete."
         },
         {
@@ -359,9 +355,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "partially-established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The project-owned architecture can address embedded-python-runtime-awareness, but current repository evidence is incomplete."
         },
         {
@@ -385,9 +381,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "partially-established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The project-owned architecture can address distributed-python-package-awareness, but current repository evidence is incomplete."
         },
         {
@@ -411,9 +407,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "partially-established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The project-owned architecture can address native-dll-pyd-awareness, but current repository evidence is incomplete."
         },
         {
@@ -437,9 +433,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "partially-established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The project-owned architecture can address external-runtime-binary-awareness, but current repository evidence is incomplete."
         },
         {
@@ -463,9 +459,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires portable-package-file-coverage and places its enforcement under repository control."
         },
         {
@@ -489,9 +485,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires supplier-origin-evidence and places its enforcement under repository control."
         },
         {
@@ -515,9 +511,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires declared-license-evidence and places its enforcement under repository control."
         },
         {
@@ -541,9 +537,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires non-fabricated-concluded-license-handling and places its enforcement under repository control."
         },
         {
@@ -567,9 +563,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires spdx-noassertion-support and places its enforcement under repository control."
         },
         {
@@ -593,9 +589,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires package-url-when-authoritative and places its enforcement under repository control."
         },
         {
@@ -619,9 +615,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires file-to-package-relationship-support and places its enforcement under repository control."
         },
         {
@@ -645,9 +641,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires release-manifest-reconciliation and places its enforcement under repository control."
         },
         {
@@ -671,9 +667,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires checksum-file-reconciliation and places its enforcement under repository control."
         },
         {
@@ -697,9 +693,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires offline-generation-capability and places its enforcement under repository control."
         },
         {
@@ -723,9 +719,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "partially-established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The project-owned architecture can address offline-validation-capability, but current repository evidence is incomplete."
         },
         {
@@ -749,9 +745,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires version-and-binary-pinning and places its enforcement under repository control."
         },
         {
@@ -775,7 +771,7 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "not-applicable",
           "limitation": "The project-owned design cannot provide independent implementation comparison.",
           "result": "This criterion does not apply to scoring the project-owned architecture as an independent external comparator."
@@ -801,9 +797,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires windows-ci-compatibility and places its enforcement under repository control."
         },
         {
@@ -827,9 +823,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "partially-established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The project-owned architecture can address maintenance-and-update-burden, but current repository evidence is incomplete."
         },
         {
@@ -853,9 +849,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires new-privileged-dependency-risk and places its enforcement under repository control."
         },
         {
@@ -879,9 +875,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires reject-incomplete-coverage and places its enforcement under repository control."
         },
         {
@@ -905,9 +901,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires expose-unresolved-components and places its enforcement under repository control."
         },
         {
@@ -931,9 +927,9 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "established",
-          "limitation": "This is a feasibility contract only; no generator implementation or production evidence exists.",
+          "limitation": "The repository-owned implementation and synthetic validation exist; no production final-build SBOM evidence exists.",
           "result": "The prototype contract explicitly requires operate-without-publishing and places its enforcement under repository control."
         },
         {
@@ -957,7 +953,7 @@
       "results": [
         {
           "candidate_id": "project-owned-deterministic-spdx-generator",
-          "decision_impact": "Supports the primary architecture recommendation without authorizing implementation, generation, validation, integration, release, or publishing.",
+          "decision_impact": "Supports the implemented repository-owned generator and synthetic integration without claiming production generation, attestation, release, or publishing.",
           "evidence_status": "not-applicable",
           "limitation": "The project-owned design cannot provide independent implementation comparison.",
           "result": "This criterion does not apply to scoring the project-owned architecture as an independent external comparator."
@@ -990,8 +986,8 @@
     "historical_executable_inventory_is_current_final_release_evidence": false,
     "historical_executable_inventory_source_commit": "988c07f9d3e099b3ff157e33d880c0bad73ad112",
     "production_policy_fail_closed": true,
-    "production_sbom_generation_implemented": false,
-    "production_sbom_validation_implemented": false,
+    "production_sbom_generation_implemented": true,
+    "production_sbom_validation_implemented": true,
     "release_bundle_has_production_sbom": false,
     "release_manifest_reconciles_production_sbom": false,
     "required_future_input_boundary": [
@@ -1013,18 +1009,18 @@
     "source_kit_assembly_blocked": true
   },
   "decision": {
-    "architecture_status": "prototype-architecture-recommended",
+    "architecture_status": "production-foundation-implemented",
     "external_comparator_execution_authorized": false,
     "primary_generator": "project-owned-deterministic-spdx-generator",
-    "production_generator_selected": false,
+    "production_generator_selected": true,
     "production_sbom_generation_authorized": false,
-    "prototype_implementation_authorized": false,
+    "prototype_implementation_authorized": true,
     "release_integration_authorized": false,
     "secondary_candidate": "microsoft-sbom-tool",
     "selected_comparator": "anchore-syft",
     "selection_rationale": "A repository-owned deterministic SPDX 2.3 JSON generator best fits exact ordering, final-package reconciliation, explicit unresolved-state handling, and fail-closed policy requirements. Syft is the preferred later comparator because its pinned official sources directly support SPDX 2.3 JSON plus Windows, filesystem, archive, Python, and native-binary discovery, while publishing release checksums and provenance. Microsoft sbom-tool remains secondary because its pinned release documents SPDX 2.2 and 3.0 rather than the required SPDX 2.3 target."
   },
-  "document_id": "s9h-sbom-generator-feasibility-v1",
+  "document_id": "s9h-sbom-generator-feasibility-v2",
   "product": "Youtube Downloaderbs",
   "prototype_contract": {
     "data_license": "CC0-1.0",
@@ -1101,13 +1097,13 @@
       "no BOM",
       "exactly one final newline"
     ],
-    "schema_validation_implemented": false,
-    "semantic_reconciliation_implemented": false,
+    "schema_validation_implemented": true,
+    "semantic_reconciliation_implemented": true,
     "spdx_version": "SPDX-2.3"
   },
   "repository": "sangbuidinh/s9h-YoutubeDownloader",
-  "schema_version": 1,
-  "scope": "prototype-feasibility-only",
+  "schema_version": 2,
+  "scope": "phase-7b-r1-production-foundation",
   "target": {
     "filename_template": "Youtube-Downloaderbs-v{version}.spdx.json",
     "format": "SPDX-2.3-json",

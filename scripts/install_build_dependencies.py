@@ -19,6 +19,7 @@ INVENTORY_PATH = REPO_ROOT / ".github" / "build-dependencies.json"
 EXPECTED_PYTHON = (3, 11, 9)
 EXPECTED_PIP = "26.1.2"
 EXPECTED_PYINSTALLER = "6.21.0"
+EXPECTED_FASTJSONSCHEMA = "2.21.2"
 OFFICIAL_INDEX = "https://pypi.org/simple"
 S9H_BUILD_VENV_MARKER = ".s9h-build-venv.json"
 S9H_BUILD_VENV_MARKER_DATA = {
@@ -91,6 +92,7 @@ def _install_locked_dependencies(
     )
     _run(venv_python, "pip dependency check", "-m", "pip", "check")
     _verify_pyinstaller(venv_python)
+    _verify_fastjsonschema(venv_python)
     installed = _installed_distributions(venv_python)
     expected = _expected_packages(inventory)
     _verify_inventory(installed, expected)
@@ -253,6 +255,21 @@ def _verify_pyinstaller(venv_python: Path) -> None:
     )
     if result.stdout.strip() != EXPECTED_PYINSTALLER:
         raise BuildDependencyError("The locked PyInstaller version was not installed")
+
+
+def _verify_fastjsonschema(venv_python: Path) -> None:
+    probe = (
+        "import importlib.metadata as m; "
+        "print(m.version('fastjsonschema'))"
+    )
+    result = _run(
+        venv_python,
+        "verify fastjsonschema",
+        "-c",
+        probe,
+    )
+    if result.stdout.strip() != EXPECTED_FASTJSONSCHEMA:
+        raise BuildDependencyError("The locked fastjsonschema version was not installed")
 
 
 def _installed_distributions(venv_python: Path) -> dict[str, str]:
