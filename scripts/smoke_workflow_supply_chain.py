@@ -1,10 +1,13 @@
 import copy
 import datetime
+import hashlib
 import json
 import re
 import sys
+import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -29,12 +32,159 @@ FORBIDDEN_VERSION_WORKFLOW_TRIGGERS = {
     "schedule",
     "workflow_run",
 }
-ACTION_POLICY = {
-    "actions/checkout": ("v4", 12),
-    "actions/setup-python": ("v5", 9),
-    "actions/upload-artifact": ("v4", 5),
-    "actions/download-artifact": ("v4", 5),
-    "softprops/action-gh-release": ("v2", 4),
+CURRENT_PROFILE = "current_ci"
+HISTORICAL_PROFILE = "frozen_historical_release"
+CURRENT_CI_ACTIONS = {
+    "actions/checkout": {
+        "repository": "actions/checkout",
+        "release_tag": "v6.1.0",
+        "workflow_comment": "v6.1.0",
+        "commit": "d23441a48e516b6c34aea4fa41551a30e30af803",
+        "declared_runtime": "node24",
+        "official_repository": True,
+        "action_yml_blob": "5b0524f730db83f9513c18ab31a6c086c7239076",
+        "lifecycle": "current",
+        "occurrence_count": 1,
+    },
+    "actions/setup-python": {
+        "repository": "actions/setup-python",
+        "release_tag": "v6.3.0",
+        "workflow_comment": "v6.3.0",
+        "commit": "ece7cb06caefa5fff74198d8649806c4678c61a1",
+        "declared_runtime": "node24",
+        "official_repository": True,
+        "action_yml_blob": "7a9a7b634ec348b35b882f1f14fcaa4d41836a8e",
+        "lifecycle": "current",
+        "occurrence_count": 1,
+    },
+    "actions/upload-artifact": {
+        "repository": "actions/upload-artifact",
+        "release_tag": "v7.0.1",
+        "workflow_comment": "v7.0.1",
+        "commit": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "declared_runtime": "node24",
+        "official_repository": True,
+        "action_yml_blob": "7cb4d1e81db55320b41217e1a78a1a46e3d2baef",
+        "lifecycle": "current",
+        "occurrence_count": 1,
+    },
+    "actions/download-artifact": {
+        "repository": "actions/download-artifact",
+        "release_tag": "v8.0.1",
+        "workflow_comment": "v8.0.1",
+        "commit": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+        "declared_runtime": "node24",
+        "official_repository": True,
+        "action_yml_blob": "8b8c65029ccad20750a29fecb438eca5a607fc57",
+        "lifecycle": "current",
+        "occurrence_count": 1,
+    },
+}
+HISTORICAL_ACTIONS = {
+    "actions/checkout": {
+        "repository": "actions/checkout",
+        "release_tag": "v4.3.1",
+        "workflow_comment": "v4",
+        "commit": "34e114876b0b11c390a56381ad16ebd13914f8d5",
+        "declared_runtime": "node20",
+        "official_repository": True,
+        "action_yml_blob": "6842eb843b7258993656f41f9c358f5c5331fbe7",
+        "lifecycle": "frozen-historical",
+        "occurrence_count": 11,
+    },
+    "actions/setup-python": {
+        "repository": "actions/setup-python",
+        "release_tag": "v5.6.0",
+        "workflow_comment": "v5",
+        "commit": "a26af69be951a213d495a4c3e4e4022e16d87065",
+        "declared_runtime": "node20",
+        "official_repository": True,
+        "action_yml_blob": "efa8de904209196588db1453bdb44079b3c393d7",
+        "lifecycle": "frozen-historical",
+        "occurrence_count": 8,
+    },
+    "actions/upload-artifact": {
+        "repository": "actions/upload-artifact",
+        "release_tag": "v4.6.2",
+        "workflow_comment": "v4",
+        "commit": "ea165f8d65b6e75b540449e92b4886f43607fa02",
+        "declared_runtime": "node20",
+        "official_repository": True,
+        "action_yml_blob": "2a0ecf19e8d0087dd2e5d1785dcf764811e79fae",
+        "lifecycle": "frozen-historical",
+        "occurrence_count": 4,
+    },
+    "actions/download-artifact": {
+        "repository": "actions/download-artifact",
+        "release_tag": "v4.3.0",
+        "workflow_comment": "v4",
+        "commit": "d3f86a106a0bac45b974a628896c90dbdf5c8093",
+        "declared_runtime": "node20",
+        "official_repository": True,
+        "action_yml_blob": "7fc4fb55c7d0c7b198b1c7466e1efd7c7d05fb26",
+        "lifecycle": "frozen-historical",
+        "occurrence_count": 4,
+    },
+    "softprops/action-gh-release": {
+        "repository": "softprops/action-gh-release",
+        "release_tag": "v2.6.2",
+        "workflow_comment": "v2",
+        "commit": "3bb12739c298aeb8a4eeaf626c5b8d85266b0e65",
+        "declared_runtime": "node20",
+        "official_repository": False,
+        "action_yml_blob": "b471d236bc28052c1d78c3d6b57ee480d192da6a",
+        "lifecycle": "frozen-historical",
+        "occurrence_count": 4,
+    },
+}
+EXPECTED_WORKFLOW_PROFILES = {
+    CI_WORKFLOW: CURRENT_PROFILE,
+    ".github/workflows/prerelease-v1.2.7-rc.1.yml": HISTORICAL_PROFILE,
+    ".github/workflows/prerelease-v1.3.0-rc.1.yml": HISTORICAL_PROFILE,
+    ".github/workflows/release-v1.3.0.yml": HISTORICAL_PROFILE,
+    ".github/workflows/release-v1.3.1.yml": HISTORICAL_PROFILE,
+}
+EXPECTED_WORKFLOW_ACTION_COUNTS = {
+    CI_WORKFLOW: {
+        "actions/checkout": 1,
+        "actions/setup-python": 1,
+        "actions/upload-artifact": 1,
+        "actions/download-artifact": 1,
+    },
+    ".github/workflows/prerelease-v1.2.7-rc.1.yml": {
+        "actions/checkout": 2,
+        "actions/setup-python": 2,
+        "actions/upload-artifact": 1,
+        "actions/download-artifact": 1,
+        "softprops/action-gh-release": 1,
+    },
+    ".github/workflows/prerelease-v1.3.0-rc.1.yml": {
+        "actions/checkout": 3,
+        "actions/setup-python": 2,
+        "actions/upload-artifact": 1,
+        "actions/download-artifact": 1,
+        "softprops/action-gh-release": 1,
+    },
+    ".github/workflows/release-v1.3.0.yml": {
+        "actions/checkout": 3,
+        "actions/setup-python": 2,
+        "actions/upload-artifact": 1,
+        "actions/download-artifact": 1,
+        "softprops/action-gh-release": 1,
+    },
+    ".github/workflows/release-v1.3.1.yml": {
+        "actions/checkout": 3,
+        "actions/setup-python": 2,
+        "actions/upload-artifact": 1,
+        "actions/download-artifact": 1,
+        "softprops/action-gh-release": 1,
+    },
+}
+HISTORICAL_WORKFLOW_BLOBS = {
+    ".github/workflows/prerelease-v1.2.7-rc.1.yml": "613c74ba98d9aa801b839d6a84b123b38aafbe2a",
+    ".github/workflows/prerelease-v1.3.0-rc.1.yml": "84378adce76b25e6c50bbac138de8183c83eddcf",
+    ".github/workflows/release-v1.3.0.yml": "753f12a9745493b46160229c47498aeb273f26eb",
+    ".github/workflows/release-v1.3.1.yml": "620114ff51dcd5a41ba6dbeec0c922630682bdf9",
 }
 LEGACY_WORKFLOW = ".github/workflows/prerelease-v1.2.7-rc.1.yml"
 FIXED_TAG_WORKFLOWS = {
@@ -62,7 +212,8 @@ RELEASE_POLICY = {
 }
 FULL_SHA = re.compile(r"[0-9a-f]{40}\Z")
 ACTION_LINE = re.compile(
-    r"^\s*(?:-\s*)?uses:\s*([^@\s#]+)@([^\s#]+)\s+#\s*(v\d+)\s*$"
+    r"^\s*(?:-\s*)?uses:\s*([^@\s#]+)@([^\s#]+)\s+#\s*"
+    r"(v\d+(?:\.\d+\.\d+)?)\s*$"
 )
 PERMISSION_LINE = re.compile(
     r"^(\s*)(contents|actions|checks|packages|pull-requests|"
@@ -78,8 +229,14 @@ def main() -> int:
     documents = _load_workflows()
     inventory = _load_inventory()
     validate_supply_chain(documents, inventory)
+    owner_negative_count = _test_current_owner_delegation()
+    r3a_negative_count = _test_r3a_negative_mutations(documents, inventory)
     _test_negative_mutations(documents, inventory)
-    print("workflow supply-chain smoke tests passed")
+    print(
+        "workflow supply-chain smoke tests passed: "
+        f"18 R3a positive contracts, {r3a_negative_count} R3a negative mutations, "
+        f"{owner_negative_count} current-owner negative regressions"
+    )
     return 0
 
 
@@ -88,16 +245,28 @@ def validate_supply_chain(documents: dict[str, str], inventory: dict) -> None:
         tuple(sorted(documents)) == EXPECTED_WORKFLOWS,
         "workflow file inventory differs from the expected five files",
     )
-    pins = _validate_inventory(inventory)
+    profiles = _validate_inventory(inventory)
+    workflow_profiles = inventory["workflow_profiles"]
+    expected_workflow_counts = inventory["workflow_action_counts"]
 
-    uses_by_action: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
+    uses_by_profile_action: dict[
+        tuple[str, str], list[tuple[str, str, str]]
+    ] = defaultdict(list)
     for path, workflow in documents.items():
+        if path in HISTORICAL_WORKFLOW_BLOBS:
+            _require(
+                _git_blob_sha1(workflow.encode("utf-8"))
+                == HISTORICAL_WORKFLOW_BLOBS[path],
+                f"{path} differs from its frozen historical Git blob",
+            )
         workflow = _normalize_newlines(workflow)
         _validate_trigger_policy(path, workflow)
         _validate_workflow_environment(path, workflow)
         _validate_permissions(path, workflow)
         _validate_historical_behavior(path, workflow)
         _validate_action_placement(path, workflow)
+        if path == CI_WORKFLOW:
+            _validate_current_ci_action_controls(workflow)
         _verify_no_sensitive_literals(path, workflow)
 
         uses_lines = [
@@ -106,6 +275,9 @@ def validate_supply_chain(documents: dict[str, str], inventory: dict) -> None:
             if re.match(r"^\s*(?:-\s*)?uses\s*:", line)
         ]
         _require(bool(uses_lines), f"{path} contains no action invocation")
+        profile_name = workflow_profiles[path]
+        profile_actions = profiles[profile_name]["actions"]
+        workflow_counts = Counter()
         for number, line in uses_lines:
             stripped = line.strip()
             _require(
@@ -126,39 +298,52 @@ def validate_supply_chain(documents: dict[str, str], inventory: dict) -> None:
                 f"{path}:{number} action must use full SHA and version comment",
             )
             repository, commit, comment = match.groups()
-            _require(repository in ACTION_POLICY, f"{path}:{number} action is not allowlisted")
-            expected_tag, _ = ACTION_POLICY[repository]
+            _require(
+                repository in profile_actions,
+                f"{path}:{number} action is not allowlisted by profile {profile_name}",
+            )
+            expected = profile_actions[repository]
             _require(
                 FULL_SHA.fullmatch(commit) is not None,
                 f"{path}:{number} action ref must be lowercase 40-character SHA",
             )
             _require(
-                comment == expected_tag,
+                comment == expected["workflow_comment"],
                 f"{path}:{number} action version comment is incorrect",
             )
             _require(
-                commit == pins[repository],
+                commit == expected["commit"],
                 f"{path}:{number} action ref differs from pin inventory",
             )
-            uses_by_action[repository].append((path, commit, comment))
+            workflow_counts[repository] += 1
+            uses_by_profile_action[(profile_name, repository)].append(
+                (path, commit, comment)
+            )
+        _require(
+            dict(workflow_counts) == expected_workflow_counts[path],
+            f"{path} action occurrence counts differ: {workflow_counts}",
+        )
 
-    counts = Counter({name: len(rows) for name, rows in uses_by_action.items()})
-    expected_counts = Counter({name: policy[1] for name, policy in ACTION_POLICY.items()})
-    _require(counts == expected_counts, f"action occurrence counts differ: {counts}")
-    _require(sum(counts.values()) == 35, "total immutable action count must be 35")
-    for repository, rows in uses_by_action.items():
+    total_count = sum(len(rows) for rows in uses_by_profile_action.values())
+    _require(total_count == 35, "total immutable action count must be 35")
+    for profile_name, profile in profiles.items():
+        for repository, entry in profile["actions"].items():
+            rows = uses_by_profile_action[(profile_name, repository)]
+            _require(
+                len(rows) == entry["occurrence_count"],
+                f"{profile_name}/{repository} occurrence count differs",
+            )
+    for (profile_name, repository), rows in uses_by_profile_action.items():
         _require(
             len({commit for _, commit, _ in rows}) == 1,
-            f"{repository} uses inconsistent SHAs across workflows",
+            f"{profile_name}/{repository} uses inconsistent SHAs across workflows",
         )
 
 
 def _load_workflows() -> dict[str, str]:
     paths = sorted(WORKFLOW_DIR.glob("*.yml"))
     return {
-        path.relative_to(REPO_ROOT).as_posix(): _normalize_newlines(
-            path.read_text(encoding="utf-8")
-        )
+        path.relative_to(REPO_ROOT).as_posix(): path.read_bytes().decode("utf-8")
         for path in paths
     }
 
@@ -171,8 +356,19 @@ def _load_inventory() -> dict:
         raise SupplyChainContractError(f"action pin inventory is invalid JSON: {exc}") from exc
 
 
-def _validate_inventory(inventory: dict) -> dict[str, str]:
-    _require(inventory.get("schema_version") == 1, "pin inventory schema must be 1")
+def _validate_inventory(inventory: dict) -> dict:
+    _require(
+        set(inventory)
+        == {
+            "schema_version",
+            "resolved_at_utc",
+            "profiles",
+            "workflow_profiles",
+            "workflow_action_counts",
+        },
+        "pin inventory top-level fields differ",
+    )
+    _require(inventory.get("schema_version") == 2, "pin inventory schema must be 2")
     resolved = inventory.get("resolved_at_utc")
     _require(isinstance(resolved, str) and resolved.endswith("Z"), "resolution time is invalid")
     try:
@@ -180,24 +376,82 @@ def _validate_inventory(inventory: dict) -> dict[str, str]:
     except ValueError as exc:
         raise SupplyChainContractError("resolution time is not ISO-8601 UTC") from exc
 
-    actions = inventory.get("actions")
-    _require(isinstance(actions, dict), "pin inventory actions mapping is missing")
-    _require(set(actions) == set(ACTION_POLICY), "pin inventory action set differs")
-    pins = {}
-    for repository, (expected_tag, _) in ACTION_POLICY.items():
-        entry = actions[repository]
+    profiles = inventory.get("profiles")
+    _require(
+        isinstance(profiles, dict)
+        and set(profiles) == {CURRENT_PROFILE, HISTORICAL_PROFILE},
+        "pin inventory profiles differ",
+    )
+    expected_profiles = {
+        CURRENT_PROFILE: {
+            "lifecycle": "current",
+            "recommended_for_new_workflows": True,
+            "actions": CURRENT_CI_ACTIONS,
+        },
+        HISTORICAL_PROFILE: {
+            "lifecycle": "frozen-historical",
+            "recommended_for_new_workflows": False,
+            "actions": HISTORICAL_ACTIONS,
+        },
+    }
+    for profile_name, expected_profile in expected_profiles.items():
+        profile = profiles[profile_name]
         _require(
-            set(entry) == {"tag", "commit"},
-            f"{repository} pin entry has unexpected fields",
+            isinstance(profile, dict)
+            and set(profile)
+            == {"lifecycle", "recommended_for_new_workflows", "actions"},
+            f"{profile_name} profile fields differ",
         )
-        _require(entry["tag"] == expected_tag, f"{repository} tag is incorrect")
         _require(
-            isinstance(entry["commit"], str)
-            and FULL_SHA.fullmatch(entry["commit"]) is not None,
-            f"{repository} commit must be lowercase 40-character SHA",
+            profile["lifecycle"] == expected_profile["lifecycle"],
+            f"{profile_name} lifecycle is incorrect",
         )
-        pins[repository] = entry["commit"]
-    return pins
+        _require(
+            profile["recommended_for_new_workflows"]
+            is expected_profile["recommended_for_new_workflows"],
+            f"{profile_name} recommendation state is incorrect",
+        )
+        actions = profile["actions"]
+        expected_actions = expected_profile["actions"]
+        _require(
+            isinstance(actions, dict) and set(actions) == set(expected_actions),
+            f"{profile_name} action set differs",
+        )
+        for repository, expected_entry in expected_actions.items():
+            entry = actions[repository]
+            _require(
+                isinstance(entry, dict) and set(entry) == set(expected_entry),
+                f"{profile_name}/{repository} pin entry fields differ",
+            )
+            _require(
+                entry == expected_entry,
+                f"{profile_name}/{repository} pin identity differs",
+            )
+            _require(
+                FULL_SHA.fullmatch(entry["commit"]) is not None,
+                f"{profile_name}/{repository} commit must be a full lowercase SHA",
+            )
+            _require(
+                FULL_SHA.fullmatch(entry["action_yml_blob"]) is not None,
+                f"{profile_name}/{repository} action.yml blob must be a full SHA",
+            )
+            _require(
+                re.fullmatch(r"v\d+\.\d+\.\d+", entry["release_tag"]) is not None,
+                f"{profile_name}/{repository} release tag must be stable semantic version",
+            )
+    _require(
+        inventory.get("workflow_profiles") == EXPECTED_WORKFLOW_PROFILES,
+        "workflow profile mapping differs",
+    )
+    _require(
+        inventory.get("workflow_action_counts") == EXPECTED_WORKFLOW_ACTION_COUNTS,
+        "per-workflow action occurrence counts differ",
+    )
+    _require(
+        "softprops/action-gh-release" not in profiles[CURRENT_PROFILE]["actions"],
+        "current CI profile must not contain a publishing action",
+    )
+    return profiles
 
 
 def _validate_workflow_environment(path: str, workflow: str) -> None:
@@ -506,14 +760,57 @@ def _validate_download_inputs(job: str, artifact_id: str, label: str) -> None:
         _scalar_value(download_with, "merge-multiple", 10) == "true",
         f"{label} merge-multiple must be the YAML boolean true",
     )
+    expected_inputs = [
+        ("artifact-ids", artifact_id),
+        ("path", "release-bundle"),
+        ("merge-multiple", "true"),
+    ]
+    if label == "CI consumer":
+        expected_inputs.append(("digest-mismatch", "error"))
     _require(
-        _direct_mapping_pairs(download_with, 10)
-        == [
-            ("artifact-ids", artifact_id),
-            ("path", "release-bundle"),
-            ("merge-multiple", "true"),
-        ],
+        _direct_mapping_pairs(download_with, 10) == expected_inputs,
         f"{label} download inputs must select one artifact ID and release-bundle",
+    )
+
+
+def _validate_current_ci_action_controls(workflow: str) -> None:
+    jobs = _mapping_block(workflow.splitlines(), "jobs", 0)
+    producer = _mapping_block(jobs, "windows-smoke", 2)
+    steps = _step_blocks(producer)
+    checkout = _action_steps(steps, "actions/checkout")
+    _require(len(checkout) == 1, "CI checkout action count is invalid")
+    checkout_with = _mapping_block(checkout[0], "with", 8)
+    _require(
+        _direct_mapping_pairs(checkout_with, 10)
+        == [("fetch-depth", "0"), ("persist-credentials", "false")],
+        "CI checkout must use full history without persisted credentials",
+    )
+    upload = _action_steps(steps, "actions/upload-artifact")
+    _require(len(upload) == 1, "CI upload action count is invalid")
+    upload_with = _mapping_block(upload[0], "with", 8)
+    _require(
+        _direct_mapping_pairs(upload_with, 10)
+        == [
+            ("name", "ci-release-bundle-${{ github.run_id }}-${{ github.run_attempt }}"),
+            (
+                "path",
+                "${{ runner.temp }}/s9h-ci-release-${{ github.run_id }}-${{ github.run_attempt }}/publish-bundle",
+            ),
+            ("if-no-files-found", "error"),
+            ("compression-level", "0"),
+            ("overwrite", "false"),
+            ("include-hidden-files", "false"),
+            ("retention-days", "1"),
+        ],
+        "CI upload artifact behavior changed",
+    )
+    _require(
+        re.search(
+            r"(?im)^\s*git\s+(?:push|fetch|pull|clone|submodule)\b",
+            workflow,
+        )
+        is None,
+        "CI must not require persisted Git credentials",
     )
 
 
@@ -688,14 +985,258 @@ def _verify_no_sensitive_literals(path: str, workflow: str) -> None:
         _require(re.search(pattern, workflow) is None, f"{path} contains {label}")
 
 
+def _test_current_owner_delegation() -> int:
+    import verify_ffmpeg_provider_build_feasibility as provider_verifier
+
+    relative = ".github/actions-pins.json"
+    owner_smoke = "scripts/smoke_workflow_supply_chain.py"
+    expected_delegations = {
+        relative: owner_smoke,
+        ".github/build-dependencies.json": "scripts/smoke_build_dependency_lock.py",
+        "scripts/prepare_release_bundle.py": "scripts/smoke_release_bundle.py",
+    }
+    _require(relative in provider_verifier.PROTECTED, "action pins must remain protected")
+    _require(
+        provider_verifier.CURRENT_OWNER_SMOKES == expected_delegations,
+        "FFmpeg provider current-owner delegation set differs",
+    )
+
+    provider_verifier._CURRENT_OWNER_CACHE.clear()
+    with tempfile.TemporaryDirectory(prefix="s9h-action-owner-") as raw:
+        root = Path(raw)
+        protected = root / relative
+        protected.parent.mkdir(parents=True, exist_ok=True)
+        protected.write_bytes(b'{"schema_version":2}\n')
+        smoke = root / owner_smoke
+        smoke.parent.mkdir(parents=True, exist_ok=True)
+        smoke.write_text("raise SystemExit(0)\n", encoding="utf-8", newline="\n")
+
+        success = mock.Mock(returncode=0)
+        with mock.patch.object(provider_verifier.subprocess, "run", return_value=success) as run:
+            provider_verifier._verify_current_owner(root, relative, owner_smoke)
+            provider_verifier._verify_current_owner(root, relative, owner_smoke)
+            _require(run.call_count == 1, "successful current-owner result was not cached")
+        _require(
+            len(provider_verifier._CURRENT_OWNER_CACHE) == 1,
+            "successful current-owner cache entry is missing",
+        )
+
+        provider_verifier._CURRENT_OWNER_CACHE.clear()
+        failure = mock.Mock(returncode=1)
+        with mock.patch.object(provider_verifier.subprocess, "run", return_value=failure):
+            try:
+                provider_verifier._verify_current_owner(root, relative, owner_smoke)
+            except provider_verifier.FFmpegProviderBuildFeasibilityError as exc:
+                _require(
+                    "current owner gate failed" in str(exc),
+                    "failing current-owner smoke error category differs",
+                )
+            else:
+                raise SupplyChainContractError("failing current-owner smoke was accepted")
+        _require(
+            not provider_verifier._CURRENT_OWNER_CACHE,
+            "failing current-owner result was cached",
+        )
+
+        with (
+            mock.patch.object(provider_verifier, "PROTECTED", (relative,)),
+            mock.patch.dict(provider_verifier.CURRENT_OWNER_SMOKES, {}, clear=True),
+            mock.patch.object(provider_verifier.subprocess, "run", return_value=failure),
+        ):
+            try:
+                provider_verifier._verify_protected(root, {})
+            except provider_verifier.FFmpegProviderBuildFeasibilityError as exc:
+                _require(
+                    f"protected file changed: {relative}" in str(exc),
+                    "missing delegation did not restore fail-closed baseline comparison",
+                )
+            else:
+                raise SupplyChainContractError("missing current-owner delegation was accepted")
+    provider_verifier._CURRENT_OWNER_CACHE.clear()
+    return 2
+
+
+def _test_r3a_negative_mutations(documents: dict[str, str], inventory: dict) -> int:
+    current = CURRENT_CI_ACTIONS
+    historical = HISTORICAL_ACTIONS
+    ci = CI_WORKFLOW
+    historical_workflow = ".github/workflows/release-v1.3.1.yml"
+    cases: list[tuple[str, dict[str, str], dict]] = []
+
+    mutated_inventory = copy.deepcopy(inventory)
+    mutated_inventory["schema_version"] = 1
+    cases.append(("malformed action pin schema", documents, mutated_inventory))
+
+    for repository in (
+        "actions/checkout",
+        "actions/setup-python",
+        "actions/upload-artifact",
+        "actions/download-artifact",
+    ):
+        mutated = copy.deepcopy(documents)
+        old = (
+            f"{repository}@{current[repository]['commit']} "
+            f"# {current[repository]['workflow_comment']}"
+        )
+        new = (
+            f"{repository}@{historical[repository]['commit']} "
+            f"# {historical[repository]['workflow_comment']}"
+        )
+        mutated[ci] = _replace_once(mutated[ci], old, new)
+        cases.append((f"current CI reverts {repository}", mutated, inventory))
+
+    mutated_inventory = copy.deepcopy(inventory)
+    mutated_inventory["profiles"][CURRENT_PROFILE]["actions"]["actions/checkout"][
+        "declared_runtime"
+    ] = "node20"
+    cases.append(("current CI inventory declares node20", documents, mutated_inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        f"actions/checkout@{current['actions/checkout']['commit']}",
+        "actions/checkout@v6",
+    )
+    cases.append(("current CI uses mutable major tag", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        current["actions/checkout"]["commit"],
+        current["actions/checkout"]["commit"][:7],
+    )
+    cases.append(("current CI uses short SHA", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        f"# {current['actions/checkout']['workflow_comment']}",
+        "# v6.0.0",
+    )
+    cases.append(("semantic version comment differs", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        current["actions/checkout"]["commit"],
+        "a" * 40,
+    )
+    cases.append(("action SHA differs from selected release", mutated, inventory))
+
+    mutated_inventory = copy.deepcopy(inventory)
+    mutated_inventory["workflow_profiles"][ci] = HISTORICAL_PROFILE
+    cases.append(("current CI mapped to historical profile", documents, mutated_inventory))
+
+    mutated_inventory = copy.deepcopy(inventory)
+    mutated_inventory["workflow_profiles"][historical_workflow] = CURRENT_PROFILE
+    cases.append(("historical workflow mapped to current profile", documents, mutated_inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[historical_workflow] += "# historical byte mutation\n"
+    cases.append(("historical workflow byte modified", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    old = (
+        f"actions/checkout@{historical['actions/checkout']['commit']} "
+        f"# {historical['actions/checkout']['workflow_comment']}"
+    )
+    new = (
+        f"actions/checkout@{current['actions/checkout']['commit']} "
+        f"# {current['actions/checkout']['workflow_comment']}"
+    )
+    _require(old in mutated[historical_workflow], "historical checkout mutation target missing")
+    mutated[historical_workflow] = mutated[historical_workflow].replace(old, new, 1)
+    cases.append(("historical pins silently replaced", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(mutated[ci], "          persist-credentials: false\n", "")
+    cases.append(("persist-credentials omitted", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "          persist-credentials: false",
+        "          persist-credentials: true",
+    )
+    cases.append(("persist-credentials true", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(mutated[ci], "          fetch-depth: 0", "          fetch-depth: 1")
+    cases.append(("fetch-depth changes from zero", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}",
+        "          name: synthetic-release-bundle",
+    )
+    cases.append(("artifact ID selection replaced by name", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(mutated[ci], "          digest-mismatch: error\n", "")
+    cases.append(("digest mismatch control removed", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "          digest-mismatch: error",
+        "          digest-mismatch: ignore",
+    )
+    cases.append(("digest mismatch ignored", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "actions/setup-python@",
+        "unknown/setup-python@",
+    )
+    cases.append(("unknown action added", mutated, inventory))
+
+    mutated_inventory = copy.deepcopy(inventory)
+    del mutated_inventory["profiles"][CURRENT_PROFILE]["actions"]["actions/setup-python"]
+    cases.append(("action missing from current profile", documents, mutated_inventory))
+
+    mutated_inventory = copy.deepcopy(inventory)
+    del mutated_inventory["profiles"][CURRENT_PROFILE]["actions"]["actions/checkout"][
+        "declared_runtime"
+    ]
+    cases.append(("action.yml runtime evidence absent", documents, mutated_inventory))
+
+    mutated_inventory = copy.deepcopy(inventory)
+    mutated_inventory["profiles"][CURRENT_PROFILE]["actions"]["actions/checkout"][
+        "release_tag"
+    ] = "v6.1.0-rc.1"
+    cases.append(("prerelease action tag recorded", documents, mutated_inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(mutated[ci], "actions/checkout@", "third-party/checkout@")
+    mutated_inventory = copy.deepcopy(inventory)
+    third_party = mutated_inventory["profiles"][CURRENT_PROFILE]["actions"].pop(
+        "actions/checkout"
+    )
+    third_party["repository"] = "third-party/checkout"
+    mutated_inventory["profiles"][CURRENT_PROFILE]["actions"]["third-party/checkout"] = (
+        third_party
+    )
+    cases.append(("third-party repository substituted", mutated, mutated_inventory))
+
+    for label, mutated_documents, mutated_inventory in cases:
+        _expect_failure(label, mutated_documents, mutated_inventory)
+    return len(cases)
+
+
 def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None:
     ci = CI_WORKFLOW
     release = ".github/workflows/release-v1.3.1.yml"
-    checkout_sha = inventory["actions"]["actions/checkout"]["commit"]
-    setup_sha = inventory["actions"]["actions/setup-python"]["commit"]
-    upload_sha = inventory["actions"]["actions/upload-artifact"]["commit"]
-    download_sha = inventory["actions"]["actions/download-artifact"]["commit"]
-    release_sha = inventory["actions"]["softprops/action-gh-release"]["commit"]
+    current_actions = inventory["profiles"][CURRENT_PROFILE]["actions"]
+    historical_actions = inventory["profiles"][HISTORICAL_PROFILE]["actions"]
+    checkout_sha = current_actions["actions/checkout"]["commit"]
+    setup_sha = current_actions["actions/setup-python"]["commit"]
+    download_sha = current_actions["actions/download-artifact"]["commit"]
+    historical_checkout_sha = historical_actions["actions/checkout"]["commit"]
+    historical_upload_sha = historical_actions["actions/upload-artifact"]["commit"]
+    historical_download_sha = historical_actions["actions/download-artifact"]["commit"]
+    release_sha = historical_actions["softprops/action-gh-release"]["commit"]
 
     mutations = []
 
@@ -870,7 +1411,7 @@ def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None
     mutated[release] = _replace_once(
         mutated[release],
         "      - name: Check out workflow control source\n"
-        f"        uses: actions/checkout@{checkout_sha} # v4\n",
+        f"        uses: actions/checkout@{historical_checkout_sha} # v4\n",
         "      - name: Check out workflow control source\n"
         f"        uses: actions/checkout@{'a' * 40} # v4\n",
     )
@@ -927,7 +1468,7 @@ def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None
     mutated = copy.deepcopy(documents)
     mutated[ci] = _replace_once(
         mutated[ci],
-        f"uses: actions/checkout@{checkout_sha} # v4",
+        f"uses: actions/checkout@{checkout_sha} # v6.1.0",
         "uses: ./.github/actions/unsafe",
     )
     mutations.append(("local action", mutated))
@@ -943,7 +1484,7 @@ def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None
     mutated = copy.deepcopy(documents)
     mutated[ci] = _replace_once(
         mutated[ci],
-        f"actions/setup-python@{setup_sha} # v5",
+        f"actions/setup-python@{setup_sha} # v6.3.0",
         "docker://example.invalid/tool:latest",
     )
     mutations.append(("Docker action", mutated))
@@ -1014,7 +1555,7 @@ def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None
     mutated[release] = _replace_once(
         mutated[release],
         "      - name: Validate immutable build outputs",
-        f"      - uses: actions/upload-artifact@{upload_sha} # v4\n"
+        f"      - uses: actions/upload-artifact@{historical_upload_sha} # v4\n"
         "      - name: Validate immutable build outputs",
     )
     mutations.append(("upload action in publish job", mutated))
@@ -1023,7 +1564,7 @@ def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None
     mutated[release] = _replace_once(
         mutated[release],
         "      - name: Create and verify release bundle",
-        f"      - uses: actions/download-artifact@{download_sha} # v4\n"
+        f"      - uses: actions/download-artifact@{historical_download_sha} # v4\n"
         "      - name: Create and verify release bundle",
     )
     mutations.append(("download action in build job", mutated))
@@ -1266,6 +1807,11 @@ def _replace_once(value: str, old: str, new: str) -> str:
 
 def _normalize_newlines(value: str) -> str:
     return value.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _git_blob_sha1(value: bytes) -> str:
+    header = f"blob {len(value)}\0".encode("ascii")
+    return hashlib.sha1(header + value).hexdigest()
 
 
 def _unquote(value: str) -> str:

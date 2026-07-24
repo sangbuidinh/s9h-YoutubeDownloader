@@ -184,6 +184,7 @@ SECRET_RES = (
     re.compile(r"https?://[^\s]+googlevideo\.com[^\s]*", re.IGNORECASE),
 )
 CURRENT_OWNER_SMOKES = {
+    ".github/actions-pins.json": "scripts/smoke_workflow_supply_chain.py",
     ".github/build-dependencies.json": "scripts/smoke_build_dependency_lock.py",
     "scripts/prepare_release_bundle.py": "scripts/smoke_release_bundle.py",
 }

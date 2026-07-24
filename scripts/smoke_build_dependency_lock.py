@@ -601,8 +601,18 @@ def _expect_installer_error(installer, callback, label: str) -> None:
 def _validate_workflow_usage(workflows: dict[str, str]) -> None:
     _require(tuple(sorted(workflows)) == tuple(sorted(WORKFLOW_PATHS)), "workflow inventory")
     action_inventory = json.loads(_read_lf_text(ACTION_PIN_INVENTORY_PATH))
-    action_pins = action_inventory.get("actions")
-    _require(isinstance(action_pins, dict), "action pin inventory")
+    _require(action_inventory.get("schema_version") == 2, "action pin inventory schema")
+    profiles = action_inventory.get("profiles")
+    _require(isinstance(profiles, dict), "action pin inventory profiles")
+    historical_profile = profiles.get("frozen_historical_release")
+    _require(isinstance(historical_profile, dict), "historical action pin profile")
+    _require(
+        historical_profile.get("lifecycle") == "frozen-historical"
+        and historical_profile.get("recommended_for_new_workflows") is False,
+        "historical action pin lifecycle",
+    )
+    action_pins = historical_profile.get("actions")
+    _require(isinstance(action_pins, dict), "historical action pin inventory")
     checkout_sha = action_pins.get("actions/checkout", {}).get("commit")
     setup_sha = action_pins.get("actions/setup-python", {}).get("commit")
     _require(

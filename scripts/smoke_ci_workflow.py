@@ -1,3 +1,4 @@
+import json
 import re
 import sys
 from pathlib import Path
@@ -6,10 +7,115 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 IMMUTABLE_ACTION_REF = re.compile(r"[0-9a-f]{40}\Z")
+CURRENT_PROFILE = "current_ci"
+EXPECTED_CURRENT_ACTIONS = {
+    "actions/checkout": {
+        "release_tag": "v6.1.0",
+        "commit": "d23441a48e516b6c34aea4fa41551a30e30af803",
+        "action_yml_blob": "5b0524f730db83f9513c18ab31a6c086c7239076",
+    },
+    "actions/setup-python": {
+        "release_tag": "v6.3.0",
+        "commit": "ece7cb06caefa5fff74198d8649806c4678c61a1",
+        "action_yml_blob": "7a9a7b634ec348b35b882f1f14fcaa4d41836a8e",
+    },
+    "actions/upload-artifact": {
+        "release_tag": "v7.0.1",
+        "commit": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "action_yml_blob": "7cb4d1e81db55320b41217e1a78a1a46e3d2baef",
+    },
+    "actions/download-artifact": {
+        "release_tag": "v8.0.1",
+        "commit": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+        "action_yml_blob": "8b8c65029ccad20750a29fecb438eca5a607fc57",
+    },
+}
 
 
 class WorkflowContractError(AssertionError):
     pass
+
+
+def _load_current_ci_policy(root: Path) -> dict:
+    inventory_path = root / ".github" / "actions-pins.json"
+    _require(inventory_path.is_file(), "action pin inventory is missing")
+    _require(not inventory_path.is_symlink(), "action pin inventory must not be a symlink")
+    try:
+        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise WorkflowContractError(f"action pin inventory is invalid JSON: {exc}") from exc
+    _require(inventory.get("schema_version") == 2, "action pin inventory schema must be 2")
+    workflow_profiles = inventory.get("workflow_profiles")
+    _require(
+        isinstance(workflow_profiles, dict)
+        and workflow_profiles.get(".github/workflows/ci.yml") == CURRENT_PROFILE,
+        "CI workflow must map explicitly to current_ci",
+    )
+    profiles = inventory.get("profiles")
+    _require(isinstance(profiles, dict), "action pin profiles are missing")
+    profile = profiles.get(CURRENT_PROFILE)
+    _require(isinstance(profile, dict), "current_ci action pin profile is missing")
+    _require(profile.get("lifecycle") == "current", "current_ci lifecycle must be current")
+    _require(
+        profile.get("recommended_for_new_workflows") is True,
+        "current_ci must be the recommended workflow profile",
+    )
+    actions = profile.get("actions")
+    _require(
+        isinstance(actions, dict) and set(actions) == set(EXPECTED_CURRENT_ACTIONS),
+        "current_ci action set differs",
+    )
+    expected_fields = {
+        "repository",
+        "release_tag",
+        "workflow_comment",
+        "commit",
+        "declared_runtime",
+        "official_repository",
+        "action_yml_blob",
+        "lifecycle",
+        "occurrence_count",
+    }
+    for repository, expected in EXPECTED_CURRENT_ACTIONS.items():
+        entry = actions[repository]
+        _require(
+            isinstance(entry, dict) and set(entry) == expected_fields,
+            f"{repository} current pin fields differ",
+        )
+        _require(entry["repository"] == repository, f"{repository} repository identity differs")
+        _require(
+            entry["release_tag"] == expected["release_tag"]
+            and entry["workflow_comment"] == expected["release_tag"],
+            f"{repository} exact release tag differs",
+        )
+        _require(entry["commit"] == expected["commit"], f"{repository} selected commit differs")
+        _require(
+            entry["action_yml_blob"] == expected["action_yml_blob"],
+            f"{repository} action.yml blob identity differs",
+        )
+        _require(
+            entry["declared_runtime"] == "node24",
+            f"{repository} current runtime must be node24",
+        )
+        _require(
+            entry["official_repository"] is True,
+            f"{repository} must be recorded as an official repository",
+        )
+        _require(entry["lifecycle"] == "current", f"{repository} lifecycle must be current")
+        _require(entry["occurrence_count"] == 1, f"{repository} occurrence count must be one")
+        _require(
+            IMMUTABLE_ACTION_REF.fullmatch(entry["commit"]) is not None,
+            f"{repository} selected commit must be a full lowercase SHA",
+        )
+        _require(
+            IMMUTABLE_ACTION_REF.fullmatch(entry["action_yml_blob"]) is not None,
+            f"{repository} action.yml blob must be a full lowercase SHA",
+        )
+        _require(
+            re.fullmatch(r"v\d+\.\d+\.\d+", entry["release_tag"]) is not None,
+            f"{repository} selected tag must be a stable semantic version",
+        )
+    return actions
 
 
 def verify_workflow_file(root: Path) -> None:
@@ -25,20 +131,23 @@ def verify_workflow_file(root: Path) -> None:
     raw = workflow_path.read_bytes()
     _require(not raw.startswith(b"\xef\xbb\xbf"), "CI workflow file must not use UTF-8 BOM")
     _require(b"\x00" not in raw, "CI workflow file must not contain NUL")
-    validate_workflow(raw.decode("utf-8"))
+    validate_workflow(raw.decode("utf-8"), _load_current_ci_policy(resolved_root))
 
 
 def main() -> int:
     verify_workflow_file(REPO_ROOT)
     workflow = _normalize_newlines(WORKFLOW_PATH.read_text(encoding="utf-8"))
+    current_policy = _load_current_ci_policy(REPO_ROOT)
     _test_negative_mutations(workflow)
     _test_immutable_action_policy(workflow)
-    validate_workflow(workflow + "\n# Harmless trailing comment.\n")
-    print("CI workflow smoke tests passed")
+    validate_workflow(workflow + "\n# Harmless trailing comment.\n", current_policy)
+    print("CI workflow smoke tests passed: exact Node 24 pins and artifact controls")
     return 0
 
 
-def validate_workflow(workflow: str) -> None:
+def validate_workflow(workflow: str, current_policy: dict | None = None) -> None:
+    if current_policy is None:
+        current_policy = _load_current_ci_policy(REPO_ROOT)
     workflow = _normalize_newlines(workflow)
     code = _without_comment_lines(workflow)
     lines = code.splitlines()
@@ -115,9 +224,20 @@ def validate_workflow(workflow: str) -> None:
     checkout = _action_step(steps, "actions/checkout")
     checkout_ref = _action_ref(checkout, "actions/checkout")
     _require_safe_action_ref("actions/checkout", checkout_ref)
+    _require_current_action(checkout, "actions/checkout", current_policy)
+    checkout_with = _mapping_block(checkout, "with", 8)
     _require(
-        _scalar_value(checkout, "fetch-depth", 10) == "0",
+        _direct_mapping_pairs(checkout_with, 10)
+        == [("fetch-depth", "0"), ("persist-credentials", "false")],
+        "checkout inputs must retain fetch-depth and disable persisted credentials",
+    )
+    _require(
+        _scalar_value(checkout_with, "fetch-depth", 10) == "0",
         "checkout action must use fetch-depth: 0 for full history",
+    )
+    _require(
+        _scalar_value(checkout_with, "persist-credentials", 10) == "false",
+        "checkout action must use persist-credentials: false",
     )
     _require(
         _scalar_value(checkout, "ref", 10) is None,
@@ -127,6 +247,7 @@ def validate_workflow(workflow: str) -> None:
     setup_python = _action_step(steps, "actions/setup-python")
     setup_ref = _action_ref(setup_python, "actions/setup-python")
     _require_safe_action_ref("actions/setup-python", setup_ref)
+    _require_current_action(setup_python, "actions/setup-python", current_policy)
     python_version = _scalar_value(setup_python, "python-version", 10)
     _require(
         _unquote(python_version) == "3.11.9",
@@ -308,16 +429,28 @@ def validate_workflow(workflow: str) -> None:
     )
     upload_ref = _action_ref(upload_step, "actions/upload-artifact")
     _require_safe_action_ref("actions/upload-artifact", upload_ref)
-    for required in (
-        "id: upload-release-bundle",
-        "ci-release-bundle-${{ github.run_id }}-${{ github.run_attempt }}",
-        "if-no-files-found: error",
-        "compression-level: 0",
-        "overwrite: false",
-        "include-hidden-files: false",
-        "retention-days: 1",
-    ):
-        _require(required in "\n".join(upload_step), f"synthetic upload is missing: {required}")
+    _require_current_action(upload_step, "actions/upload-artifact", current_policy)
+    _require(
+        "id: upload-release-bundle" in "\n".join(upload_step),
+        "synthetic upload step ID is missing",
+    )
+    upload_with = _mapping_block(upload_step, "with", 8)
+    _require(
+        _direct_mapping_pairs(upload_with, 10)
+        == [
+            ("name", "ci-release-bundle-${{ github.run_id }}-${{ github.run_attempt }}"),
+            (
+                "path",
+                "${{ runner.temp }}/s9h-ci-release-${{ github.run_id }}-${{ github.run_attempt }}/publish-bundle",
+            ),
+            ("if-no-files-found", "error"),
+            ("compression-level", "0"),
+            ("overwrite", "false"),
+            ("include-hidden-files", "false"),
+            ("retention-days", "1"),
+        ],
+        "synthetic upload inputs, retention-days or archive behavior changed",
+    )
     report_text = "\n".join(report_step)
     _require("^[0-9a-f]{64}$" in report_text, "producer artifact digest validation is missing")
 
@@ -353,6 +486,7 @@ def validate_workflow(workflow: str) -> None:
         _require(required in output_text, f"handoff output validation is missing: {required}")
     download_ref = _action_ref(download, "actions/download-artifact")
     _require_safe_action_ref("actions/download-artifact", download_ref)
+    _require_current_action(download, "actions/download-artifact", current_policy)
     download_text = "\n".join(download)
     download_with = _mapping_block(download, "with", 8)
     _require(
@@ -365,8 +499,9 @@ def validate_workflow(workflow: str) -> None:
             ("artifact-ids", "${{ needs.windows-smoke.outputs.artifact-id }}"),
             ("path", "release-bundle"),
             ("merge-multiple", "true"),
+            ("digest-mismatch", "error"),
         ],
-        "handoff download must use only the producer artifact ID",
+        "handoff download must use only the producer artifact ID and fail on digest mismatch",
     )
     verifier_text = "\n".join(verifier)
     for required in (
@@ -424,6 +559,11 @@ def validate_workflow(workflow: str) -> None:
         code,
         r"(?i)(?:secrets\s*\.|GH_TOKEN|github\.token)",
         "secret references must be absent",
+    )
+    _forbid(
+        code,
+        r"(?im)^\s*git\s+(?:push|fetch|pull|clone|submodule)\b",
+        "CI must not require persisted Git credentials",
     )
     _forbid(
         code,
@@ -581,6 +721,23 @@ def _require_safe_action_ref(action: str, ref: str) -> None:
     )
 
 
+def _require_current_action(step: list[str], action: str, current_policy: dict) -> None:
+    text = "\n".join(step)
+    match = re.search(
+        rf"(?m)^\s*(?:-\s*)?uses:\s*{re.escape(action)}@([^\s#]+)\s+#\s*"
+        rf"(v\d+\.\d+\.\d+)\s*$",
+        text,
+    )
+    _require(match is not None, f"{action} must include an exact semantic-version comment")
+    ref, comment = match.groups()
+    expected = current_policy[action]
+    _require(ref == expected["commit"], f"{action} ref differs from selected release")
+    _require(
+        comment == expected["workflow_comment"],
+        f"{action} semantic-version comment differs from inventory",
+    )
+
+
 def _test_negative_mutations(workflow: str) -> None:
     mutations = (
         (
@@ -596,6 +753,20 @@ def _test_negative_mutations(workflow: str) -> None:
             "missing fetch depth",
             _replace_once(workflow, "          fetch-depth: 0\n", ""),
             "fetch-depth",
+        ),
+        (
+            "missing persist credentials control",
+            _replace_once(workflow, "          persist-credentials: false\n", ""),
+            "credentials",
+        ),
+        (
+            "persisted checkout credentials",
+            _replace_once(
+                workflow,
+                "          persist-credentials: false",
+                "          persist-credentials: true",
+            ),
+            "credentials",
         ),
         (
             "workflow dispatch",
@@ -872,6 +1043,20 @@ def _test_negative_mutations(workflow: str) -> None:
             "merge-multiple",
         ),
         (
+            "missing digest mismatch control",
+            _replace_once(workflow, "          digest-mismatch: error\n", ""),
+            "digest mismatch",
+        ),
+        (
+            "ignored digest mismatch",
+            _replace_once(
+                workflow,
+                "          digest-mismatch: error",
+                "          digest-mismatch: ignore",
+            ),
+            "digest mismatch",
+        ),
+        (
             "false merge-multiple",
             _replace_once(
                 workflow,
@@ -964,20 +1149,6 @@ def _test_immutable_action_policy(workflow: str) -> None:
     setup_ref = _workflow_action_ref(workflow, "actions/setup-python")
     upload_ref = _workflow_action_ref(workflow, "actions/upload-artifact")
     download_ref = _workflow_action_ref(workflow, "actions/download-artifact")
-    generic_pins = _replace_action_ref(
-        _replace_action_ref(
-            _replace_action_ref(
-                _replace_action_ref(workflow, "actions/checkout", "a" * 40),
-                "actions/setup-python",
-                "b" * 40,
-            ),
-            "actions/upload-artifact",
-            "c" * 40,
-        ),
-        "actions/download-artifact",
-        "d" * 40,
-    )
-    validate_workflow(generic_pins)
 
     mutations = (
         (
@@ -1011,6 +1182,18 @@ def _test_immutable_action_policy(workflow: str) -> None:
         (
             "nonhex 40-character ref",
             _replace_action_ref(workflow, "actions/checkout", "g" * 40),
+        ),
+        (
+            "different valid full SHA",
+            _replace_action_ref(workflow, "actions/checkout", "a" * 40),
+        ),
+        (
+            "semantic-version comment mismatch",
+            _replace_once(workflow, "# v6.1.0", "# v6.0.0"),
+        ),
+        (
+            "third-party checkout substitution",
+            _replace_once(workflow, "actions/checkout@", "third-party/checkout@"),
         ),
         (
             "mutable runner",
