@@ -230,12 +230,17 @@ def main() -> int:
     inventory = _load_inventory()
     validate_supply_chain(documents, inventory)
     owner_negative_count = _test_current_owner_delegation()
+    canonical_positive_count, canonical_negative_count = (
+        _test_cross_platform_historical_blob_validation(documents, inventory)
+    )
     r3a_negative_count = _test_r3a_negative_mutations(documents, inventory)
     _test_negative_mutations(documents, inventory)
     print(
         "workflow supply-chain smoke tests passed: "
         f"18 R3a positive contracts, {r3a_negative_count} R3a negative mutations, "
-        f"{owner_negative_count} current-owner negative regressions"
+        f"{owner_negative_count} current-owner negative regressions, "
+        f"{canonical_positive_count} canonical-text positive regressions, "
+        f"{canonical_negative_count} canonical-text negative regressions"
     )
     return 0
 
@@ -255,7 +260,7 @@ def validate_supply_chain(documents: dict[str, str], inventory: dict) -> None:
     for path, workflow in documents.items():
         if path in HISTORICAL_WORKFLOW_BLOBS:
             _require(
-                _git_blob_sha1(workflow.encode("utf-8"))
+                _canonical_git_text_blob_sha1(path, workflow)
                 == HISTORICAL_WORKFLOW_BLOBS[path],
                 f"{path} differs from its frozen historical Git blob",
             )
@@ -342,10 +347,11 @@ def validate_supply_chain(documents: dict[str, str], inventory: dict) -> None:
 
 def _load_workflows() -> dict[str, str]:
     paths = sorted(WORKFLOW_DIR.glob("*.yml"))
-    return {
-        path.relative_to(REPO_ROOT).as_posix(): path.read_bytes().decode("utf-8")
-        for path in paths
-    }
+    workflows = {}
+    for path in paths:
+        relative = path.relative_to(REPO_ROOT).as_posix()
+        workflows[relative] = _decode_workflow_bytes(relative, path.read_bytes())
+    return workflows
 
 
 def _load_inventory() -> dict:
@@ -1054,6 +1060,187 @@ def _test_current_owner_delegation() -> int:
                 raise SupplyChainContractError("missing current-owner delegation was accepted")
     provider_verifier._CURRENT_OWNER_CACHE.clear()
     return 2
+
+
+def _test_cross_platform_historical_blob_validation(
+    documents: dict[str, str],
+    inventory: dict,
+) -> tuple[int, int]:
+    canonical_documents = copy.deepcopy(documents)
+    for path in HISTORICAL_WORKFLOW_BLOBS:
+        canonical_documents[path] = _canonical_git_text_bytes(
+            path,
+            documents[path],
+        ).decode("utf-8")
+    validate_supply_chain(canonical_documents, inventory)
+
+    crlf_documents = copy.deepcopy(canonical_documents)
+    for path in HISTORICAL_WORKFLOW_BLOBS:
+        crlf_documents[path] = canonical_documents[path].replace("\n", "\r\n")
+    validate_supply_chain(crlf_documents, inventory)
+
+    for path, expected_blob in HISTORICAL_WORKFLOW_BLOBS.items():
+        _require(
+            _canonical_git_text_blob_sha1(path, canonical_documents[path])
+            == expected_blob,
+            f"{path} canonical LF regression differs",
+        )
+        _require(
+            _canonical_git_text_blob_sha1(path, crlf_documents[path])
+            == expected_blob,
+            f"{path} equivalent CRLF regression differs",
+        )
+        _require(
+            _canonical_git_text_blob_sha1(path, canonical_documents[path])
+            == _canonical_git_text_blob_sha1(path, crlf_documents[path]),
+            f"{path} LF and CRLF canonical identities differ",
+        )
+
+    mixed_path = ".github/workflows/release-v1.3.1.yml"
+    mixed_lines = canonical_documents[mixed_path].splitlines(keepends=True)
+    mixed = "".join(
+        line.replace("\n", "\r\n") if index % 2 else line
+        for index, line in enumerate(mixed_lines)
+    )
+    _require("\r\n" in mixed and "\n" in mixed, "mixed-EOL fixture is incomplete")
+    _require(
+        _canonical_git_text_blob_sha1(mixed_path, mixed)
+        == HISTORICAL_WORKFLOW_BLOBS[mixed_path],
+        "mixed LF/CRLF canonical identity differs",
+    )
+
+    _require(
+        crlf_documents[CI_WORKFLOW] == documents[CI_WORKFLOW],
+        "current CI workflow changed in the historical EOL fixture",
+    )
+    _require(inventory["schema_version"] == 2, "schema-2 action pin inventory changed")
+
+    events: list[tuple[str, str]] = []
+    canonical_blob = _canonical_git_text_blob_sha1
+    trigger_policy = _validate_trigger_policy
+
+    def observe_blob(path: str, workflow: str) -> str:
+        events.append(("identity", path))
+        return canonical_blob(path, workflow)
+
+    def observe_semantics(path: str, workflow: str) -> None:
+        events.append(("semantics", path))
+        trigger_policy(path, workflow)
+
+    module = sys.modules[__name__]
+    with (
+        mock.patch.object(
+            module,
+            "_canonical_git_text_blob_sha1",
+            side_effect=observe_blob,
+        ),
+        mock.patch.object(
+            module,
+            "_validate_trigger_policy",
+            side_effect=observe_semantics,
+        ),
+    ):
+        validate_supply_chain(canonical_documents, inventory)
+    for path in HISTORICAL_WORKFLOW_BLOBS:
+        _require(
+            events.index(("identity", path)) < events.index(("semantics", path)),
+            f"{path} semantics ran before canonical identity validation",
+        )
+
+    historical_path = ".github/workflows/release-v1.3.1.yml"
+    historical = canonical_documents[historical_path]
+    checkout = HISTORICAL_ACTIONS["actions/checkout"]
+    action_line = (
+        f"actions/checkout@{checkout['commit']} "
+        f"# {checkout['workflow_comment']}"
+    )
+    negative_documents: list[tuple[str, dict[str, str]]] = []
+
+    mutated = copy.deepcopy(canonical_documents)
+    mutated[historical_path] += "# historical content mutation\n"
+    negative_documents.append(("historical content mutation", mutated))
+
+    mutated = copy.deepcopy(canonical_documents)
+    _require(action_line in historical, "historical action SHA fixture is missing")
+    mutated[historical_path] = historical.replace(
+        action_line,
+        f"actions/checkout@{'0' * 40} # {checkout['workflow_comment']}",
+        1,
+    )
+    negative_documents.append(("historical action SHA mutation", mutated))
+
+    mutated = copy.deepcopy(canonical_documents)
+    _require(action_line in historical, "historical action comment fixture is missing")
+    mutated[historical_path] = historical.replace(
+        action_line,
+        f"actions/checkout@{checkout['commit']} # v4.3.1-mutated",
+        1,
+    )
+    negative_documents.append(("historical action comment mutation", mutated))
+
+    mutated = copy.deepcopy(canonical_documents)
+    mutated[historical_path] = historical + "\n"
+    negative_documents.append(("historical blank line addition", mutated))
+
+    _require(historical.endswith("\n"), "historical final-newline fixture is missing")
+    mutated = copy.deepcopy(canonical_documents)
+    mutated[historical_path] = historical[:-1]
+    negative_documents.append(("historical final newline removal", mutated))
+
+    mutated = copy.deepcopy(canonical_documents)
+    mutated[historical_path] = historical.replace("\n", " \n", 1)
+    negative_documents.append(("historical trailing whitespace mutation", mutated))
+
+    mutated = copy.deepcopy(canonical_documents)
+    mutated[historical_path] = "\ufeff" + historical
+    _expect_canonical_text_failure(
+        "historical UTF-8 BOM",
+        historical_path,
+        mutated[historical_path],
+        "starts with a UTF-8 BOM",
+    )
+    negative_documents.append(("historical UTF-8 BOM", mutated))
+
+    mutated = copy.deepcopy(canonical_documents)
+    mutated[historical_path] = "\r" + historical
+    _expect_canonical_text_failure(
+        "historical bare CR",
+        historical_path,
+        mutated[historical_path],
+        "contains a bare CR",
+    )
+    negative_documents.append(("historical bare CR", mutated))
+
+    try:
+        _decode_workflow_bytes(historical_path, b"\xff")
+    except SupplyChainContractError as exc:
+        _require(
+            "is not valid UTF-8" in str(exc),
+            "invalid UTF-8 failure category differs",
+        )
+    else:
+        raise SupplyChainContractError("invalid UTF-8 workflow bytes were accepted")
+
+    mutated = copy.deepcopy(canonical_documents)
+    mutated[historical_path] = _canonical_git_text_bytes(
+        CI_WORKFLOW,
+        canonical_documents[CI_WORKFLOW],
+    ).decode("utf-8")
+    negative_documents.append(("historical workflow replaced by current CI", mutated))
+
+    for label, mutated in negative_documents:
+        _expect_failure(label, mutated, inventory)
+
+    changed_blobs = dict(HISTORICAL_WORKFLOW_BLOBS)
+    changed_blobs[historical_path] = "0" * 40
+    with mock.patch.object(module, "HISTORICAL_WORKFLOW_BLOBS", changed_blobs):
+        _expect_failure(
+            "expected historical blob identity changed",
+            canonical_documents,
+            inventory,
+        )
+
+    return 9, len(negative_documents) + 2
 
 
 def _test_r3a_negative_mutations(documents: dict[str, str], inventory: dict) -> int:
@@ -1807,6 +1994,44 @@ def _replace_once(value: str, old: str, new: str) -> str:
 
 def _normalize_newlines(value: str) -> str:
     return value.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _decode_workflow_bytes(path: str, value: bytes) -> str:
+    try:
+        return value.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SupplyChainContractError(f"{path} is not valid UTF-8") from exc
+
+
+def _canonical_git_text_bytes(path: str, value: str) -> bytes:
+    _require(
+        not value.startswith("\ufeff"),
+        f"{path} starts with a UTF-8 BOM",
+    )
+    canonical = value.replace("\r\n", "\n")
+    _require("\r" not in canonical, f"{path} contains a bare CR")
+    return canonical.encode("utf-8")
+
+
+def _canonical_git_text_blob_sha1(path: str, value: str) -> str:
+    return _git_blob_sha1(_canonical_git_text_bytes(path, value))
+
+
+def _expect_canonical_text_failure(
+    label: str,
+    path: str,
+    value: str,
+    expected_message: str,
+) -> None:
+    try:
+        _canonical_git_text_bytes(path, value)
+    except SupplyChainContractError as exc:
+        _require(
+            expected_message in str(exc),
+            f"{label} failure category differs",
+        )
+        return
+    raise SupplyChainContractError(f"{label} was accepted")
 
 
 def _git_blob_sha1(value: bytes) -> str:
