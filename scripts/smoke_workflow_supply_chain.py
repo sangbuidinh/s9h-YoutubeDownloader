@@ -229,12 +229,17 @@ def main() -> int:
     documents = _load_workflows()
     inventory = _load_inventory()
     validate_supply_chain(documents, inventory)
+    mutation_documents = _normalize_mutation_fixture_documents(documents)
     owner_negative_count = _test_current_owner_delegation()
     canonical_positive_count, canonical_negative_count = (
         _test_cross_platform_historical_blob_validation(documents, inventory)
     )
-    r3a_negative_count = _test_r3a_negative_mutations(documents, inventory)
-    _test_negative_mutations(documents, inventory)
+    _test_mutation_fixture_document_boundary(documents, inventory)
+    r3a_negative_count = _test_r3a_negative_mutations(
+        mutation_documents,
+        inventory,
+    )
+    _test_negative_mutations(mutation_documents, inventory)
     print(
         "workflow supply-chain smoke tests passed: "
         f"18 R3a positive contracts, {r3a_negative_count} R3a negative mutations, "
@@ -352,6 +357,15 @@ def _load_workflows() -> dict[str, str]:
         relative = path.relative_to(REPO_ROOT).as_posix()
         workflows[relative] = _decode_workflow_bytes(relative, path.read_bytes())
     return workflows
+
+
+def _normalize_mutation_fixture_documents(
+    documents: dict[str, str],
+) -> dict[str, str]:
+    return {
+        path: _normalize_newlines(workflow)
+        for path, workflow in documents.items()
+    }
 
 
 def _load_inventory() -> dict:
@@ -1241,6 +1255,64 @@ def _test_cross_platform_historical_blob_validation(
         )
 
     return 9, len(negative_documents) + 2
+
+
+def _test_mutation_fixture_document_boundary(
+    documents: dict[str, str],
+    inventory: dict,
+) -> None:
+    crlf_documents = {
+        path: _normalize_newlines(workflow).replace("\n", "\r\n")
+        for path, workflow in documents.items()
+    }
+    validate_supply_chain(crlf_documents, inventory)
+
+    mutation_documents = _normalize_mutation_fixture_documents(crlf_documents)
+    for path, workflow in mutation_documents.items():
+        _require("\r" not in workflow, f"{path} mutation fixture contains CR")
+        _require(
+            workflow.endswith("\n") == crlf_documents[path].endswith("\n"),
+            f"{path} mutation fixture changed final-newline semantics",
+        )
+
+    persist_credentials = "          persist-credentials: false\n"
+    _require(
+        mutation_documents[CI_WORKFLOW].count(persist_credentials) == 1,
+        "normalized persist-credentials mutation target is not unique",
+    )
+
+    try:
+        _test_r3a_negative_mutations(crlf_documents, inventory)
+    except SupplyChainContractError as exc:
+        _require(
+            str(exc)
+            == f"mutation source is not unique: {persist_credentials!r}",
+            "raw CRLF mutation fixture failed in a different category",
+        )
+    else:
+        raise SupplyChainContractError(
+            "raw CRLF documents were accepted by LF-specific mutation builders"
+        )
+
+    _require(
+        _test_r3a_negative_mutations(mutation_documents, inventory) == 25,
+        "normalized CRLF-derived R3a mutation count differs",
+    )
+    _test_negative_mutations(mutation_documents, inventory)
+
+    for label, value, old in (
+        ("zero-match", "alpha\n", "missing\n"),
+        ("multiple-match", "target\ntarget\n", "target\n"),
+    ):
+        try:
+            _replace_once(value, old, "replacement\n")
+        except SupplyChainContractError as exc:
+            _require(
+                "mutation source is not unique" in str(exc),
+                f"{label} replacement failed in a different category",
+            )
+        else:
+            raise SupplyChainContractError(f"{label} replacement was accepted")
 
 
 def _test_r3a_negative_mutations(documents: dict[str, str], inventory: dict) -> int:
