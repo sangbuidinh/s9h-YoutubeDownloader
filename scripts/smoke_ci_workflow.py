@@ -1,6 +1,14 @@
+import hashlib
 import json
+import os
 import re
+import shutil
+import stat
+import subprocess
 import sys
+import tempfile
+import warnings
+import zipfile
 from pathlib import Path
 
 
@@ -8,6 +16,20 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 IMMUTABLE_ACTION_REF = re.compile(r"[0-9a-f]{40}\Z")
 CURRENT_PROFILE = "current_ci"
+RAW_EXTRACTION_STEP = "Extract and validate raw synthetic artifact archive"
+RAW_EXTRACTION_SUCCESS = "Secure raw synthetic artifact extraction verified"
+MAX_EXTRACTION_ENTRY_COUNT = 128
+MAX_EXTRACTION_BYTES = 16777216
+UPSTREAM_DOWNLOAD_ARTIFACT_WARNING_CONTRACT = {
+    "release": "v8.0.1",
+    "commit": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+    "issue": "actions/download-artifact#484",
+    "warning_path": "upstream extraction path",
+    "supported_input": "skip-decompress",
+    "digest_check": "remains inside actions/download-artifact",
+    "repository_extraction": "independently fail-closed",
+    "node_options": "--throw-deprecation",
+}
 EXPECTED_CURRENT_ACTIONS = {
     "actions/checkout": {
         "release_tag": "v6.1.0",
@@ -140,8 +162,14 @@ def main() -> int:
     current_policy = _load_current_ci_policy(REPO_ROOT)
     _test_negative_mutations(workflow)
     _test_immutable_action_policy(workflow)
+    positive_count, negative_count = _test_secure_extraction_fixtures(workflow)
     validate_workflow(workflow + "\n# Harmless trailing comment.\n", current_policy)
-    print("CI workflow smoke tests passed: exact Node 24 pins and artifact controls")
+    _verify_upstream_download_artifact_warning_contract()
+    print(
+        "CI workflow smoke tests passed: exact Node 24 pins, raw artifact controls, "
+        f"{positive_count} secure extraction positive fixture and "
+        f"{negative_count} secure extraction negative fixtures"
+    )
     return 0
 
 
@@ -469,12 +497,13 @@ def validate_workflow(workflow: str, current_policy: dict | None = None) -> None
         "handoff runner must be windows-2022",
     )
     handoff_steps = _step_blocks(handoff)
-    _require(len(handoff_steps) == 3, "handoff job must contain exactly three steps")
+    _require(len(handoff_steps) == 4, "handoff job must contain exactly four steps")
     output_check = _named_step(handoff_steps, "Validate immutable synthetic bundle outputs")
     download = _action_step(handoff_steps, "actions/download-artifact")
+    extractor = _named_step(handoff_steps, RAW_EXTRACTION_STEP)
     verifier = _named_step(handoff_steps, "Verify synthetic release bundle handoff")
     _require(
-        handoff_steps == [output_check, download, verifier],
+        handoff_steps == [output_check, download, extractor, verifier],
         "handoff job step order is invalid",
     )
     output_text = "\n".join(output_check)
@@ -488,21 +517,106 @@ def validate_workflow(workflow: str, current_policy: dict | None = None) -> None
     _require_safe_action_ref("actions/download-artifact", download_ref)
     _require_current_action(download, "actions/download-artifact", current_policy)
     download_text = "\n".join(download)
+    download_env = _mapping_block(download, "env", 8)
+    _require(
+        _direct_mapping_pairs(download_env, 10)
+        == [("NODE_OPTIONS", "--throw-deprecation")],
+        "handoff download NODE_OPTIONS must fail on Node deprecations",
+    )
     download_with = _mapping_block(download, "with", 8)
     _require(
         _scalar_value(download_with, "merge-multiple", 10) == "true",
         "handoff download merge-multiple must be the YAML boolean true",
     )
     _require(
+        _scalar_value(download_with, "skip-decompress", 10) == "true",
+        "handoff download skip-decompress must be the YAML boolean true",
+    )
+    _require(
+        _scalar_value(download_with, "digest-mismatch", 10) == "error",
+        "handoff download digest mismatch must fail with error",
+    )
+    _require(
         _direct_mapping_pairs(download_with, 10)
         == [
             ("artifact-ids", "${{ needs.windows-smoke.outputs.artifact-id }}"),
-            ("path", "release-bundle"),
+            ("path", "artifact-download"),
             ("merge-multiple", "true"),
+            ("skip-decompress", "true"),
             ("digest-mismatch", "error"),
         ],
-        "handoff download must use only the producer artifact ID and fail on digest mismatch",
+        "handoff download must preserve the immutable raw-artifact contract",
     )
+    extractor_text = "\n".join(extractor)
+    extractor_env = _mapping_block(extractor, "env", 8)
+    _require(
+        _direct_mapping_pairs(extractor_env, 10)
+        == [
+            (
+                "ARTIFACT_DIGEST",
+                "${{ needs.windows-smoke.outputs.artifact-digest }}",
+            )
+        ],
+        "secure extraction must use only the immutable producer digest",
+    )
+    for required in (
+        "Add-Type -AssemblyName System.IO.Compression",
+        "Get-RawZipEntryNames",
+        "raw NUL or backslash entry name",
+        "$entryName -cne [string]$entry.FullName",
+        "$MaxEntryCount = 128",
+        "$MaxTotalUncompressedBytes = 16777216",
+        RAW_EXTRACTION_SUCCESS,
+        'Join-Path $workspace "artifact-download"',
+        'Join-Path $workspace "release-bundle"',
+        "Assert-BelowRoot $workspace $rawRoot",
+        "Assert-BelowRoot $workspace $destinationRoot",
+        "$rawFiles.Count -ne 1",
+        "$rawDirectories.Count -ne 0",
+        "$rawReparsePoints.Count -ne 0",
+        '^[0-9a-f]{64}$',
+        "Get-FileHash -LiteralPath $rawArchive.FullName -Algorithm SHA256",
+        "$actualDigest -cne $env:ARTIFACT_DIGEST",
+        "[IO.Compression.ZipArchive]::new",
+        "$entries.Count -gt $MaxEntryCount",
+        "$entryName.IndexOf([char]0)",
+        '$entryName.Contains("\\")',
+        '$entryName.Contains(":")',
+        '$entryName.StartsWith("/")',
+        "[IO.Path]::IsPathRooted($entryName)",
+        "$_ -ceq \".\" -or $_ -ceq \"..\"",
+        "[StringComparer]::Ordinal",
+        "[StringComparer]::OrdinalIgnoreCase",
+        "$caseInsensitivePaths.Add($normalizedPath)",
+        "$unixFileType -eq 0xA000",
+        "$declaredTotal -gt $MaxTotalUncompressedBytes",
+        'Assert-BelowRoot $destinationRoot $targetPath "Raw artifact ZIP entry"',
+        "[IO.FileMode]::CreateNew",
+        "$actualTotal -gt $MaxTotalUncompressedBytes",
+        "$archive.Dispose()",
+        "$archiveStream.Dispose()",
+        "Release bundle contains a reparse point after extraction",
+        "[IO.Directory]::Delete($rawRoot, $true)",
+        "Raw artifact root was not removed after extraction",
+        "Write-Host $SuccessMessage",
+    ):
+        _require(required in extractor_text, f"secure extraction contract is missing: {required}")
+    for forbidden in (
+        "Expand-Archive",
+        "Invoke-WebRequest",
+        "Invoke-RestMethod",
+        "Start-Process",
+        "python ",
+        "pip ",
+        "gh api",
+        "curl ",
+        "wget ",
+        "7z ",
+    ):
+        _require(
+            forbidden.casefold() not in extractor_text.casefold(),
+            f"secure extraction uses a forbidden command: {forbidden}",
+        )
     verifier_text = "\n".join(verifier)
     for required in (
         "Synthetic release bundle v3 handoff verified",
@@ -541,6 +655,18 @@ def validate_workflow(workflow: str, current_policy: dict | None = None) -> None
     handoff_text = "\n".join(handoff)
     _require("actions/checkout@" not in handoff_text, "handoff job must not checkout source")
     _require("actions/setup-python@" not in handoff_text, "handoff job must not setup Python")
+    _require(
+        handoff_text.count("actions/download-artifact@") == 1,
+        "handoff job must contain exactly one download action",
+    )
+    for forbidden in (
+        "NODE_NO_WARNINGS",
+        "--no-deprecation",
+        "--no-warnings",
+        "ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION",
+        "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24",
+    ):
+        _require(forbidden not in handoff_text, f"handoff warning suppression is forbidden: {forbidden}")
 
     _require("continue-on-error" not in code, "continue-on-error must be absent")
     _forbid(
@@ -1043,6 +1169,29 @@ def _test_negative_mutations(workflow: str) -> None:
             "merge-multiple",
         ),
         (
+            "missing skip-decompress",
+            _replace_once(workflow, "          skip-decompress: true\n", ""),
+            "skip-decompress",
+        ),
+        (
+            "false skip-decompress",
+            _replace_once(
+                workflow,
+                "          skip-decompress: true",
+                "          skip-decompress: false",
+            ),
+            "skip-decompress",
+        ),
+        (
+            "quoted true skip-decompress",
+            _replace_once(
+                workflow,
+                "          skip-decompress: true",
+                '          skip-decompress: "true"',
+            ),
+            "skip-decompress",
+        ),
+        (
             "missing digest mismatch control",
             _replace_once(workflow, "          digest-mismatch: error\n", ""),
             "digest mismatch",
@@ -1090,16 +1239,16 @@ def _test_negative_mutations(workflow: str) -> None:
                 "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}",
                 "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}, 123",
             ),
-            "artifact ID",
+            "raw-artifact contract",
         ),
         (
             "nested artifact destination",
             _replace_once(
                 workflow,
-                "          path: release-bundle",
-                "          path: release-bundle/nested",
+                "          path: artifact-download",
+                "          path: artifact-download/nested",
             ),
-            "artifact ID",
+            "raw-artifact contract",
         ),
         (
             "artifact name input",
@@ -1109,7 +1258,7 @@ def _test_negative_mutations(workflow: str) -> None:
                 "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}\n"
                 "          name: synthetic-release-bundle",
             ),
-            "artifact ID",
+            "raw-artifact contract",
         ),
         (
             "artifact pattern input",
@@ -1119,13 +1268,128 @@ def _test_negative_mutations(workflow: str) -> None:
                 "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}\n"
                 "          pattern: synthetic-*",
             ),
-            "artifact ID",
+            "raw-artifact contract",
+        ),
+        (
+            "missing throw-deprecation",
+            _replace_once(
+                workflow,
+                "        env:\n          NODE_OPTIONS: --throw-deprecation\n",
+                "",
+            ),
+            "mapping is missing: env",
+        ),
+        (
+            "warning suppression",
+            _replace_once(
+                workflow,
+                "          NODE_OPTIONS: --throw-deprecation",
+                "          NODE_OPTIONS: --no-warnings",
+            ),
+            "NODE_OPTIONS",
+        ),
+        (
+            "missing secure extraction step",
+            _remove_named_step(workflow, RAW_EXTRACTION_STEP),
+            "exactly four steps",
+        ),
+        (
+            "secure extraction reordered",
+            _move_named_step_before(
+                workflow,
+                "Verify synthetic release bundle handoff",
+                RAW_EXTRACTION_STEP,
+            ),
+            "step order",
+        ),
+        (
+            "secure extraction continue-on-error",
+            _replace_once(
+                workflow,
+                f"      - name: {RAW_EXTRACTION_STEP}\n",
+                f"      - name: {RAW_EXTRACTION_STEP}\n        continue-on-error: true\n",
+            ),
+            "continue-on-error",
+        ),
+        (
+            "Expand-Archive extraction",
+            _replace_once(
+                workflow,
+                "          Add-Type -AssemblyName System.IO.Compression",
+                "          Expand-Archive -LiteralPath raw.zip -DestinationPath release-bundle",
+            ),
+            "secure extraction contract",
+        ),
+        (
+            "raw digest comparison removed",
+            _replace_once(
+                workflow,
+                "          if ($actualDigest -cne $env:ARTIFACT_DIGEST) {",
+                "          if ($false) {",
+            ),
+            "secure extraction contract",
+        ),
+        (
+            "exact-one-raw-file gate removed",
+            _replace_once(
+                workflow,
+                "              $rawFiles.Count -ne 1 -or",
+                "              $rawFiles.Count -lt 1 -or",
+            ),
+            "secure extraction contract",
+        ),
+        (
+            "path traversal gate removed",
+            _replace_once(
+                workflow,
+                '$_ -ceq "." -or $_ -ceq ".."',
+                '$_ -ceq "." -or $_ -ceq "..."',
+            ),
+            "secure extraction contract",
+        ),
+        (
+            "case-insensitive duplicate gate removed",
+            _replace_once(
+                workflow,
+                "                  if (-not $caseInsensitivePaths.Add($normalizedPath)) {",
+                "                  if ($false) {",
+            ),
+            "secure extraction contract",
+        ),
+        (
+            "UNIX symlink gate removed",
+            _replace_once(
+                workflow,
+                "                  if ($unixFileType -eq 0xA000) {",
+                "                  if ($false) {",
+            ),
+            "secure extraction contract",
+        ),
+        (
+            "declared extraction size cap removed",
+            _replace_once(
+                workflow,
+                "                  if ($declaredTotal -gt $MaxTotalUncompressedBytes) {",
+                "                  if ($false) {",
+            ),
+            "secure extraction contract",
+        ),
+        (
+            "raw archive cleanup removed",
+            _replace_once(
+                workflow,
+                "          [IO.Directory]::Delete($rawRoot, $true)",
+                "          Write-Host \"raw archive retained\"",
+            ),
+            "secure extraction contract",
         ),
         (
             "missing handoff digest validation",
             _replace_once(
                 workflow,
+                "          ARTIFACT_ID: ${{ needs.windows-smoke.outputs.artifact-id }}\n"
                 "          ARTIFACT_DIGEST: ${{ needs.windows-smoke.outputs.artifact-digest }}",
+                "          ARTIFACT_ID: ${{ needs.windows-smoke.outputs.artifact-id }}\n"
                 "          ARTIFACT_DIGEST: invalid",
             ),
             "artifact-digest",
@@ -1142,6 +1406,399 @@ def _test_negative_mutations(workflow: str) -> None:
     )
     for label, mutated, expected in mutations:
         _expect_contract_failure(label, mutated, expected)
+
+
+def _test_secure_extraction_fixtures(workflow: str) -> tuple[int, int]:
+    _require(os.name == "nt", "secure extraction fixtures require Windows")
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    _require(powershell is not None, "PowerShell is required for secure extraction fixtures")
+    body = _secure_extraction_body(workflow)
+    negative_labels: list[str] = []
+
+    with tempfile.TemporaryDirectory(prefix="s9h-secure-extraction-") as temp_name:
+        temp_root = Path(temp_name).resolve()
+
+        positive_root = temp_root / "positive"
+        positive_workspace = positive_root / "workspace"
+        positive_raw = positive_workspace / "artifact-download"
+        positive_raw.mkdir(parents=True)
+        expected_files = {
+            "RELEASE_MANIFEST.json": b'{"schema_version":3}\n',
+            "assets/checksum.txt": b"0123456789abcdef\n",
+        }
+        positive_archive = positive_raw / "synthetic-artifact.bin"
+        _write_fixture_zip(
+            positive_archive,
+            [
+                ("assets/", b"", None),
+                *[(name, data, None) for name, data in expected_files.items()],
+            ],
+        )
+        positive_digest = _sha256_file(positive_archive)
+        positive_result = _execute_extraction_body(
+            powershell,
+            body,
+            positive_root,
+            positive_workspace,
+            positive_digest,
+        )
+        _require(
+            positive_result.returncode == 0,
+            "secure extraction positive fixture failed: "
+            + _combined_process_output(positive_result),
+        )
+        positive_output = _combined_process_output(positive_result)
+        _require(
+            positive_output.count(RAW_EXTRACTION_SUCCESS) == 1,
+            "secure extraction positive fixture success message differs",
+        )
+        positive_bundle = positive_workspace / "release-bundle"
+        for relative, expected in expected_files.items():
+            path = positive_bundle / Path(relative)
+            _require(path.is_file(), f"secure extraction positive file is missing: {relative}")
+            _require(
+                path.read_bytes() == expected,
+                f"secure extraction positive content differs: {relative}",
+            )
+        _require(not positive_raw.exists(), "secure extraction positive raw root remains")
+        _require(
+            not (positive_root / "outside.txt").exists(),
+            "secure extraction positive fixture wrote outside the workspace",
+        )
+
+        def run_negative(
+            label: str,
+            entries: list[tuple[str, bytes, int | None]] | None = None,
+            *,
+            digest_override: str | None = None,
+            extra_raw_file: bool = False,
+            raw_subdirectory: bool = False,
+            destination_preexists: bool = False,
+            expect_clean_destination: bool = False,
+            unsupported_compression_entry: str | None = None,
+        ) -> None:
+            case_root = temp_root / f"negative-{len(negative_labels) + 1:02d}"
+            workspace = case_root / "workspace"
+            raw_root = workspace / "artifact-download"
+            raw_root.mkdir(parents=True)
+            archive_path = raw_root / "synthetic-artifact.bin"
+            digest = "0" * 64
+            if entries is not None:
+                _write_fixture_zip(archive_path, entries)
+                if unsupported_compression_entry is not None:
+                    _patch_zip_compression_method(
+                        archive_path,
+                        unsupported_compression_entry,
+                        99,
+                    )
+                digest = _sha256_file(archive_path)
+            if digest_override is not None:
+                digest = digest_override
+            if extra_raw_file:
+                (raw_root / "unexpected.bin").write_bytes(b"unexpected")
+            if raw_subdirectory:
+                (raw_root / "unexpected-directory").mkdir()
+            if destination_preexists:
+                (workspace / "release-bundle").mkdir()
+            result = _execute_extraction_body(
+                powershell,
+                body,
+                case_root,
+                workspace,
+                digest,
+            )
+            output = _combined_process_output(result)
+            _require(result.returncode != 0, f"negative extraction fixture was accepted: {label}")
+            _require(
+                RAW_EXTRACTION_SUCCESS not in output,
+                f"negative extraction fixture printed success: {label}",
+            )
+            for outside_name in (
+                "outside.txt",
+                "outside-traversal.txt",
+                "outside-resolved.txt",
+                "absolute.txt",
+            ):
+                _require(
+                    not (case_root / outside_name).exists()
+                    and not (workspace.parent / outside_name).exists(),
+                    f"negative extraction fixture wrote outside its destination: {label}",
+                )
+            if expect_clean_destination:
+                _require(
+                    not (workspace / "release-bundle").exists(),
+                    f"partial extraction destination was not cleaned: {label}",
+                )
+            negative_labels.append(label)
+
+        valid_entries = [("valid.txt", b"valid\n", None)]
+        mismatch_root = temp_root / "digest-source"
+        mismatch_root.mkdir()
+        mismatch_archive = mismatch_root / "source.zip"
+        _write_fixture_zip(mismatch_archive, valid_entries)
+        mismatch = "0" * 64
+        if _sha256_file(mismatch_archive) == mismatch:
+            mismatch = "1" * 64
+        run_negative("digest mismatch", valid_entries, digest_override=mismatch)
+        run_negative("no raw file")
+        run_negative("two raw files", valid_entries, extra_raw_file=True)
+        run_negative("raw subdirectory", valid_entries, raw_subdirectory=True)
+
+        reparse_case = temp_root / "negative-05"
+        reparse_workspace = reparse_case / "workspace"
+        reparse_workspace.mkdir(parents=True)
+        reparse_target = reparse_case / "raw-target"
+        reparse_target.mkdir()
+        reparse_archive = reparse_target / "synthetic-artifact.bin"
+        _write_fixture_zip(reparse_archive, valid_entries)
+        reparse_root = reparse_workspace / "artifact-download"
+        _create_directory_reparse_point(reparse_root, reparse_target)
+        reparse_result = _execute_extraction_body(
+            powershell,
+            body,
+            reparse_case,
+            reparse_workspace,
+            _sha256_file(reparse_archive),
+        )
+        reparse_output = _combined_process_output(reparse_result)
+        _require(
+            reparse_result.returncode != 0,
+            "negative extraction fixture was accepted: raw-root reparse point",
+        )
+        _require(
+            RAW_EXTRACTION_SUCCESS not in reparse_output,
+            "raw-root reparse fixture printed success",
+        )
+        negative_labels.append("raw-root reparse point")
+
+        run_negative("ZIP traversal", [("../outside-traversal.txt", b"x", None)])
+        run_negative("absolute-path entry", [("/absolute.txt", b"x", None)])
+        run_negative("backslash entry", [("nested\\escape.txt", b"x", None)])
+        run_negative("colon entry", [("ads:name.txt", b"x", None)])
+        run_negative("empty path segment", [("nested//empty.txt", b"x", None)])
+        run_negative("dot path segment", [("nested/./dot.txt", b"x", None)])
+        run_negative(
+            "case-insensitive duplicates",
+            [("Case.txt", b"A", None), ("case.txt", b"B", None)],
+        )
+        run_negative(
+            "exact duplicates",
+            [("same.txt", b"A", None), ("same.txt", b"B", None)],
+        )
+        symlink_attributes = (stat.S_IFLNK | 0o777) << 16
+        run_negative(
+            "UNIX symlink entry",
+            [("link.txt", b"target.txt", symlink_attributes)],
+        )
+        run_negative(
+            "excess entry count",
+            [(f"entry-{index:03d}.txt", b"x", None) for index in range(129)],
+        )
+        run_negative(
+            "excess uncompressed size",
+            [("oversized.bin", b"\0" * (MAX_EXTRACTION_BYTES + 1), None)],
+        )
+        run_negative("destination pre-exists", valid_entries, destination_preexists=True)
+        run_negative(
+            "entry resolving outside destination",
+            [("nested/../../outside-resolved.txt", b"x", None)],
+        )
+        run_negative(
+            "partial extraction failure",
+            [("good.txt", b"good", None), ("unsupported.bin", b"blocked", None)],
+            expect_clean_destination=True,
+            unsupported_compression_entry="unsupported.bin",
+        )
+
+        warning_mutation = _replace_once(
+            workflow,
+            "          NODE_OPTIONS: --throw-deprecation",
+            "          NODE_OPTIONS: --no-warnings",
+        )
+        _expect_contract_failure(
+            "warning-suppression environment mutation",
+            warning_mutation,
+            "NODE_OPTIONS",
+        )
+        negative_labels.append("warning-suppression environment mutation")
+
+    _require(
+        len(negative_labels) == 20,
+        f"secure extraction negative fixture count differs: {len(negative_labels)}",
+    )
+    return 1, len(negative_labels)
+
+
+def _secure_extraction_body(workflow: str) -> str:
+    normalized = _normalize_newlines(workflow)
+    jobs = _mapping_block(normalized.splitlines(), "jobs", 0)
+    handoff = _mapping_block(jobs, "release-bundle-handoff", 2)
+    extractor = _named_step(_step_blocks(handoff), RAW_EXTRACTION_STEP)
+    run_index = next(
+        (
+            index
+            for index, line in enumerate(extractor)
+            if line == "        run: |"
+        ),
+        None,
+    )
+    _require(run_index is not None, "secure extraction run body is missing")
+    body_lines = []
+    for line in extractor[run_index + 1 :]:
+        _require(
+            not line.strip() or _indent(line) >= 10,
+            "secure extraction run body indentation is invalid",
+        )
+        body_lines.append(line[10:] if len(line) >= 10 else "")
+    body = "\n".join(body_lines).rstrip("\n") + "\n"
+    _require("Set-StrictMode -Version Latest" in body, "secure extraction body is incomplete")
+    return body
+
+
+def _write_fixture_zip(
+    path: Path,
+    entries: list[tuple[str, bytes, int | None]],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    raw_name_replacements: list[tuple[bytes, bytes]] = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name, data, external_attributes in entries:
+                info = zipfile.ZipInfo(name)
+                if "\\" in name:
+                    normalized_name = name.replace("\\", "/")
+                    raw_name_replacements.append(
+                        (normalized_name.encode("utf-8"), name.encode("utf-8"))
+                    )
+                info.compress_type = zipfile.ZIP_DEFLATED
+                if external_attributes is not None:
+                    info.create_system = 3
+                    info.external_attr = external_attributes
+                archive.writestr(info, data)
+    if raw_name_replacements:
+        payload = path.read_bytes()
+        for normalized_name, raw_name in raw_name_replacements:
+            _require(
+                len(normalized_name) == len(raw_name)
+                and payload.count(normalized_name) == 2,
+                "backslash ZIP fixture name could not be patched exactly",
+            )
+            payload = payload.replace(normalized_name, raw_name)
+        path.write_bytes(payload)
+
+
+def _execute_extraction_body(
+    powershell: str,
+    body: str,
+    case_root: Path,
+    workspace: Path,
+    digest: str,
+) -> subprocess.CompletedProcess[str]:
+    case_root.mkdir(parents=True, exist_ok=True)
+    workspace.mkdir(parents=True, exist_ok=True)
+    script_path = case_root / "workflow-secure-extraction.ps1"
+    script_path.write_text(body, encoding="utf-8", newline="\n")
+    environment = os.environ.copy()
+    environment["GITHUB_WORKSPACE"] = str(workspace.resolve())
+    environment["ARTIFACT_DIGEST"] = digest
+    return subprocess.run(
+        [
+            powershell,
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script_path),
+        ],
+        cwd=workspace,
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
+        check=False,
+    )
+
+
+def _patch_zip_compression_method(path: Path, entry_name: str, method: int) -> None:
+    payload = bytearray(path.read_bytes())
+    encoded_name = entry_name.encode("utf-8")
+    positions = []
+    start = 0
+    while True:
+        position = payload.find(encoded_name, start)
+        if position < 0:
+            break
+        positions.append(position)
+        start = position + len(encoded_name)
+    _require(
+        len(positions) == 2,
+        "unsupported-compression ZIP fixture entry count differs",
+    )
+    patched = 0
+    for position in positions:
+        if position >= 30 and payload[position - 30 : position - 26] == b"PK\x03\x04":
+            payload[position - 22 : position - 20] = method.to_bytes(2, "little")
+            patched += 1
+        elif position >= 46 and payload[position - 46 : position - 42] == b"PK\x01\x02":
+            payload[position - 36 : position - 34] = method.to_bytes(2, "little")
+            patched += 1
+    _require(patched == 2, "unsupported-compression ZIP fixture headers differ")
+    path.write_bytes(payload)
+
+
+def _create_directory_reparse_point(link: Path, target: Path) -> None:
+    try:
+        os.symlink(target, link, target_is_directory=True)
+        return
+    except (OSError, NotImplementedError):
+        pass
+    result = subprocess.run(
+        ["cmd", "/d", "/c", "mklink", "/J", str(link), str(target)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=False,
+    )
+    _require(
+        result.returncode == 0 and link.exists(),
+        "raw-root reparse fixture is unsupported: " + _combined_process_output(result),
+    )
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _combined_process_output(result: subprocess.CompletedProcess[str]) -> str:
+    return (result.stdout + "\n" + result.stderr).strip()
+
+
+def _verify_upstream_download_artifact_warning_contract() -> None:
+    expected = {
+        "release": "v8.0.1",
+        "commit": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+        "issue": "actions/download-artifact#484",
+        "warning_path": "upstream extraction path",
+        "supported_input": "skip-decompress",
+        "digest_check": "remains inside actions/download-artifact",
+        "repository_extraction": "independently fail-closed",
+        "node_options": "--throw-deprecation",
+    }
+    _require(
+        UPSTREAM_DOWNLOAD_ARTIFACT_WARNING_CONTRACT == expected,
+        "upstream download-artifact warning regression contract differs",
+    )
 
 
 def _test_immutable_action_policy(workflow: str) -> None:

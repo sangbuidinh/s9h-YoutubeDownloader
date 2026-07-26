@@ -22,6 +22,8 @@ EXPECTED_WORKFLOWS = (
     ".github/workflows/release-v1.3.1.yml",
 )
 CI_WORKFLOW = ".github/workflows/ci.yml"
+RAW_EXTRACTION_STEP = "Extract and validate raw synthetic artifact archive"
+RAW_EXTRACTION_SUCCESS = "Secure raw synthetic artifact extraction verified"
 FORBIDDEN_VERSION_WORKFLOW_TRIGGERS = {
     "branch_protection_rule",
     "pull_request",
@@ -608,6 +610,73 @@ def _validate_action_placement(path: str, workflow: str) -> None:
         ):
             _require(forbidden not in consumer, f"CI consumer contains forbidden action: {forbidden}")
         _validate_download_inputs(consumer, "${{ needs.windows-smoke.outputs.artifact-id }}", "CI consumer")
+        consumer_steps = _step_blocks(_mapping_block(lines, "release-bundle-handoff", 2))
+        output_validation = _named_step(
+            consumer_steps,
+            "Validate immutable synthetic bundle outputs",
+        )
+        download = _action_steps(consumer_steps, "actions/download-artifact")[0]
+        extractor = _named_step(consumer_steps, RAW_EXTRACTION_STEP)
+        verifier = _named_step(consumer_steps, "Verify synthetic release bundle handoff")
+        _require(
+            consumer_steps == [output_validation, download, extractor, verifier],
+            "CI consumer raw artifact handoff step order is invalid",
+        )
+        download_env = _mapping_block(download, "env", 8)
+        _require(
+            _direct_mapping_pairs(download_env, 10)
+            == [("NODE_OPTIONS", "--throw-deprecation")],
+            "CI consumer NODE_OPTIONS must fail on deprecations",
+        )
+        extractor_env = _mapping_block(extractor, "env", 8)
+        _require(
+            _direct_mapping_pairs(extractor_env, 10)
+            == [
+                (
+                    "ARTIFACT_DIGEST",
+                    "${{ needs.windows-smoke.outputs.artifact-digest }}",
+                )
+            ],
+            "CI consumer extractor digest input changed",
+        )
+        extractor_text = "\n".join(extractor)
+        for required in (
+            "Get-RawZipEntryNames",
+            "$actualDigest -cne $env:ARTIFACT_DIGEST",
+            "$rawFiles.Count -ne 1",
+            '$_ -ceq "." -or $_ -ceq ".."',
+            "$caseInsensitivePaths.Add($normalizedPath)",
+            "$unixFileType -eq 0xA000",
+            "$declaredTotal -gt $MaxTotalUncompressedBytes",
+            "[IO.FileMode]::CreateNew",
+            "[IO.Directory]::Delete($rawRoot, $true)",
+            RAW_EXTRACTION_SUCCESS,
+        ):
+            _require(
+                required in extractor_text,
+                f"CI consumer secure extraction contract is missing: {required}",
+            )
+        for forbidden in (
+            "Expand-Archive",
+            "Invoke-WebRequest",
+            "Invoke-RestMethod",
+            "Start-Process",
+            "curl ",
+            "wget ",
+            "gh api",
+            "secrets.",
+            "GH_TOKEN",
+            "github.token",
+            "persist-credentials",
+            "NODE_NO_WARNINGS",
+            "--no-deprecation",
+            "--no-warnings",
+            "continue-on-error",
+        ):
+            _require(
+                forbidden.casefold() not in consumer.casefold(),
+                f"CI consumer contains forbidden extraction behavior: {forbidden}",
+            )
         return
 
     build_block = _mapping_block(lines, "build", 2)
@@ -780,16 +849,31 @@ def _validate_download_inputs(job: str, artifact_id: str, label: str) -> None:
         _scalar_value(download_with, "merge-multiple", 10) == "true",
         f"{label} merge-multiple must be the YAML boolean true",
     )
-    expected_inputs = [
-        ("artifact-ids", artifact_id),
-        ("path", "release-bundle"),
-        ("merge-multiple", "true"),
-    ]
     if label == "CI consumer":
-        expected_inputs.append(("digest-mismatch", "error"))
+        _require(
+            _scalar_value(download_with, "skip-decompress", 10) == "true",
+            "CI consumer skip-decompress must be the YAML boolean true",
+        )
+        _require(
+            _scalar_value(download_with, "digest-mismatch", 10) == "error",
+            "CI consumer digest mismatch must fail with error",
+        )
+        expected_inputs = [
+            ("artifact-ids", artifact_id),
+            ("path", "artifact-download"),
+            ("merge-multiple", "true"),
+            ("skip-decompress", "true"),
+            ("digest-mismatch", "error"),
+        ]
+    else:
+        expected_inputs = [
+            ("artifact-ids", artifact_id),
+            ("path", "release-bundle"),
+            ("merge-multiple", "true"),
+        ]
     _require(
         _direct_mapping_pairs(download_with, 10) == expected_inputs,
-        f"{label} download inputs must select one artifact ID and release-bundle",
+        f"{label} download inputs must preserve the exact artifact handoff mapping",
     )
 
 
@@ -1295,7 +1379,7 @@ def _test_mutation_fixture_document_boundary(
         )
 
     _require(
-        _test_r3a_negative_mutations(mutation_documents, inventory) == 25,
+        _test_r3a_negative_mutations(mutation_documents, inventory) == 42,
         "normalized CRLF-derived R3a mutation count differs",
     )
     _test_negative_mutations(mutation_documents, inventory)
@@ -1422,6 +1506,134 @@ def _test_r3a_negative_mutations(documents: dict[str, str], inventory: dict) -> 
     mutated = copy.deepcopy(documents)
     mutated[ci] = _replace_once(mutated[ci], "          fetch-depth: 0", "          fetch-depth: 1")
     cases.append(("fetch-depth changes from zero", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(mutated[ci], "          skip-decompress: true\n", "")
+    cases.append(("raw artifact skip-decompress omitted", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "          skip-decompress: true",
+        "          skip-decompress: false",
+    )
+    cases.append(("raw artifact skip-decompress false", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "          skip-decompress: true",
+        '          skip-decompress: "true"',
+    )
+    cases.append(("raw artifact skip-decompress quoted true", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "        env:\n          NODE_OPTIONS: --throw-deprecation\n",
+        "",
+    )
+    cases.append(("raw artifact NODE_OPTIONS omitted", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "          NODE_OPTIONS: --throw-deprecation",
+        "          NODE_OPTIONS: --no-warnings",
+    )
+    cases.append(("raw artifact warning suppression", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _remove_named_step(mutated[ci], RAW_EXTRACTION_STEP)
+    cases.append(("secure raw extraction omitted", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _move_named_step_after(
+        mutated[ci],
+        RAW_EXTRACTION_STEP,
+        "Verify synthetic release bundle handoff",
+    )
+    cases.append(("secure raw extraction reordered", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        f"      - name: {RAW_EXTRACTION_STEP}\n",
+        f"      - name: {RAW_EXTRACTION_STEP}\n        continue-on-error: true\n",
+    )
+    cases.append(("secure raw extraction continue-on-error", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "          Add-Type -AssemblyName System.IO.Compression",
+        "          Expand-Archive -LiteralPath raw.zip -DestinationPath release-bundle",
+    )
+    cases.append(("secure raw extraction replaced by Expand-Archive", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "          if ($actualDigest -cne $env:ARTIFACT_DIGEST) {",
+        "          if ($false) {",
+    )
+    cases.append(("raw archive digest comparison removed", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "              $rawFiles.Count -ne 1 -or",
+        "              $rawFiles.Count -lt 1 -or",
+    )
+    cases.append(("exact-one-raw-file gate removed", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        '$_ -ceq "." -or $_ -ceq ".."',
+        '$_ -ceq "." -or $_ -ceq "..."',
+    )
+    cases.append(("ZIP traversal segment gate removed", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "                  if (-not $caseInsensitivePaths.Add($normalizedPath)) {",
+        "                  if ($false) {",
+    )
+    cases.append(("case-insensitive duplicate gate removed", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "                  if ($unixFileType -eq 0xA000) {",
+        "                  if ($false) {",
+    )
+    cases.append(("UNIX symlink gate removed", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "                  if ($declaredTotal -gt $MaxTotalUncompressedBytes) {",
+        "                  if ($false) {",
+    )
+    cases.append(("raw extraction size cap removed", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "          [IO.Directory]::Delete($rawRoot, $true)",
+        "          Write-Host \"raw archive retained\"",
+    )
+    cases.append(("raw archive cleanup removed", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _move_named_step_after(
+        mutated[ci],
+        "Verify synthetic release bundle handoff",
+        "Download synthetic release bundle by artifact ID",
+    )
+    cases.append(("bundle verification moved before extraction", mutated, inventory))
 
     mutated = copy.deepcopy(documents)
     mutated[ci] = _replace_once(

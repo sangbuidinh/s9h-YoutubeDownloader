@@ -429,11 +429,505 @@ jobs:
 
       - name: Download synthetic release bundle by artifact ID
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        env:
+          NODE_OPTIONS: --throw-deprecation
         with:
           artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}
-          path: release-bundle
+          path: artifact-download
           merge-multiple: true
+          skip-decompress: true
           digest-mismatch: error
+
+      - name: Extract and validate raw synthetic artifact archive
+        shell: pwsh
+        env:
+          ARTIFACT_DIGEST: ${{ needs.windows-smoke.outputs.artifact-digest }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          Add-Type -AssemblyName System.IO.Compression
+
+          $MaxEntryCount = 128
+          $MaxTotalUncompressedBytes = 16777216
+          $SuccessMessage = "Secure raw synthetic artifact extraction verified"
+
+          function Assert-BelowRoot(
+              [string]$Root,
+              [string]$Candidate,
+              [string]$Label
+          ) {
+              $trimChars = [char[]]@(
+                  [IO.Path]::DirectorySeparatorChar,
+                  [IO.Path]::AltDirectorySeparatorChar
+              )
+              $prefix = $Root.TrimEnd($trimChars) + [IO.Path]::DirectorySeparatorChar
+              if (-not $Candidate.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                  throw "$Label escaped its required root"
+              }
+          }
+
+          function Get-RawZipEntryNames(
+              [string]$ArchivePath,
+              [int]$EntryLimit
+          ) {
+              $stream = $null
+              $reader = $null
+              try {
+                  $stream = [IO.File]::Open(
+                      $ArchivePath,
+                      [IO.FileMode]::Open,
+                      [IO.FileAccess]::Read,
+                      [IO.FileShare]::Read
+                  )
+                  if ($stream.Length -lt 22) {
+                      throw "Raw artifact ZIP is too short"
+                  }
+                  $tailLength = [int][Math]::Min([int64]65557, $stream.Length)
+                  $tail = New-Object byte[] $tailLength
+                  $stream.Position = $stream.Length - $tailLength
+                  $tailRead = $stream.Read($tail, 0, $tail.Length)
+                  if ($tailRead -ne $tail.Length) {
+                      throw "Raw artifact ZIP tail could not be read"
+                  }
+
+                  $eocdIndex = -1
+                  for ($index = $tail.Length - 22; $index -ge 0; $index--) {
+                      if (
+                          $tail[$index] -eq 0x50 -and
+                          $tail[$index + 1] -eq 0x4B -and
+                          $tail[$index + 2] -eq 0x05 -and
+                          $tail[$index + 3] -eq 0x06
+                      ) {
+                          $commentLength = [BitConverter]::ToUInt16($tail, $index + 20)
+                          if ($index + 22 + $commentLength -eq $tail.Length) {
+                              $eocdIndex = $index
+                              break
+                          }
+                      }
+                  }
+                  if ($eocdIndex -lt 0) {
+                      throw "Raw artifact ZIP end record is invalid"
+                  }
+
+                  $diskNumber = [BitConverter]::ToUInt16($tail, $eocdIndex + 4)
+                  $centralDisk = [BitConverter]::ToUInt16($tail, $eocdIndex + 6)
+                  $entriesOnDisk = [BitConverter]::ToUInt16($tail, $eocdIndex + 8)
+                  $entryCount = [BitConverter]::ToUInt16($tail, $eocdIndex + 10)
+                  $centralSize = [BitConverter]::ToUInt32($tail, $eocdIndex + 12)
+                  $centralOffset = [BitConverter]::ToUInt32($tail, $eocdIndex + 16)
+                  if (
+                      $diskNumber -ne 0 -or
+                      $centralDisk -ne 0 -or
+                      $entriesOnDisk -ne $entryCount -or
+                      $entryCount -eq 0xFFFF -or
+                      $centralSize -eq 0xFFFFFFFF -or
+                      $centralOffset -eq 0xFFFFFFFF
+                  ) {
+                      throw "Raw artifact ZIP uses unsupported multi-disk or ZIP64 metadata"
+                  }
+                  if ($entryCount -gt $EntryLimit) {
+                      throw "Raw artifact ZIP exceeds the entry-count limit"
+                  }
+                  $eocdOffset = $stream.Length - $tail.Length + $eocdIndex
+                  [int64]$centralEnd = [int64]$centralOffset + [int64]$centralSize
+                  if (
+                      $centralEnd -ne $eocdOffset -or
+                      $centralEnd -gt $stream.Length
+                  ) {
+                      throw "Raw artifact ZIP central directory bounds are invalid"
+                  }
+
+                  $stream.Position = $centralOffset
+                  $reader = [IO.BinaryReader]::new(
+                      $stream,
+                      [Text.UTF8Encoding]::new($false, $true),
+                      $true
+                  )
+                  $utf8 = [Text.UTF8Encoding]::new($false, $true)
+                  $names = [Collections.Generic.List[string]]::new()
+                  for ($entryIndex = 0; $entryIndex -lt $entryCount; $entryIndex++) {
+                      if ($reader.ReadUInt32() -ne 0x02014B50) {
+                          throw "Raw artifact ZIP central directory signature is invalid"
+                      }
+                      $reader.ReadUInt16() | Out-Null
+                      $reader.ReadUInt16() | Out-Null
+                      $flags = $reader.ReadUInt16()
+                      $reader.ReadUInt16() | Out-Null
+                      $reader.ReadUInt16() | Out-Null
+                      $reader.ReadUInt16() | Out-Null
+                      $reader.ReadUInt32() | Out-Null
+                      $reader.ReadUInt32() | Out-Null
+                      $reader.ReadUInt32() | Out-Null
+                      $nameLength = $reader.ReadUInt16()
+                      $extraLength = $reader.ReadUInt16()
+                      $entryCommentLength = $reader.ReadUInt16()
+                      $entryDisk = $reader.ReadUInt16()
+                      $reader.ReadUInt16() | Out-Null
+                      $reader.ReadUInt32() | Out-Null
+                      $localOffset = $reader.ReadUInt32()
+                      if (
+                          $entryDisk -ne 0 -or
+                          $localOffset -eq 0xFFFFFFFF -or
+                          $localOffset -ge $centralOffset
+                      ) {
+                          throw "Raw artifact ZIP entry metadata is invalid"
+                      }
+                      $nameBytes = $reader.ReadBytes($nameLength)
+                      if ($nameBytes.Length -ne $nameLength) {
+                          throw "Raw artifact ZIP entry name is truncated"
+                      }
+                      if (
+                          @($nameBytes | Where-Object { $_ -eq 0x00 -or $_ -eq 0x5C }).Count -ne 0
+                      ) {
+                          throw "Raw artifact ZIP contains a raw NUL or backslash entry name"
+                      }
+                      if (($flags -band 0x0001) -ne 0) {
+                          throw "Raw artifact ZIP contains an encrypted entry"
+                      }
+                      try {
+                          $rawName = $utf8.GetString($nameBytes)
+                      } catch {
+                          throw "Raw artifact ZIP entry name is not valid UTF-8"
+                      }
+                      $names.Add($rawName)
+                      if ($extraLength -gt 0) {
+                          $reader.ReadBytes($extraLength) | Out-Null
+                      }
+                      if ($entryCommentLength -gt 0) {
+                          $reader.ReadBytes($entryCommentLength) | Out-Null
+                      }
+                  }
+                  if ($stream.Position -ne $centralEnd) {
+                      throw "Raw artifact ZIP central directory size is invalid"
+                  }
+                  return @($names)
+              } finally {
+                  if ($null -ne $reader) {
+                      $reader.Dispose()
+                  }
+                  if ($null -ne $stream) {
+                      $stream.Dispose()
+                  }
+              }
+          }
+
+          $workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
+          $rawRoot = [IO.Path]::GetFullPath((Join-Path $workspace "artifact-download"))
+          $destinationRoot = [IO.Path]::GetFullPath((Join-Path $workspace "release-bundle"))
+          Assert-BelowRoot $workspace $rawRoot "Raw artifact root"
+          Assert-BelowRoot $workspace $destinationRoot "Release bundle root"
+
+          if (-not [IO.Directory]::Exists($rawRoot)) {
+              throw "Raw artifact root is missing"
+          }
+          if ([IO.Directory]::Exists($destinationRoot) -or [IO.File]::Exists($destinationRoot)) {
+              throw "Release bundle destination already exists"
+          }
+          $rawRootItem = Get-Item -LiteralPath $rawRoot -Force
+          if (
+              -not $rawRootItem.PSIsContainer -or
+              ($rawRootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+          ) {
+              throw "Raw artifact root is not a regular directory"
+          }
+
+          $rawItems = @(Get-ChildItem -LiteralPath $rawRoot -Force -Recurse)
+          $rawDirectories = @($rawItems | Where-Object { $_.PSIsContainer })
+          $rawFiles = @($rawItems | Where-Object { -not $_.PSIsContainer })
+          $rawReparsePoints = @(
+              $rawItems | Where-Object {
+                  ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+              }
+          )
+          if (
+              $rawFiles.Count -ne 1 -or
+              $rawDirectories.Count -ne 0 -or
+              $rawReparsePoints.Count -ne 0
+          ) {
+              throw "Raw artifact root must contain exactly one regular file and no subdirectories"
+          }
+          $rawArchive = $rawFiles[0]
+          if (
+              ($rawArchive.Attributes -band [IO.FileAttributes]::Directory) -ne 0 -or
+              ($rawArchive.Attributes -band [IO.FileAttributes]::Device) -ne 0 -or
+              ($rawArchive.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+          ) {
+              throw "Raw artifact archive is not a regular file"
+          }
+
+          if ($env:ARTIFACT_DIGEST -cnotmatch "^[0-9a-f]{64}$") {
+              throw "Raw artifact digest is invalid"
+          }
+          $actualDigest = (
+              Get-FileHash -LiteralPath $rawArchive.FullName -Algorithm SHA256
+          ).Hash.ToLowerInvariant()
+          if ($actualDigest -cne $env:ARTIFACT_DIGEST) {
+              throw "Raw artifact digest does not match the immutable producer output"
+          }
+          $rawEntryNames = @(
+              Get-RawZipEntryNames $rawArchive.FullName $MaxEntryCount
+          )
+
+          $archiveStream = $null
+          $archive = $null
+          $destinationCreated = $false
+          try {
+              $archiveStream = [IO.File]::Open(
+                  $rawArchive.FullName,
+                  [IO.FileMode]::Open,
+                  [IO.FileAccess]::Read,
+                  [IO.FileShare]::Read
+              )
+              $archive = [IO.Compression.ZipArchive]::new(
+                  $archiveStream,
+                  [IO.Compression.ZipArchiveMode]::Read,
+                  $false
+              )
+              $entries = @($archive.Entries)
+              if ($entries.Count -gt $MaxEntryCount) {
+                  throw "Raw artifact ZIP exceeds the entry-count limit"
+              }
+              if ($entries.Count -ne $rawEntryNames.Count) {
+                  throw "Raw artifact ZIP entry inventory does not match its central directory"
+              }
+
+              $exactPaths = [Collections.Generic.HashSet[string]]::new(
+                  [StringComparer]::Ordinal
+              )
+              $caseInsensitivePaths = [Collections.Generic.HashSet[string]]::new(
+                  [StringComparer]::OrdinalIgnoreCase
+              )
+              $pathKinds = [Collections.Generic.Dictionary[string, string]]::new(
+                  [StringComparer]::OrdinalIgnoreCase
+              )
+              $plans = [Collections.Generic.List[object]]::new()
+              [int64]$declaredTotal = 0
+
+              for ($entryIndex = 0; $entryIndex -lt $entries.Count; $entryIndex++) {
+                  $entry = $entries[$entryIndex]
+                  $entryName = [string]$rawEntryNames[$entryIndex]
+                  if ($entryName -cne [string]$entry.FullName) {
+                      throw "Raw artifact ZIP entry name was normalized by the runtime"
+                  }
+                  if ([string]::IsNullOrEmpty($entryName)) {
+                      throw "Raw artifact ZIP contains an empty entry name"
+                  }
+                  if (
+                      $entryName.IndexOf([char]0) -ge 0 -or
+                      $entryName.Contains("\") -or
+                      $entryName.Contains(":") -or
+                      $entryName.StartsWith("/") -or
+                      [IO.Path]::IsPathRooted($entryName)
+                  ) {
+                      throw "Raw artifact ZIP contains an unsafe entry name"
+                  }
+
+                  $isDirectory = $entryName.EndsWith("/")
+                  $logicalName = if ($isDirectory) {
+                      $entryName.Substring(0, $entryName.Length - 1)
+                  } else {
+                      $entryName
+                  }
+                  if ([string]::IsNullOrEmpty($logicalName)) {
+                      throw "Raw artifact ZIP contains an empty entry path"
+                  }
+                  $segments = @($logicalName.Split([char]"/"))
+                  if (
+                      @($segments | Where-Object { $_.Length -eq 0 }).Count -ne 0 -or
+                      @($segments | Where-Object { $_ -ceq "." -or $_ -ceq ".." }).Count -ne 0
+                  ) {
+                      throw "Raw artifact ZIP contains an unsafe path segment"
+                  }
+                  $normalizedPath = $segments -join "/"
+                  if (-not $exactPaths.Add($normalizedPath)) {
+                      throw "Raw artifact ZIP contains an exact duplicate path"
+                  }
+                  if (-not $caseInsensitivePaths.Add($normalizedPath)) {
+                      throw "Raw artifact ZIP contains a case-insensitive duplicate path"
+                  }
+
+                  $externalAttributes = [BitConverter]::ToUInt32(
+                      [BitConverter]::GetBytes([int32]$entry.ExternalAttributes),
+                      0
+                  )
+                  $unixFileType = ($externalAttributes -shr 16) -band 0xF000
+                  if ($unixFileType -eq 0xA000) {
+                      throw "Raw artifact ZIP contains a UNIX symbolic-link entry"
+                  }
+                  if ($isDirectory -and [int64]$entry.Length -ne 0) {
+                      throw "Raw artifact ZIP directory entry contains data"
+                  }
+
+                  $declaredTotal += [int64]$entry.Length
+                  if ($declaredTotal -gt $MaxTotalUncompressedBytes) {
+                      throw "Raw artifact ZIP exceeds the uncompressed-size limit"
+                  }
+                  $targetPath = [IO.Path]::GetFullPath(
+                      (Join-Path $destinationRoot $normalizedPath.Replace(
+                          [char]"/",
+                          [IO.Path]::DirectorySeparatorChar
+                      ))
+                  )
+                  Assert-BelowRoot $destinationRoot $targetPath "Raw artifact ZIP entry"
+                  $kind = if ($isDirectory) { "directory" } else { "file" }
+                  $pathKinds.Add($normalizedPath, $kind)
+                  $plans.Add([PSCustomObject]@{
+                      Entry = $entry
+                      IsDirectory = $isDirectory
+                      NormalizedPath = $normalizedPath
+                      TargetPath = $targetPath
+                  })
+              }
+
+              foreach ($plan in $plans) {
+                  $segments = @($plan.NormalizedPath.Split([char]"/"))
+                  for ($index = 1; $index -lt $segments.Count; $index++) {
+                      $parentPath = $segments[0..($index - 1)] -join "/"
+                      if (
+                          $pathKinds.ContainsKey($parentPath) -and
+                          $pathKinds[$parentPath] -ceq "file"
+                      ) {
+                          throw "Raw artifact ZIP writes through a file path"
+                      }
+                  }
+                  if (-not $plan.IsDirectory) {
+                      $childPrefix = $plan.NormalizedPath + "/"
+                      foreach ($candidate in $pathKinds.Keys) {
+                          if (
+                              $candidate.StartsWith(
+                                  $childPrefix,
+                                  [StringComparison]::OrdinalIgnoreCase
+                              )
+                          ) {
+                              throw "Raw artifact ZIP writes through a file path"
+                          }
+                      }
+                  }
+              }
+
+              [IO.Directory]::CreateDirectory($destinationRoot) | Out-Null
+              $destinationCreated = $true
+              $destinationItem = Get-Item -LiteralPath $destinationRoot -Force
+              if (
+                  ($destinationItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+              ) {
+                  throw "Release bundle destination is a reparse point"
+              }
+
+              function Ensure-SafeDirectory([string]$DirectoryPath) {
+                  if ($DirectoryPath -cne $destinationRoot) {
+                      Assert-BelowRoot $destinationRoot $DirectoryPath "Extraction directory"
+                  }
+                  $relative = $DirectoryPath.Substring($destinationRoot.Length).TrimStart(
+                      [char[]]@(
+                          [IO.Path]::DirectorySeparatorChar,
+                          [IO.Path]::AltDirectorySeparatorChar
+                      )
+                  )
+                  $current = $destinationRoot
+                  if (-not [string]::IsNullOrEmpty($relative)) {
+                      foreach ($segment in $relative.Split([IO.Path]::DirectorySeparatorChar)) {
+                          $current = Join-Path $current $segment
+                          if ([IO.File]::Exists($current)) {
+                              throw "Extraction directory writes through an existing file"
+                          }
+                          if (-not [IO.Directory]::Exists($current)) {
+                              [IO.Directory]::CreateDirectory($current) | Out-Null
+                          }
+                          $currentItem = Get-Item -LiteralPath $current -Force
+                          if (
+                              ($currentItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+                          ) {
+                              throw "Extraction directory is a reparse point"
+                          }
+                      }
+                  }
+              }
+
+              [int64]$actualTotal = 0
+              foreach ($plan in $plans) {
+                  if ($plan.IsDirectory) {
+                      Ensure-SafeDirectory $plan.TargetPath
+                      continue
+                  }
+                  $parentDirectory = [IO.Path]::GetDirectoryName($plan.TargetPath)
+                  Ensure-SafeDirectory $parentDirectory
+                  if (
+                      [IO.File]::Exists($plan.TargetPath) -or
+                      [IO.Directory]::Exists($plan.TargetPath)
+                  ) {
+                      throw "Extraction target already exists"
+                  }
+
+                  $inputStream = $null
+                  $outputStream = $null
+                  [int64]$entryBytes = 0
+                  try {
+                      $inputStream = $plan.Entry.Open()
+                      $outputStream = [IO.File]::Open(
+                          $plan.TargetPath,
+                          [IO.FileMode]::CreateNew,
+                          [IO.FileAccess]::Write,
+                          [IO.FileShare]::None
+                      )
+                      $buffer = New-Object byte[] 81920
+                      while (($bytesRead = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                          $entryBytes += $bytesRead
+                          $actualTotal += $bytesRead
+                          if ($actualTotal -gt $MaxTotalUncompressedBytes) {
+                              throw "Raw artifact extraction exceeds the actual-size limit"
+                          }
+                          $outputStream.Write($buffer, 0, $bytesRead)
+                      }
+                  } finally {
+                      if ($null -ne $outputStream) {
+                          $outputStream.Dispose()
+                      }
+                      if ($null -ne $inputStream) {
+                          $inputStream.Dispose()
+                      }
+                  }
+                  if ($entryBytes -ne [int64]$plan.Entry.Length) {
+                      throw "Raw artifact ZIP entry size changed during extraction"
+                  }
+              }
+          } catch {
+              if ($destinationCreated -and [IO.Directory]::Exists($destinationRoot)) {
+                  try {
+                      [IO.Directory]::Delete($destinationRoot, $true)
+                  } catch {
+                      Write-Error "Failed to clean an incomplete release bundle"
+                  }
+              }
+              throw
+          } finally {
+              if ($null -ne $archive) {
+                  $archive.Dispose()
+              }
+              if ($null -ne $archiveStream) {
+                  $archiveStream.Dispose()
+              }
+          }
+
+          if (-not [IO.Directory]::Exists($destinationRoot)) {
+              throw "Release bundle destination was not created"
+          }
+          $extractedItems = @(Get-ChildItem -LiteralPath $destinationRoot -Force -Recurse)
+          if (
+              @(
+                  $extractedItems | Where-Object {
+                      ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+                  }
+              ).Count -ne 0
+          ) {
+              throw "Release bundle contains a reparse point after extraction"
+          }
+
+          [IO.Directory]::Delete($rawRoot, $true)
+          if ([IO.Directory]::Exists($rawRoot) -or [IO.File]::Exists($rawRoot)) {
+              throw "Raw artifact root was not removed after extraction"
+          }
+          Write-Host $SuccessMessage
 
       - name: Verify synthetic release bundle handoff
         shell: pwsh
