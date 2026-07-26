@@ -646,6 +646,16 @@ def _validate_action_placement(path: str, workflow: str) -> None:
             "$rawFiles.Count -ne 1",
             '$_ -ceq "." -or $_ -ceq ".."',
             "$caseInsensitivePaths.Add($normalizedPath)",
+            "function Assert-WindowsSafePathSegment(",
+            "$WindowsReservedDeviceBasenames =",
+            "$WindowsReservedDeviceBasenames.Contains($deviceBaseForComparison)",
+            '$Segment.EndsWith(".", [StringComparison]::Ordinal)',
+            '$Segment.EndsWith(" ", [StringComparison]::Ordinal)',
+            "$Segment.IndexOfAny",
+            "[int]$character -le 0x1F",
+            "$resolvedTargetPaths = [Collections.Generic.HashSet[string]]::new(",
+            "$resolvedTargetPaths.Add($targetPath)",
+            'Assert-BelowRoot $destinationRoot $targetPath "Raw artifact ZIP entry"',
             "$unixFileType -eq 0xA000",
             "$declaredTotal -gt $MaxTotalUncompressedBytes",
             "[IO.FileMode]::CreateNew",
@@ -656,6 +666,37 @@ def _validate_action_placement(path: str, workflow: str) -> None:
                 required in extractor_text,
                 f"CI consumer secure extraction contract is missing: {required}",
             )
+        required_once = (
+            "function Assert-WindowsSafePathSegment(",
+            "$WindowsReservedDeviceBasenames =",
+            "$WindowsReservedDeviceBasenames.Contains($deviceBaseForComparison)",
+            '$Segment.EndsWith(".", [StringComparison]::Ordinal)',
+            '$Segment.EndsWith(" ", [StringComparison]::Ordinal)',
+            "$Segment.IndexOfAny",
+            "[int]$character -le 0x1F",
+            (
+                "$resolvedTargetPaths = [Collections.Generic.HashSet[string]]::new(\n"
+                "                  [StringComparer]::OrdinalIgnoreCase\n"
+                "              )"
+            ),
+            "$resolvedTargetPaths.Add($targetPath)",
+            'Assert-BelowRoot $destinationRoot $targetPath "Raw artifact ZIP entry"',
+            "$actualDigest -cne $env:ARTIFACT_DIGEST",
+            "$normalizedPath = $segments -join \"/\"",
+        )
+        for control in required_once:
+            _require(
+                extractor_text.count(control) == 1,
+                f"CI consumer secure extraction control count differs: {control}",
+            )
+        validation_call = "Assert-WindowsSafePathSegment $segment"
+        extraction_start = "[IO.Directory]::CreateDirectory($destinationRoot)"
+        _require(
+            extractor_text.count(validation_call) == 1
+            and extractor_text.count(extraction_start) == 1
+            and extractor_text.index(validation_call) < extractor_text.index(extraction_start),
+            "Windows segment validation must precede extraction writes",
+        )
         for forbidden in (
             "Expand-Archive",
             "Invoke-WebRequest",
@@ -1379,7 +1420,7 @@ def _test_mutation_fixture_document_boundary(
         )
 
     _require(
-        _test_r3a_negative_mutations(mutation_documents, inventory) == 42,
+        _test_r3a_negative_mutations(mutation_documents, inventory) == 52,
         "normalized CRLF-derived R3a mutation count differs",
     )
     _test_negative_mutations(mutation_documents, inventory)
@@ -1602,6 +1643,98 @@ def _test_r3a_negative_mutations(documents: dict[str, str], inventory: dict) -> 
         "                  if ($false) {",
     )
     cases.append(("case-insensitive duplicate gate removed", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "              if ($WindowsReservedDeviceBasenames.Contains($deviceBaseForComparison)) {",
+        "              if ($false) {",
+    )
+    cases.append(("Windows reserved-device gate removed", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        '              if ($Segment.EndsWith(".", [StringComparison]::Ordinal)) {',
+        "              if ($false) {",
+    )
+    cases.append(("Windows trailing-dot gate removed", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        '              if ($Segment.EndsWith(" ", [StringComparison]::Ordinal)) {',
+        "              if ($false) {",
+    )
+    cases.append(("Windows trailing-space gate removed", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "              if ($Segment.IndexOfAny('<>:\"\\|?*'.ToCharArray()) -ge 0) {",
+        "              if ($false) {",
+    )
+    cases.append(("Windows forbidden-character gate removed", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "                  if ([int]$character -le 0x1F) {",
+        "                  if ($false) {",
+    )
+    cases.append(("Windows control-character gate removed", mutated, inventory))
+
+    resolved_collection = (
+        "              $resolvedTargetPaths = [Collections.Generic.HashSet[string]]::new(\n"
+        "                  [StringComparer]::OrdinalIgnoreCase\n"
+        "              )\n"
+    )
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(mutated[ci], resolved_collection, "")
+    cases.append(("resolved-target collection removed", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        resolved_collection,
+        resolved_collection.replace(
+            "[StringComparer]::OrdinalIgnoreCase",
+            "[StringComparer]::Ordinal",
+        ),
+    )
+    cases.append(("resolved-target comparer weakened", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "                  if (-not $resolvedTargetPaths.Add($targetPath)) {",
+        "                  if ($false) {",
+    )
+    cases.append(("duplicate resolved-target failure removed", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    validation_line = "                      Assert-WindowsSafePathSegment $segment\n"
+    mutated[ci] = _replace_once(mutated[ci], validation_line, "")
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "              [IO.Directory]::CreateDirectory($destinationRoot) | Out-Null\n",
+        (
+            "              [IO.Directory]::CreateDirectory($destinationRoot) | Out-Null\n"
+            "              Assert-WindowsSafePathSegment $segments[0]\n"
+        ),
+    )
+    cases.append(("Windows segment validation moved after extraction begins", mutated, inventory))
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        '                  $normalizedPath = $segments -join "/"',
+        (
+            '                  $normalizedPath = '
+            '($segments | ForEach-Object { $_.TrimEnd(".", " ") }) -join "/"'
+        ),
+    )
+    cases.append(("unsafe Windows path silently trimmed", mutated, inventory))
 
     mutated = copy.deepcopy(documents)
     mutated[ci] = _replace_once(

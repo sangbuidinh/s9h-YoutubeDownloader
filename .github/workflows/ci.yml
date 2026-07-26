@@ -466,6 +466,66 @@ jobs:
               }
           }
 
+          function Assert-WindowsSafePathSegment(
+              [Parameter(Mandatory = $true)]
+              [string]$Segment
+          ) {
+              if (
+                  [string]::IsNullOrEmpty($Segment) -or
+                  $Segment -ceq "." -or
+                  $Segment -ceq ".." -or
+                  $Segment.Contains("/")
+              ) {
+                  throw "Raw artifact ZIP contains an unsafe Windows path segment"
+              }
+              if ($Segment.EndsWith(".", [StringComparison]::Ordinal)) {
+                  throw "Raw artifact ZIP path segment ends with an ASCII dot"
+              }
+              if ($Segment.EndsWith(" ", [StringComparison]::Ordinal)) {
+                  throw "Raw artifact ZIP path segment ends with an ASCII space"
+              }
+              if ($Segment.IndexOfAny('<>:"\|?*'.ToCharArray()) -ge 0) {
+                  throw "Raw artifact ZIP path segment contains a forbidden Windows character"
+              }
+              foreach ($character in $Segment.ToCharArray()) {
+                  if ([int]$character -le 0x1F) {
+                      throw "Raw artifact ZIP path segment contains an ASCII control character"
+                  }
+              }
+
+              $firstPeriod = $Segment.IndexOf([char]46)
+              $deviceBase = if ($firstPeriod -ge 0) {
+                  $Segment.Substring(0, $firstPeriod)
+              } else {
+                  $Segment
+              }
+              $deviceBaseForComparison = $deviceBase.TrimEnd(
+                  [char[]]@([char]46, [char]32)
+              )
+              if ($WindowsReservedDeviceBasenames.Contains($deviceBaseForComparison)) {
+                  throw "Raw artifact ZIP path segment uses a reserved Windows device basename"
+              }
+          }
+
+          $WindowsReservedDeviceBasenames = [Collections.Generic.HashSet[string]]::new(
+              [StringComparer]::OrdinalIgnoreCase
+          )
+          foreach ($reservedDeviceName in @(
+              "CON", "PRN", "AUX", "NUL",
+              "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+              "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+              ("COM" + [char]0x00B9), ("COM" + [char]0x00B2), ("COM" + [char]0x00B3),
+              ("LPT" + [char]0x00B9), ("LPT" + [char]0x00B2), ("LPT" + [char]0x00B3),
+              "CONIN$", "CONOUT$"
+          )) {
+              if (-not $WindowsReservedDeviceBasenames.Add($reservedDeviceName)) {
+                  throw "Windows reserved device-name contract contains a duplicate"
+              }
+          }
+          if ($WindowsReservedDeviceBasenames.Count -ne 30) {
+              throw "Windows reserved device-name contract is incomplete"
+          }
+
           function Get-RawZipEntryNames(
               [string]$ArchivePath,
               [int]$EntryLimit
@@ -700,6 +760,9 @@ jobs:
               $pathKinds = [Collections.Generic.Dictionary[string, string]]::new(
                   [StringComparer]::OrdinalIgnoreCase
               )
+              $resolvedTargetPaths = [Collections.Generic.HashSet[string]]::new(
+                  [StringComparer]::OrdinalIgnoreCase
+              )
               $plans = [Collections.Generic.List[object]]::new()
               [int64]$declaredTotal = 0
 
@@ -738,6 +801,9 @@ jobs:
                   ) {
                       throw "Raw artifact ZIP contains an unsafe path segment"
                   }
+                  foreach ($segment in $segments) {
+                      Assert-WindowsSafePathSegment $segment
+                  }
                   $normalizedPath = $segments -join "/"
                   if (-not $exactPaths.Add($normalizedPath)) {
                       throw "Raw artifact ZIP contains an exact duplicate path"
@@ -769,6 +835,9 @@ jobs:
                       ))
                   )
                   Assert-BelowRoot $destinationRoot $targetPath "Raw artifact ZIP entry"
+                  if (-not $resolvedTargetPaths.Add($targetPath)) {
+                      throw "Raw artifact ZIP entries resolve to a duplicate Windows destination"
+                  }
                   $kind = if ($isDirectory) { "directory" } else { "file" }
                   $pathKinds.Add($normalizedPath, $kind)
                   $plans.Add([PSCustomObject]@{

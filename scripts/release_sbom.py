@@ -26,6 +26,25 @@ SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "spdx-2.3" / "sp
 
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+WINDOWS_FORBIDDEN_PATH_CHARACTERS = frozenset('<>:"\\|?*')
+WINDOWS_RESERVED_DEVICE_BASENAMES = frozenset(
+    {
+        "con",
+        "prn",
+        "aux",
+        "nul",
+        *(f"com{index}" for index in range(1, 10)),
+        *(f"lpt{index}" for index in range(1, 10)),
+        "com\u00b9",
+        "com\u00b2",
+        "com\u00b3",
+        "lpt\u00b9",
+        "lpt\u00b2",
+        "lpt\u00b3",
+        "conin$",
+        "conout$",
+    }
+)
 TAG_PATTERN = re.compile(
     r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
     r"(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$"
@@ -434,9 +453,15 @@ def reconcile_final_bundle(
     if (
         any(not isinstance(name, str) for name in asset_names)
         or asset_names != sorted(asset_names)
-        or len(asset_names) != len(set(asset_names))
     ):
         raise SbomError("release manifest mismatch")
+    for name in asset_names:
+        _canonical_path(name, "release manifest")
+    _require_unique_canonical_paths(
+        asset_names,
+        duplicate_message="release manifest mismatch",
+        collision_message="release manifest mismatch",
+    )
     sbom_name = expected_filename(evidence["release"]["version"])
     matches = [
         item for item in manifest["assets"]
@@ -672,12 +697,11 @@ def _validate_file_record(
 
 
 def _require_unique_paths(records: list[dict[str, Any]], label: str) -> None:
-    paths = [record["path"] for record in records]
-    if len(paths) != len(set(paths)):
-        raise SbomError(f"{label} contains a duplicate canonical path")
-    folded = [path.casefold() for path in paths]
-    if len(folded) != len(set(folded)):
-        raise SbomError(f"{label} contains a Windows case collision")
+    _require_unique_canonical_paths(
+        [record["path"] for record in records],
+        duplicate_message=f"{label} contains a duplicate canonical path",
+        collision_message=f"{label} contains a Windows case collision",
+    )
 
 
 def _validate_path_list(value: object, label: str) -> list[str]:
@@ -685,10 +709,11 @@ def _validate_path_list(value: object, label: str) -> list[str]:
         raise SbomError(f"{label} are invalid")
     for item in value:
         _canonical_path(item, label)
-    if len(value) != len(set(value)):
-        raise SbomError(f"{label} contain duplicate paths")
-    if len({item.casefold() for item in value}) != len(value):
-        raise SbomError(f"{label} contain a Windows case collision")
+    _require_unique_canonical_paths(
+        value,
+        duplicate_message=f"{label} contain duplicate paths",
+        collision_message=f"{label} contain a Windows case collision",
+    )
     return list(value)
 
 
@@ -702,8 +727,11 @@ def _validate_source_inventory(value: object) -> list[dict[str, str]]:
         if not isinstance(record["sha256"], str) or SHA256_PATTERN.fullmatch(record["sha256"]) is None:
             raise SbomError("PyInstaller source SHA-256 is invalid")
         result.append(record)
-    if len({item["path"].casefold() for item in result}) != len(result):
-        raise SbomError("PyInstaller source inventory contains duplicate paths")
+    _require_unique_canonical_paths(
+        [item["path"] for item in result],
+        duplicate_message="PyInstaller source inventory contains duplicate paths",
+        collision_message="PyInstaller source inventory contains duplicate paths",
+    )
     return result
 
 
@@ -794,6 +822,11 @@ def _validate_release_manifest(
         ):
             raise SbomError("release manifest evidence asset is invalid")
         _canonical_path(record["name"], "release manifest evidence")
+    _require_unique_canonical_paths(
+        [record["name"] for record in assets],
+        duplicate_message="release manifest evidence contains duplicate paths",
+        collision_message="release manifest evidence contains a Windows case collision",
+    )
     expected_assets = [
         {
             "name": item["path"],
@@ -840,6 +873,11 @@ def _validate_checksum_records(value: object, final_artifacts: list[dict[str, An
         ):
             raise SbomError("checksum input record is invalid")
         _canonical_path(record["name"], "checksum input")
+    _require_unique_canonical_paths(
+        [record["name"] for record in value],
+        duplicate_message="checksum input contains duplicate paths",
+        collision_message="checksum input contains a Windows case collision",
+    )
     expected = [
         {"name": item["path"], "sha256": item["sha256"]}
         for item in sorted(final_artifacts, key=lambda item: item["path"])
@@ -934,9 +972,17 @@ def _parse_checksum_bytes(data: bytes) -> dict[str, str]:
     result: dict[str, str] = {}
     for line in data.decode("utf-8").rstrip("\n").split("\n"):
         match = re.fullmatch(r"([0-9a-f]{64})  ([^/\\\r\n]+)", line)
-        if match is None or match.group(2) in result:
+        if match is None:
             raise SbomError("checksum file content is invalid")
-        result[match.group(2)] = match.group(1)
+        name = _canonical_path(match.group(2), "checksum file")
+        if name in result:
+            raise SbomError("checksum file content is invalid")
+        result[name] = match.group(1)
+    _require_unique_canonical_paths(
+        list(result),
+        duplicate_message="checksum file content is invalid",
+        collision_message="checksum file contains a Windows case collision",
+    )
     if list(result) != sorted(result):
         raise SbomError("checksum file records are not sorted")
     return result
@@ -950,10 +996,44 @@ def _canonical_path(value: object, label: str) -> str:
         raise SbomError(f"{label} contains an absolute path")
     if any(part in {"", ".", ".."} for part in path.parts):
         raise SbomError(f"{label} contains parent traversal or a non-canonical path")
+    for part in path.parts:
+        _validate_windows_safe_path_segment(part, label)
     canonical = path.as_posix()
     if canonical != value:
         raise SbomError(f"{label} path is not canonical")
     return canonical
+
+
+def _validate_windows_safe_path_segment(segment: str, label: str) -> None:
+    if segment.endswith("."):
+        raise SbomError(f"{label} contains a Windows-unsafe trailing dot")
+    if segment.endswith(" "):
+        raise SbomError(f"{label} contains a Windows-unsafe trailing space")
+    if any(character in WINDOWS_FORBIDDEN_PATH_CHARACTERS for character in segment):
+        raise SbomError(f"{label} contains a forbidden Windows path character")
+    if any(ord(character) <= 0x1F for character in segment):
+        raise SbomError(f"{label} contains an ASCII control character")
+
+    device_base = segment.split(".", 1)[0].rstrip(". ")
+    if device_base.casefold() in WINDOWS_RESERVED_DEVICE_BASENAMES:
+        raise SbomError(f"{label} contains a reserved Windows device basename")
+
+
+def _windows_collision_key(path: str) -> tuple[str, ...]:
+    return tuple(part.casefold() for part in path.split("/"))
+
+
+def _require_unique_canonical_paths(
+    paths: list[str],
+    *,
+    duplicate_message: str,
+    collision_message: str,
+) -> None:
+    if len(paths) != len(set(paths)):
+        raise SbomError(duplicate_message)
+    collision_keys = [_windows_collision_key(path) for path in paths]
+    if len(collision_keys) != len(set(collision_keys)):
+        raise SbomError(collision_message)
 
 
 def _canonical_id(value: object, label: str) -> str:

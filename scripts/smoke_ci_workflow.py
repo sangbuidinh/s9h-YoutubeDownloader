@@ -588,6 +588,15 @@ def validate_workflow(workflow: str, current_policy: dict | None = None) -> None
         "[StringComparer]::Ordinal",
         "[StringComparer]::OrdinalIgnoreCase",
         "$caseInsensitivePaths.Add($normalizedPath)",
+        "Assert-WindowsSafePathSegment",
+        "$WindowsReservedDeviceBasenames",
+        '$Segment.EndsWith(".", [StringComparison]::Ordinal)',
+        '$Segment.EndsWith(" ", [StringComparison]::Ordinal)',
+        "$Segment.IndexOfAny",
+        "[int]$character -le 0x1F",
+        "$resolvedTargetPaths",
+        "$resolvedTargetPaths.Add($targetPath)",
+        "Raw artifact ZIP entries resolve to a duplicate Windows destination",
         "$unixFileType -eq 0xA000",
         "$declaredTotal -gt $MaxTotalUncompressedBytes",
         'Assert-BelowRoot $destinationRoot $targetPath "Raw artifact ZIP entry"',
@@ -601,6 +610,21 @@ def validate_workflow(workflow: str, current_policy: dict | None = None) -> None
         "Write-Host $SuccessMessage",
     ):
         _require(required in extractor_text, f"secure extraction contract is missing: {required}")
+    for required_once in (
+        "function Assert-WindowsSafePathSegment(",
+        "$WindowsReservedDeviceBasenames =",
+        "$WindowsReservedDeviceBasenames.Contains($deviceBaseForComparison)",
+        '$Segment.EndsWith(".", [StringComparison]::Ordinal)',
+        '$Segment.EndsWith(" ", [StringComparison]::Ordinal)',
+        "$Segment.IndexOfAny",
+        "[int]$character -le 0x1F",
+        "$resolvedTargetPaths =",
+        "$resolvedTargetPaths.Add($targetPath)",
+    ):
+        _require(
+            extractor_text.count(required_once) == 1,
+            f"secure extraction control must occur exactly once: {required_once}",
+        )
     for forbidden in (
         "Expand-Archive",
         "Invoke-WebRequest",
@@ -1466,6 +1490,52 @@ def _test_secure_extraction_fixtures(workflow: str) -> tuple[int, int]:
             "secure extraction positive fixture wrote outside the workspace",
         )
 
+        near_reserved_root = temp_root / "positive-near-reserved"
+        near_reserved_workspace = near_reserved_root / "workspace"
+        near_reserved_raw = near_reserved_workspace / "artifact-download"
+        near_reserved_raw.mkdir(parents=True)
+        near_reserved_files = {
+            "conduit.txt": b"conduit\n",
+            "auxiliary.txt": b"auxiliary\n",
+            "com0.txt": b"com0\n",
+            "com10.txt": b"com10\n",
+            "lpt0.txt": b"lpt0\n",
+            "lpt10.txt": b"lpt10\n",
+        }
+        near_reserved_archive = near_reserved_raw / "synthetic-artifact.bin"
+        _write_fixture_zip(
+            near_reserved_archive,
+            [(name, data, None) for name, data in near_reserved_files.items()],
+        )
+        near_reserved_result = _execute_extraction_body(
+            powershell,
+            body,
+            near_reserved_root,
+            near_reserved_workspace,
+            _sha256_file(near_reserved_archive),
+        )
+        _require(
+            near_reserved_result.returncode == 0,
+            "secure extraction near-reserved positive fixture failed: "
+            + _combined_process_output(near_reserved_result),
+        )
+        near_reserved_output = _combined_process_output(near_reserved_result)
+        _require(
+            near_reserved_output.count(RAW_EXTRACTION_SUCCESS) == 1,
+            "secure extraction near-reserved success message differs",
+        )
+        near_reserved_bundle = near_reserved_workspace / "release-bundle"
+        for relative, expected in near_reserved_files.items():
+            path = near_reserved_bundle / relative
+            _require(
+                path.is_file() and path.read_bytes() == expected,
+                f"secure extraction near-reserved content differs: {relative}",
+            )
+        _require(
+            not near_reserved_raw.exists(),
+            "secure extraction near-reserved raw root remains",
+        )
+
         def run_negative(
             label: str,
             entries: list[tuple[str, bytes, int | None]] | None = None,
@@ -1610,6 +1680,52 @@ def _test_secure_extraction_fixtures(workflow: str) -> tuple[int, int]:
             unsupported_compression_entry="unsupported.bin",
         )
 
+        windows_path_cases = (
+            ("reserved CON", [("CON", b"x", None)]),
+            ("reserved con extension", [("con.txt", b"x", None)]),
+            ("reserved PRN extension", [("PRN.log", b"x", None)]),
+            ("reserved AUX", [("AUX", b"x", None)]),
+            ("reserved NUL extension", [("NUL.txt", b"x", None)]),
+            ("reserved nested COM1", [("dir/COM1.log", b"x", None)]),
+            ("reserved nested COM9", [("dir/COM9.log", b"x", None)]),
+            ("reserved nested LPT1", [("dir/LPT1.log", b"x", None)]),
+            ("reserved nested LPT9", [("dir/LPT9.log", b"x", None)]),
+            ("reserved superscript COM1", [("COM\u00b9.txt", b"x", None)]),
+            ("reserved superscript LPT3", [("LPT\u00b3.log", b"x", None)]),
+            ("reserved CONIN", [("CONIN$.txt", b"x", None)]),
+            ("reserved CONOUT", [("CONOUT$.txt", b"x", None)]),
+            ("trailing dot", [("file.", b"x", None)]),
+            ("trailing space", [("file ", b"x", None)]),
+            ("nested trailing dot", [("dir/name.", b"x", None)]),
+            ("nested trailing space", [("dir/name ", b"x", None)]),
+            ("dot-space suffix", [("file. ", b"x", None)]),
+            ("forbidden question mark", [("bad?.txt", b"x", None)]),
+            ("forbidden asterisk", [("bad*.txt", b"x", None)]),
+            ("forbidden pipe", [("bad|name.txt", b"x", None)]),
+            ('forbidden quote', [('bad"name.txt', b"x", None)]),
+            ("forbidden less-than", [("bad<name.txt", b"x", None)]),
+            ("forbidden greater-than", [("bad>name.txt", b"x", None)]),
+            ("ASCII control", [("bad\u0001name.txt", b"x", None)]),
+            (
+                "trailing-dot alias pair",
+                [("file", b"A", None), ("file.", b"B", None)],
+            ),
+            (
+                "trailing-space alias pair",
+                [("name", b"A", None), ("name ", b"B", None)],
+            ),
+            (
+                "reserved-extension alias pair",
+                [("NUL", b"A", None), ("NUL.txt", b"B", None)],
+            ),
+        )
+        for label, entries in windows_path_cases:
+            run_negative(
+                "Windows path " + label,
+                entries,
+                expect_clean_destination=True,
+            )
+
         warning_mutation = _replace_once(
             workflow,
             "          NODE_OPTIONS: --throw-deprecation",
@@ -1623,10 +1739,10 @@ def _test_secure_extraction_fixtures(workflow: str) -> tuple[int, int]:
         negative_labels.append("warning-suppression environment mutation")
 
     _require(
-        len(negative_labels) == 20,
+        len(negative_labels) == 20 + len(windows_path_cases),
         f"secure extraction negative fixture count differs: {len(negative_labels)}",
     )
-    return 1, len(negative_labels)
+    return 2, len(negative_labels)
 
 
 def _secure_extraction_body(workflow: str) -> str:

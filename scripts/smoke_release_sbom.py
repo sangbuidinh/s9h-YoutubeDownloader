@@ -18,6 +18,22 @@ import smoke_release_bundle as bundle_smoke
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GENERATOR = REPO_ROOT / "scripts" / "generate_release_sbom.py"
 VERIFIER = REPO_ROOT / "scripts" / "verify_release_sbom.py"
+WINDOWS_RESERVED_DEVICE_NAMES = (
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+    "COM\u00b9",
+    "COM\u00b2",
+    "COM\u00b3",
+    "LPT\u00b9",
+    "LPT\u00b2",
+    "LPT\u00b3",
+    "CONIN$",
+    "CONOUT$",
+)
 
 
 def main() -> int:
@@ -42,6 +58,14 @@ def main() -> int:
         verify_output = _run(VERIFIER, "--input", evidence_path, "--sbom", sbom_path)
         _require(verify_output == "Deterministic SPDX 2.3 SBOM verified")
         positive += 1
+
+        windows_positive, windows_negative = _test_windows_path_contract(
+            evidence,
+            root,
+            sbom_path,
+        )
+        positive += windows_positive
+        negative += windows_negative
 
         sbom_bytes = sbom_path.read_bytes()
         document = release_sbom.verify_document(sbom_bytes, evidence)
@@ -81,6 +105,12 @@ def main() -> int:
             final_checksum_bytes=checksum_bytes,
         )
         positive += 2
+        negative += _test_final_bundle_windows_path_contract(
+            sbom_bytes,
+            evidence,
+            manifest,
+            checksum_bytes,
+        )
 
         input_cases = _input_cases(evidence)
         for label, expected, mutated in input_cases:
@@ -447,6 +477,303 @@ def _permuted_input(evidence: dict) -> dict:
     for item in changed["python_packages"] + changed["external_runtimes"]:
         item["files"].reverse()
     return changed
+
+
+def _test_windows_path_contract(
+    evidence: dict,
+    root: Path,
+    sbom_path: Path,
+) -> tuple[int, int]:
+    positive = 0
+    negative = 0
+
+    _require(len(WINDOWS_RESERVED_DEVICE_NAMES) == 30)
+    _require(
+        {name.casefold() for name in WINDOWS_RESERVED_DEVICE_NAMES}
+        == release_sbom.WINDOWS_RESERVED_DEVICE_BASENAMES
+    )
+    positive += 1
+
+    safe_paths = (
+        "conduit.txt",
+        "auxiliary.txt",
+        "com0.txt",
+        "com10.txt",
+        "lpt0.txt",
+        "lpt10.txt",
+        "name with internal spaces.txt",
+        "file.name.txt",
+        "company/file.txt",
+    )
+    for path in safe_paths:
+        _require(release_sbom._canonical_path(path, "Windows path fixture") == path)
+        positive += 1
+
+    unsafe_paths: list[tuple[str, str]] = []
+    for reserved in WINDOWS_RESERVED_DEVICE_NAMES:
+        variants = (
+            reserved,
+            reserved.lower(),
+            reserved[:1].lower() + reserved[1:].upper(),
+        )
+        for index, variant in enumerate(variants, start=1):
+            unsafe_paths.append((f"{reserved} case variant {index}", variant))
+        unsafe_paths.append((f"{reserved} extension", reserved + ".txt"))
+        unsafe_paths.append((f"{reserved} parent segment", reserved + "/file.txt"))
+    unsafe_paths.extend(
+        [
+            ("reserved basename with pre-extension space", "CON .txt"),
+            ("trailing dot", "assets/file."),
+            ("trailing space", "assets/file "),
+            ("nested trailing dot", "assets/name."),
+            ("nested trailing space", "assets/name "),
+            ("dot-space suffix", "assets/name. "),
+            ("forbidden less-than", "bad<name.txt"),
+            ("forbidden greater-than", "bad>name.txt"),
+            ("forbidden colon", "bad:name.txt"),
+            ('forbidden quote', 'bad"name.txt'),
+            ("forbidden backslash", "bad\\name.txt"),
+            ("forbidden pipe", "bad|name.txt"),
+            ("forbidden question mark", "bad?.txt"),
+            ("forbidden asterisk", "bad*.txt"),
+        ]
+    )
+    unsafe_paths.extend(
+        (f"ASCII control U+{codepoint:04X}", f"bad{chr(codepoint)}name.txt")
+        for codepoint in range(0x20)
+    )
+    for label, path in unsafe_paths:
+        _expect_error(
+            f"direct Windows path: {label}",
+            "",
+            lambda path=path: release_sbom._canonical_path(path, "Windows path fixture"),
+        )
+        negative += 1
+
+    for label, paths in (
+        ("trailing-dot alias", ["assets/file", "assets/file."]),
+        ("trailing-space alias", ["assets/name", "assets/name "]),
+        ("reserved-extension alias", ["dir/NUL", "dir/NUL.txt"]),
+    ):
+        _expect_error(
+            label,
+            "",
+            lambda paths=paths: [
+                release_sbom._canonical_path(path, "Windows alias fixture")
+                for path in paths
+            ],
+        )
+        negative += 1
+    _expect_error(
+        "case-only collision",
+        "Windows case collision",
+        lambda: release_sbom._require_unique_canonical_paths(
+            ["assets/File.txt", "assets/file.txt"],
+            duplicate_message="duplicate canonical path",
+            collision_message="Windows case collision",
+        ),
+    )
+    negative += 1
+
+    boundary_mutations = (
+        (
+            "final executable",
+            lambda data: data["final_executable"].__setitem__("path", "CON"),
+        ),
+        (
+            "final artifact records",
+            lambda data: data["final_artifacts"][0].__setitem__("path", "CON"),
+        ),
+        (
+            "portable file records",
+            lambda data: data["portable_files"][0].__setitem__("path", "CON"),
+        ),
+        (
+            "PyInstaller CArchive members",
+            lambda data: data["pyinstaller_inventory"]["carchive_members"].__setitem__(
+                0, "CON"
+            ),
+        ),
+        (
+            "PyInstaller source inventory",
+            lambda data: data["pyinstaller_inventory"]["source_inventory"][0].__setitem__(
+                "path", "CON"
+            ),
+        ),
+        (
+            "Python runtime file list",
+            lambda data: data["python_runtime"]["files"].__setitem__(0, "CON"),
+        ),
+        (
+            "Python package file list",
+            lambda data: data["python_packages"][0]["files"].__setitem__(0, "CON"),
+        ),
+        (
+            "native member list",
+            lambda data: data["native_members"].__setitem__(0, "CON"),
+        ),
+        (
+            "external runtime file list",
+            lambda data: data["external_runtimes"][0]["files"].__setitem__(0, "CON"),
+        ),
+        (
+            "release manifest asset names",
+            lambda data: data["release_manifest"]["assets"][0].__setitem__("name", "CON"),
+        ),
+        (
+            "release manifest checksum record",
+            lambda data: data["release_manifest"]["checksum_file"].__setitem__(
+                "name", "CON"
+            ),
+        ),
+        (
+            "release manifest release-notes record",
+            lambda data: data["release_manifest"]["release_notes"].__setitem__(
+                "name", "CON"
+            ),
+        ),
+        (
+            "checksum record names",
+            lambda data: data["checksum_records"][0].__setitem__("name", "CON"),
+        ),
+    )
+    for label, mutate in boundary_mutations:
+        changed = copy.deepcopy(evidence)
+        mutate(changed)
+        _expect_error(
+            f"full-evidence Windows boundary: {label}",
+            "reserved Windows device basename",
+            lambda changed=changed: release_sbom.generate_bytes(changed),
+        )
+        negative += 1
+
+    verifier_cases = (
+        ("reserved device", "CON"),
+        ("trailing dot", "assets/file."),
+        ("trailing space", "assets/file "),
+        ("forbidden character", "assets/bad?.txt"),
+        ("ASCII control", "assets/bad\u0001name.txt"),
+    )
+    for index, (label, unsafe_path) in enumerate(verifier_cases, start=1):
+        changed = copy.deepcopy(evidence)
+        changed["portable_files"][0]["path"] = unsafe_path
+        input_path = root / f"unsafe-windows-input-{index:02d}.json"
+        input_path.write_bytes(release_sbom.canonical_json_bytes(changed))
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(VERIFIER),
+                "--input",
+                str(input_path),
+                "--sbom",
+                str(sbom_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        _require(result.returncode == 1)
+        _require("Release SBOM verification error:" in result.stderr)
+        _require("Deterministic SPDX 2.3 SBOM verified" not in result.stdout)
+        negative += 1
+
+    return positive, negative
+
+
+def _test_final_bundle_windows_path_contract(
+    sbom_bytes: bytes,
+    evidence: dict,
+    manifest: dict,
+    checksum_bytes: bytes,
+) -> int:
+    negative = 0
+
+    unsafe_manifest = copy.deepcopy(manifest)
+    unsafe_manifest["assets"][0]["name"] = "CON"
+    unsafe_manifest["assets"].sort(key=lambda item: item["name"])
+    _expect_error(
+        "final bundle manifest reserved device",
+        "reserved Windows device basename",
+        lambda: release_sbom.reconcile_final_bundle(
+            sbom_bytes,
+            evidence,
+            unsafe_manifest,
+            checksum_bytes,
+        ),
+    )
+    negative += 1
+
+    colliding_manifest = copy.deepcopy(manifest)
+    collision_record = copy.deepcopy(colliding_manifest["assets"][0])
+    collision_record["name"] = collision_record["name"].swapcase()
+    colliding_manifest["assets"].append(collision_record)
+    colliding_manifest["assets"].sort(key=lambda item: item["name"])
+    _expect_error(
+        "final bundle manifest Windows collision",
+        "release manifest mismatch",
+        lambda: release_sbom.reconcile_final_bundle(
+            sbom_bytes,
+            evidence,
+            colliding_manifest,
+            checksum_bytes,
+        ),
+    )
+    negative += 1
+
+    checksum_lines = checksum_bytes.decode("utf-8").rstrip("\n").split("\n")
+    digest, _ = checksum_lines[0].split("  ", 1)
+    unsafe_checksum_bytes = (
+        "\n".join(sorted([f"{digest}  CON", *checksum_lines[1:]])) + "\n"
+    ).encode("utf-8")
+    unsafe_checksum_manifest = copy.deepcopy(manifest)
+    unsafe_checksum_manifest["checksum_file"] = {
+        "name": "SHA256SUMS.txt",
+        "size": len(unsafe_checksum_bytes),
+        "sha256": hashlib.sha256(unsafe_checksum_bytes).hexdigest(),
+    }
+    _expect_error(
+        "final checksum reserved device",
+        "reserved Windows device basename",
+        lambda: release_sbom.reconcile_final_bundle(
+            sbom_bytes,
+            evidence,
+            unsafe_checksum_manifest,
+            unsafe_checksum_bytes,
+        ),
+    )
+    negative += 1
+
+    first_digest, first_name = checksum_lines[0].split("  ", 1)
+    colliding_checksum_bytes = (
+        "\n".join(
+            sorted(
+                [
+                    *checksum_lines,
+                    f"{first_digest}  {first_name.swapcase()}",
+                ]
+            )
+        )
+        + "\n"
+    ).encode("utf-8")
+    colliding_checksum_manifest = copy.deepcopy(manifest)
+    colliding_checksum_manifest["checksum_file"] = {
+        "name": "SHA256SUMS.txt",
+        "size": len(colliding_checksum_bytes),
+        "sha256": hashlib.sha256(colliding_checksum_bytes).hexdigest(),
+    }
+    _expect_error(
+        "final checksum Windows collision",
+        "Windows case collision",
+        lambda: release_sbom.reconcile_final_bundle(
+            sbom_bytes,
+            evidence,
+            colliding_checksum_manifest,
+            colliding_checksum_bytes,
+        ),
+    )
+    negative += 1
+
+    return negative
 
 
 def _input_cases(evidence: dict) -> list[tuple[str, str, dict]]:
