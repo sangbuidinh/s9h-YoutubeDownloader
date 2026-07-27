@@ -105,6 +105,16 @@ def main() -> int:
             final_checksum_bytes=checksum_bytes,
         )
         positive += 2
+        integer_positive, integer_negative = _test_exact_integer_contracts(
+            evidence,
+            root,
+            sbom_path,
+            sbom_bytes,
+            manifest,
+            checksum_bytes,
+        )
+        positive += integer_positive
+        negative += integer_negative
         negative += _test_final_bundle_windows_path_contract(
             sbom_bytes,
             evidence,
@@ -323,6 +333,221 @@ def main() -> int:
 
     print(f"release SBOM smoke tests passed: {positive} positive, {negative} negative")
     return 0
+
+
+def _test_exact_integer_contracts(
+    evidence: dict,
+    root: Path,
+    sbom_path: Path,
+    sbom_bytes: bytes,
+    manifest: dict,
+    checksum_bytes: bytes,
+) -> tuple[int, int]:
+    positive = 0
+    negative = 0
+
+    normalized = release_sbom.validate_input(copy.deepcopy(evidence))
+    _require(type(normalized["schema_version"]) is int)
+    _require(normalized["schema_version"] == 1)
+    positive += 1
+
+    _require(type(normalized["release_manifest"]["schema_version"]) is int)
+    _require(
+        normalized["release_manifest"]["schema_version"]
+        == release_sbom.BUNDLE_MANIFEST_SCHEMA_VERSION
+    )
+    positive += 1
+
+    release_sbom.reconcile_final_bundle(
+        sbom_bytes,
+        evidence,
+        copy.deepcopy(manifest),
+        checksum_bytes,
+    )
+    positive += 1
+
+    malformed_input_versions = [
+        ("true", True),
+        ("false", False),
+        ("integral float", 1.0),
+        ("fractional float", 1.5),
+        ("string", "1"),
+        ("null", None),
+        ("list", []),
+        ("object", {}),
+        ("zero", 0),
+        ("wrong integer", 2),
+    ]
+    for label, value in malformed_input_versions:
+        changed = copy.deepcopy(evidence)
+        changed["schema_version"] = value
+        callbacks = [
+            ("validate_input", lambda changed=changed: release_sbom.validate_input(changed)),
+            (
+                "generate_document",
+                lambda changed=changed: release_sbom.generate_document(changed),
+            ),
+            (
+                "generate_bytes",
+                lambda changed=changed: release_sbom.generate_bytes(changed),
+            ),
+            (
+                "verify_document",
+                lambda changed=changed: release_sbom.verify_document(
+                    sbom_bytes,
+                    changed,
+                ),
+            ),
+        ]
+        for operation, callback in callbacks:
+            _expect_error(
+                f"input schema_version {label} via {operation}",
+                "SBOM input schema version is invalid",
+                callback,
+            )
+            negative += 1
+
+    for index, (label, value) in enumerate(
+        (("true", True), ("integral float", 1.0)),
+        start=1,
+    ):
+        changed = copy.deepcopy(evidence)
+        changed["schema_version"] = value
+        input_path = root / f"canonical-malformed-schema-{index}.json"
+        input_path.write_bytes(release_sbom.canonical_json_bytes(changed))
+        _expect_error(
+            f"canonical input schema_version {label}",
+            "SBOM input schema version is invalid",
+            lambda input_path=input_path: release_sbom.load_input(input_path),
+        )
+        negative += 1
+
+    malformed_release_manifest_versions = [
+        ("true", True),
+        ("false", False),
+        ("integral float", 3.0),
+        ("string", "3"),
+        ("null", None),
+        ("lower integer", 2),
+        ("higher integer", 4),
+    ]
+    for label, value in malformed_release_manifest_versions:
+        changed = copy.deepcopy(evidence)
+        changed["release_manifest"]["schema_version"] = value
+        _expect_error(
+            f"release manifest schema_version {label}",
+            "release manifest mismatch",
+            lambda changed=changed: release_sbom.validate_input(changed),
+        )
+        negative += 1
+
+    for label, value in malformed_release_manifest_versions:
+        changed = copy.deepcopy(manifest)
+        changed["schema_version"] = value
+        _expect_error(
+            f"integrated manifest schema_version {label}",
+            "release manifest mismatch",
+            lambda changed=changed: release_sbom.reconcile_final_bundle(
+                sbom_bytes,
+                evidence,
+                changed,
+                checksum_bytes,
+            ),
+        )
+        negative += 1
+
+    def size_record(value: dict, location: str) -> dict:
+        if location == "release SBOM asset":
+            return next(
+                item for item in value["assets"]
+                if item["role"] == "release-sbom"
+            )
+        if location == "non-SBOM asset":
+            return next(
+                item for item in value["assets"]
+                if item["role"] != "release-sbom"
+            )
+        return value[location]
+
+    for location in (
+        "release SBOM asset",
+        "non-SBOM asset",
+        "checksum_file",
+        "release_notes",
+    ):
+        for mutation in ("float", "bool", "string", "missing", "zero", "negative"):
+            changed = copy.deepcopy(manifest)
+            record = size_record(changed, location)
+            original_size = record["size"]
+            if mutation == "float":
+                record["size"] = float(original_size)
+            elif mutation == "bool":
+                record["size"] = True
+            elif mutation == "string":
+                record["size"] = str(original_size)
+            elif mutation == "missing":
+                record.pop("size")
+            elif mutation == "zero":
+                record["size"] = 0
+            else:
+                record["size"] = -1
+            _expect_error(
+                f"integrated manifest {location} size {mutation}",
+                "release manifest mismatch",
+                lambda changed=changed: release_sbom.reconcile_final_bundle(
+                    sbom_bytes,
+                    evidence,
+                    changed,
+                    checksum_bytes,
+                ),
+            )
+            negative += 1
+
+    for index, (label, value) in enumerate(
+        (("true", True), ("integral float", 1.0)),
+        start=1,
+    ):
+        changed = copy.deepcopy(evidence)
+        changed["schema_version"] = value
+        input_path = root / f"cli-malformed-schema-{index}.json"
+        input_path.write_bytes(release_sbom.canonical_json_bytes(changed))
+        output_path = root / f"cli-output-{index}" / sbom_path.name
+        generated = subprocess.run(
+            [
+                sys.executable,
+                str(GENERATOR),
+                "--input",
+                str(input_path),
+                "--output",
+                str(output_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        _require(generated.returncode == 1)
+        _require("SBOM input schema version is invalid" in generated.stderr)
+        _require(not output_path.exists())
+        negative += 1
+
+        verified = subprocess.run(
+            [
+                sys.executable,
+                str(VERIFIER),
+                "--input",
+                str(input_path),
+                "--sbom",
+                str(sbom_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        _require(verified.returncode == 1)
+        _require("SBOM input schema version is invalid" in verified.stderr)
+        negative += 1
+
+    return positive, negative
 
 
 def _verify_canonical_document(

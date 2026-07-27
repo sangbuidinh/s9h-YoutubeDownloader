@@ -90,6 +90,21 @@ RELEASE_KEYS = {
     "control_commit",
     "created_utc",
 }
+RELEASE_MANIFEST_KEYS = {
+    "schema_version",
+    "bundle_format",
+    "release_tag",
+    "prerelease",
+    "source_commit",
+    "control_commit",
+    "release_ready",
+    "legal_compliance_certified",
+    "source_availability_certified",
+    "assets",
+    "checksum_file",
+    "release_notes",
+    "release_blockers",
+}
 FILE_KEYS = {"path", "size", "sha256", "component_id", "unresolved_id"}
 ARTIFACT_KEYS = FILE_KEYS | {"role"}
 COMPONENT_KEYS = {
@@ -118,8 +133,11 @@ def load_input(path: Path) -> dict[str, Any]:
 def validate_input(value: object) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != INPUT_KEYS:
         raise SbomError("SBOM input fields are invalid")
-    if value["schema_version"] != 1:
-        raise SbomError("SBOM input schema version is invalid")
+    _require_exact_integer(
+        value["schema_version"],
+        1,
+        "SBOM input schema version is invalid",
+    )
     if value["evidence_type"] not in {"synthetic-ci", "production-release"}:
         raise SbomError("SBOM evidence type is invalid")
     if type(value["synthetic"]) is not bool or type(value["distribution_allowed"]) is not bool:
@@ -428,12 +446,9 @@ def reconcile_final_bundle(
     manifest: object,
     checksum_bytes: bytes,
 ) -> None:
-    if not isinstance(manifest, dict) or not isinstance(manifest.get("assets"), list):
-        raise SbomError("release manifest mismatch")
-    checksum_records = _parse_checksum_bytes(checksum_bytes)
     base_manifest = evidence["release_manifest"]
-    if set(manifest) != set(base_manifest):
-        raise SbomError("release manifest mismatch")
+    _validate_integrated_release_manifest(manifest)
+    checksum_records = _parse_checksum_bytes(checksum_bytes)
     for key in set(base_manifest) - {"assets", "checksum_file"}:
         if manifest[key] != base_manifest[key]:
             raise SbomError("release manifest mismatch")
@@ -489,6 +504,61 @@ def reconcile_final_bundle(
         if name != sbom_name
     } != {item["name"]: item["sha256"] for item in evidence["checksum_records"]}:
         raise SbomError("checksum input does not match the integrated release bundle")
+
+
+def _validate_integrated_release_manifest(
+    manifest: object,
+) -> None:
+    if not isinstance(manifest, dict) or set(manifest) != RELEASE_MANIFEST_KEYS:
+        raise SbomError("release manifest mismatch")
+    _require_exact_integer(
+        manifest["schema_version"],
+        BUNDLE_MANIFEST_SCHEMA_VERSION,
+        "release manifest mismatch",
+    )
+    if (
+        not isinstance(manifest["bundle_format"], str)
+        or not isinstance(manifest["release_tag"], str)
+        or type(manifest["prerelease"]) is not bool
+        or not isinstance(manifest["source_commit"], str)
+        or not isinstance(manifest["control_commit"], str)
+        or type(manifest["release_ready"]) is not bool
+        or type(manifest["legal_compliance_certified"]) is not bool
+        or type(manifest["source_availability_certified"]) is not bool
+        or not isinstance(manifest["release_blockers"], list)
+        or not manifest["release_blockers"]
+        or any(
+            not isinstance(item, str) or not item
+            for item in manifest["release_blockers"]
+        )
+        or not isinstance(manifest["assets"], list)
+    ):
+        raise SbomError("release manifest mismatch")
+    for record in manifest["assets"]:
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"name", "role", "size", "sha256"}
+            or not isinstance(record["name"], str)
+            or not isinstance(record["role"], str)
+            or not record["role"]
+            or not isinstance(record["sha256"], str)
+            or SHA256_PATTERN.fullmatch(record["sha256"]) is None
+        ):
+            raise SbomError("release manifest mismatch")
+        _require_positive_integer(record["size"], "release manifest mismatch")
+        _canonical_path(record["name"], "release manifest")
+    for key in ("checksum_file", "release_notes"):
+        record = manifest[key]
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"name", "size", "sha256"}
+            or not isinstance(record["name"], str)
+            or not isinstance(record["sha256"], str)
+            or SHA256_PATTERN.fullmatch(record["sha256"]) is None
+        ):
+            raise SbomError("release manifest mismatch")
+        _require_positive_integer(record["size"], "release manifest mismatch")
+        _canonical_path(record["name"], "release manifest")
 
 
 def expected_filename(version: str) -> str:
@@ -776,25 +846,14 @@ def _validate_release_manifest(
     release: dict[str, Any],
     final_artifacts: list[dict[str, Any]],
 ) -> None:
-    expected_keys = {
-        "schema_version",
-        "bundle_format",
-        "release_tag",
-        "prerelease",
-        "source_commit",
-        "control_commit",
-        "release_ready",
-        "legal_compliance_certified",
-        "source_availability_certified",
-        "assets",
-        "checksum_file",
-        "release_notes",
-        "release_blockers",
-    }
-    manifest = _require_object(value, expected_keys, "release manifest evidence")
+    manifest = _require_object(value, RELEASE_MANIFEST_KEYS, "release manifest evidence")
+    _require_exact_integer(
+        manifest["schema_version"],
+        BUNDLE_MANIFEST_SCHEMA_VERSION,
+        "release manifest mismatch",
+    )
     if (
-        manifest["schema_version"] != BUNDLE_MANIFEST_SCHEMA_VERSION
-        or manifest["bundle_format"] != BUNDLE_FORMAT
+        manifest["bundle_format"] != BUNDLE_FORMAT
         or manifest["release_tag"] != release["tag"]
         or manifest["source_commit"] != release["source_commit"]
         or manifest["control_commit"] != release["control_commit"]
@@ -815,12 +874,14 @@ def _validate_release_manifest(
             or set(record) != {"name", "role", "size", "sha256"}
             or not isinstance(record["name"], str)
             or not isinstance(record["role"], str)
-            or type(record["size"]) is not int
-            or record["size"] <= 0
             or not isinstance(record["sha256"], str)
             or SHA256_PATTERN.fullmatch(record["sha256"]) is None
         ):
             raise SbomError("release manifest evidence asset is invalid")
+        _require_positive_integer(
+            record["size"],
+            "release manifest evidence asset is invalid",
+        )
         _canonical_path(record["name"], "release manifest evidence")
     _require_unique_canonical_paths(
         [record["name"] for record in assets],
@@ -846,12 +907,14 @@ def _validate_release_manifest(
             not isinstance(record, dict)
             or set(record) != {"name", "size", "sha256"}
             or not isinstance(record["name"], str)
-            or type(record["size"]) is not int
-            or record["size"] <= 0
             or not isinstance(record["sha256"], str)
             or SHA256_PATTERN.fullmatch(record["sha256"]) is None
         ):
             raise SbomError("release manifest evidence record is invalid")
+        _require_positive_integer(
+            record["size"],
+            "release manifest evidence record is invalid",
+        )
         _canonical_path(record["name"], "release manifest evidence record")
     if (
         manifest["checksum_file"]["name"] != "SHA256SUMS.txt"
@@ -1046,6 +1109,20 @@ def _require_object(value: object, expected: set[str], label: str) -> dict[str, 
     if not isinstance(value, dict) or set(value) != expected:
         raise SbomError(f"{label} fields are invalid")
     return value
+
+
+def _require_exact_integer(
+    value: object,
+    expected: int,
+    message: str,
+) -> None:
+    if type(value) is not int or value != expected:
+        raise SbomError(message)
+
+
+def _require_positive_integer(value: object, message: str) -> None:
+    if type(value) is not int or value <= 0:
+        raise SbomError(message)
 
 
 def _spdx_id(kind: str, value: str) -> str:
