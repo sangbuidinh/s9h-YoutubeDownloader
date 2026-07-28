@@ -194,7 +194,10 @@ def _validate_inventory(
         _require(isinstance(package["direct"], bool), f"direct flag is invalid: {name}")
         if package["direct"]:
             direct_names.append(name)
-    _require(direct_names == ["pyinstaller"], "only PyInstaller may be direct")
+    _require(
+        direct_names == ["fastjsonschema", "pyinstaller"],
+        "direct build tools must be fastjsonschema and PyInstaller",
+    )
 
 
 def _validate_installer(installer: str) -> None:
@@ -202,6 +205,7 @@ def _validate_installer(installer: str) -> None:
         'os.name != "nt"',
         'platform.system() != "Windows"',
         "EXPECTED_PYTHON = (3, 11, 9)",
+        'EXPECTED_FASTJSONSCHEMA = "2.21.2"',
         'S9H_BUILD_VENV_MARKER = ".s9h-build-venv.json"',
         '"purpose": "s9h-build-dependencies"',
         "venv.EnvBuilder(with_pip=True, clear=True)",
@@ -221,6 +225,8 @@ def _validate_installer(installer: str) -> None:
         '"--index-url"',
         '"-m", "pip", "check"',
         '"-m",\n        "PyInstaller",',
+        '"verify fastjsonschema"',
+        "m.version('fastjsonschema')",
         "import importlib.metadata",
         "S9H_BUILD_PYTHON=",
         'print(f"Verified pip {match.group(1)}")',
@@ -511,6 +517,7 @@ def _marker_target(installer, target: Path, value) -> Path:
 def _test_marker_lifecycle(installer, safe_root: Path, synthetic_repo: Path) -> None:
     inventory = {
         "packages": [
+            {"name": "fastjsonschema", "version": "2.21.2"},
             {"name": "pyinstaller", "version": "6.21.0"},
         ],
     }
@@ -527,10 +534,14 @@ def _test_marker_lifecycle(installer, safe_root: Path, synthetic_repo: Path) -> 
         mock.patch.object(installer, "_run", return_value=None),
         mock.patch.object(installer, "_verify_pip", return_value=None),
         mock.patch.object(installer, "_verify_pyinstaller", return_value=None),
+        mock.patch.object(installer, "_verify_fastjsonschema", return_value=None),
         mock.patch.object(
             installer,
             "_installed_distributions",
-            return_value={"pyinstaller": "6.21.0"},
+            return_value={
+                "fastjsonschema": "2.21.2",
+                "pyinstaller": "6.21.0",
+            },
         ),
     )
     success = safe_root / "marker-success"
@@ -590,8 +601,18 @@ def _expect_installer_error(installer, callback, label: str) -> None:
 def _validate_workflow_usage(workflows: dict[str, str]) -> None:
     _require(tuple(sorted(workflows)) == tuple(sorted(WORKFLOW_PATHS)), "workflow inventory")
     action_inventory = json.loads(_read_lf_text(ACTION_PIN_INVENTORY_PATH))
-    action_pins = action_inventory.get("actions")
-    _require(isinstance(action_pins, dict), "action pin inventory")
+    _require(action_inventory.get("schema_version") == 2, "action pin inventory schema")
+    profiles = action_inventory.get("profiles")
+    _require(isinstance(profiles, dict), "action pin inventory profiles")
+    historical_profile = profiles.get("frozen_historical_release")
+    _require(isinstance(historical_profile, dict), "historical action pin profile")
+    _require(
+        historical_profile.get("lifecycle") == "frozen-historical"
+        and historical_profile.get("recommended_for_new_workflows") is False,
+        "historical action pin lifecycle",
+    )
+    action_pins = historical_profile.get("actions")
+    _require(isinstance(action_pins, dict), "historical action pin inventory")
     checkout_sha = action_pins.get("actions/checkout", {}).get("commit")
     setup_sha = action_pins.get("actions/setup-python", {}).get("commit")
     _require(
@@ -613,8 +634,12 @@ def _validate_workflow_usage(workflows: dict[str, str]) -> None:
         "CI must call installer once",
     )
     _require(
-        ci.index("Run tracked smoke suite") < ci.index("Validate locked build dependencies"),
-        "CI installer must run after smoke suite",
+        ci.index("Validate locked build dependencies") < ci.index("Compile Python sources"),
+        "CI installer must run before source compilation",
+    )
+    _require(
+        ci.index("Validate locked build dependencies") < ci.index("Run tracked smoke suite"),
+        "CI installer must run before smoke suite",
     )
     legacy = workflows[LEGACY_WORKFLOW]
     legacy_build, legacy_publish = legacy.split("\n  publish:\n", 1)

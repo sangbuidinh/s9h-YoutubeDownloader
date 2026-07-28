@@ -189,18 +189,14 @@ FAIL_CLOSED_CONDITIONS = (
 )
 
 REQUIRED_BLOCKERS = {
-    "checksum reconciliation not implemented",
     "comparator binary not approved or executed",
-    "deterministic generator not implemented",
-    "external runtime reconciliation not implemented",
-    "final package inventory contract not implemented",
-    "final portable-package inventory not implemented",
-    "final Python package inventory not implemented",
+    "final external runtime inventory not supplied",
+    "final production package inventory not supplied",
+    "final production portable-package inventory not supplied",
+    "final production Python package inventory not supplied",
     "production SBOM not generated",
-    "release integration not authorized",
-    "release-manifest reconciliation not implemented",
-    "SPDX schema validation not implemented",
-    "SPDX semantic validation not implemented",
+    "production release integration not authorized",
+    "production release manifest and checksum not reconciled",
 }
 
 CLAIM_KEYS = {
@@ -397,6 +393,11 @@ def _require_false(value: Any, category: str, message: str) -> None:
         _fail(category, message)
 
 
+def _require_true(value: Any, category: str, message: str) -> None:
+    if type(value) is not bool or value is not True:
+        _fail(category, message)
+
+
 def _require_string_list(value: Any, category: str, message: str) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
         _fail(category, message)
@@ -528,8 +529,8 @@ def _validate_candidates(value: Any) -> dict[str, dict[str, str]]:
                 _fail("execution-status", f"external candidate execution status changed: {candidate_id}")
         else:
             expected = {
-                "candidate_release": "not-applicable-prototype-contract-only",
-                "execution_status": "contract-only-not-implemented",
+                "candidate_release": "1.0.0",
+                "execution_status": "implemented-synthetic-validated",
                 "immutable_commit": ASSESSMENT_BASELINE,
                 "license_blob_sha1": "not-applicable",
                 "license_path": "not-applicable",
@@ -575,9 +576,13 @@ def _validate_current_inputs(value: Any) -> None:
         _fail("historical-inventory", "historical executable inventory source commit changed")
     if current["historical_executable_inventory_is_current_final_release_evidence"] is not False:
         _fail("historical-inventory", "historical executable inventory must not be claimed as final")
-    expected_false = (
+    expected_true = (
         "production_sbom_generation_implemented",
         "production_sbom_validation_implemented",
+    )
+    for key in expected_true:
+        _require_true(current[key], "current-inputs", f"current implementation state must be true: {key}")
+    expected_false = (
         "release_bundle_has_production_sbom",
         "release_manifest_reconciles_production_sbom",
     )
@@ -597,7 +602,7 @@ def _validate_current_inputs(value: Any) -> None:
 
 def _validate_decision(value: Any) -> None:
     decision = _require_object(value, DECISION_KEYS, "decision", "decision")
-    if decision["architecture_status"] != "prototype-architecture-recommended":
+    if decision["architecture_status"] != "production-foundation-implemented":
         _fail("decision", "architecture status changed")
     if decision["primary_generator"] != CANDIDATE_IDS[0]:
         _fail("decision", "primary generator changed")
@@ -608,12 +613,12 @@ def _validate_decision(value: Any) -> None:
     _require_string(decision["selection_rationale"], "decision", "selection rationale is missing")
     for key in (
         "external_comparator_execution_authorized",
-        "production_generator_selected",
         "production_sbom_generation_authorized",
-        "prototype_implementation_authorized",
         "release_integration_authorized",
     ):
         _require_false(decision[key], "authorization", f"decision authorization must remain false: {key}")
+    for key in ("production_generator_selected", "prototype_implementation_authorized"):
+        _require_true(decision[key], "authorization", f"decision implementation state must remain true: {key}")
 
 
 def _validate_prototype(value: Any) -> None:
@@ -623,8 +628,8 @@ def _validate_prototype(value: Any) -> None:
         "deterministic_document_namespace": True,
         "filename_template": "Youtube-Downloaderbs-v{version}.spdx.json",
         "output_format": "SPDX-2.3-json",
-        "schema_validation_implemented": False,
-        "semantic_reconciliation_implemented": False,
+        "schema_validation_implemented": True,
+        "semantic_reconciliation_implemented": True,
         "spdx_version": "SPDX-2.3",
     }
     for key, expected in fixed.items():
@@ -646,9 +651,13 @@ def _validate_cross_checks(root: Path) -> None:
     claims = assurance.get("claims")
     if not isinstance(sbom, dict) or not isinstance(claims, dict):
         _fail("assurance-policy", "release assurance SBOM state is invalid")
-    expected_false = {
+    expected_true = {
         "generator_selected": sbom.get("generator_selected"),
         "implementation_status": sbom.get("implementation_status"),
+    }
+    if any(value is not True for value in expected_true.values()):
+        _fail("assurance-policy", "assurance policy SBOM implementation state must remain true")
+    expected_false = {
         "readiness": sbom.get("readiness"),
         "sbom_generated": claims.get("sbom_generated"),
         "sbom_validated": claims.get("sbom_validated"),
@@ -709,14 +718,14 @@ def verify_feasibility_file(root: Path) -> None:
     _scan_forbidden(value)
     if tuple(value) != TOP_LEVEL_KEYS:
         _fail("top-level-schema", "top-level feasibility fields are invalid")
-    if type(value["schema_version"]) is not int or value["schema_version"] != 1:
-        _fail("fixed-value", "schema_version must be integer 1")
+    if type(value["schema_version"]) is not int or value["schema_version"] != 2:
+        _fail("fixed-value", "schema_version must be integer 2")
     fixed = {
         "assessment_baseline": ASSESSMENT_BASELINE,
-        "document_id": "s9h-sbom-generator-feasibility-v1",
+        "document_id": "s9h-sbom-generator-feasibility-v2",
         "product": "Youtube Downloaderbs",
         "repository": "sangbuidinh/s9h-YoutubeDownloader",
-        "scope": "prototype-feasibility-only",
+        "scope": "phase-7b-r1-production-foundation",
         "version": "1.3.1",
     }
     for key, expected in fixed.items():
@@ -745,7 +754,10 @@ def verify_feasibility_file(root: Path) -> None:
 
     claims = _require_object(value["claims"], CLAIM_KEYS, "claims", "claims")
     for key in CLAIM_KEYS:
-        _require_false(claims[key], "claims", f"claim must remain false: {key}")
+        if key == "production_generator_selected":
+            _require_true(claims[key], "claims", "production generator selection must remain true")
+        else:
+            _require_false(claims[key], "claims", f"claim must remain false: {key}")
 
     capabilities = _validate_candidates(value["candidates"])
     _validate_criteria(value["comparison_criteria"], capabilities)

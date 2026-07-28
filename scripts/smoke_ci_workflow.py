@@ -1,15 +1,143 @@
+import hashlib
+import json
+import os
 import re
+import shutil
+import stat
+import subprocess
 import sys
+import tempfile
+import warnings
+import zipfile
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 IMMUTABLE_ACTION_REF = re.compile(r"[0-9a-f]{40}\Z")
+CURRENT_PROFILE = "current_ci"
+RAW_EXTRACTION_STEP = "Extract and validate raw synthetic artifact archive"
+RAW_EXTRACTION_SUCCESS = "Secure raw synthetic artifact extraction verified"
+MAX_EXTRACTION_ENTRY_COUNT = 128
+MAX_EXTRACTION_BYTES = 16777216
+UPSTREAM_DOWNLOAD_ARTIFACT_WARNING_CONTRACT = {
+    "release": "v8.0.1",
+    "commit": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+    "issue": "actions/download-artifact#484",
+    "warning_path": "upstream extraction path",
+    "supported_input": "skip-decompress",
+    "digest_check": "remains inside actions/download-artifact",
+    "repository_extraction": "independently fail-closed",
+    "node_options": "--throw-deprecation",
+}
+EXPECTED_CURRENT_ACTIONS = {
+    "actions/checkout": {
+        "release_tag": "v6.1.0",
+        "commit": "d23441a48e516b6c34aea4fa41551a30e30af803",
+        "action_yml_blob": "5b0524f730db83f9513c18ab31a6c086c7239076",
+    },
+    "actions/setup-python": {
+        "release_tag": "v6.3.0",
+        "commit": "ece7cb06caefa5fff74198d8649806c4678c61a1",
+        "action_yml_blob": "7a9a7b634ec348b35b882f1f14fcaa4d41836a8e",
+    },
+    "actions/upload-artifact": {
+        "release_tag": "v7.0.1",
+        "commit": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "action_yml_blob": "7cb4d1e81db55320b41217e1a78a1a46e3d2baef",
+    },
+    "actions/download-artifact": {
+        "release_tag": "v8.0.1",
+        "commit": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+        "action_yml_blob": "8b8c65029ccad20750a29fecb438eca5a607fc57",
+    },
+}
 
 
 class WorkflowContractError(AssertionError):
     pass
+
+
+def _load_current_ci_policy(root: Path) -> dict:
+    inventory_path = root / ".github" / "actions-pins.json"
+    _require(inventory_path.is_file(), "action pin inventory is missing")
+    _require(not inventory_path.is_symlink(), "action pin inventory must not be a symlink")
+    try:
+        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise WorkflowContractError(f"action pin inventory is invalid JSON: {exc}") from exc
+    _require(inventory.get("schema_version") == 2, "action pin inventory schema must be 2")
+    workflow_profiles = inventory.get("workflow_profiles")
+    _require(
+        isinstance(workflow_profiles, dict)
+        and workflow_profiles.get(".github/workflows/ci.yml") == CURRENT_PROFILE,
+        "CI workflow must map explicitly to current_ci",
+    )
+    profiles = inventory.get("profiles")
+    _require(isinstance(profiles, dict), "action pin profiles are missing")
+    profile = profiles.get(CURRENT_PROFILE)
+    _require(isinstance(profile, dict), "current_ci action pin profile is missing")
+    _require(profile.get("lifecycle") == "current", "current_ci lifecycle must be current")
+    _require(
+        profile.get("recommended_for_new_workflows") is True,
+        "current_ci must be the recommended workflow profile",
+    )
+    actions = profile.get("actions")
+    _require(
+        isinstance(actions, dict) and set(actions) == set(EXPECTED_CURRENT_ACTIONS),
+        "current_ci action set differs",
+    )
+    expected_fields = {
+        "repository",
+        "release_tag",
+        "workflow_comment",
+        "commit",
+        "declared_runtime",
+        "official_repository",
+        "action_yml_blob",
+        "lifecycle",
+        "occurrence_count",
+    }
+    for repository, expected in EXPECTED_CURRENT_ACTIONS.items():
+        entry = actions[repository]
+        _require(
+            isinstance(entry, dict) and set(entry) == expected_fields,
+            f"{repository} current pin fields differ",
+        )
+        _require(entry["repository"] == repository, f"{repository} repository identity differs")
+        _require(
+            entry["release_tag"] == expected["release_tag"]
+            and entry["workflow_comment"] == expected["release_tag"],
+            f"{repository} exact release tag differs",
+        )
+        _require(entry["commit"] == expected["commit"], f"{repository} selected commit differs")
+        _require(
+            entry["action_yml_blob"] == expected["action_yml_blob"],
+            f"{repository} action.yml blob identity differs",
+        )
+        _require(
+            entry["declared_runtime"] == "node24",
+            f"{repository} current runtime must be node24",
+        )
+        _require(
+            entry["official_repository"] is True,
+            f"{repository} must be recorded as an official repository",
+        )
+        _require(entry["lifecycle"] == "current", f"{repository} lifecycle must be current")
+        _require(entry["occurrence_count"] == 1, f"{repository} occurrence count must be one")
+        _require(
+            IMMUTABLE_ACTION_REF.fullmatch(entry["commit"]) is not None,
+            f"{repository} selected commit must be a full lowercase SHA",
+        )
+        _require(
+            IMMUTABLE_ACTION_REF.fullmatch(entry["action_yml_blob"]) is not None,
+            f"{repository} action.yml blob must be a full lowercase SHA",
+        )
+        _require(
+            re.fullmatch(r"v\d+\.\d+\.\d+", entry["release_tag"]) is not None,
+            f"{repository} selected tag must be a stable semantic version",
+        )
+    return actions
 
 
 def verify_workflow_file(root: Path) -> None:
@@ -25,20 +153,29 @@ def verify_workflow_file(root: Path) -> None:
     raw = workflow_path.read_bytes()
     _require(not raw.startswith(b"\xef\xbb\xbf"), "CI workflow file must not use UTF-8 BOM")
     _require(b"\x00" not in raw, "CI workflow file must not contain NUL")
-    validate_workflow(raw.decode("utf-8"))
+    validate_workflow(raw.decode("utf-8"), _load_current_ci_policy(resolved_root))
 
 
 def main() -> int:
     verify_workflow_file(REPO_ROOT)
     workflow = _normalize_newlines(WORKFLOW_PATH.read_text(encoding="utf-8"))
+    current_policy = _load_current_ci_policy(REPO_ROOT)
     _test_negative_mutations(workflow)
     _test_immutable_action_policy(workflow)
-    validate_workflow(workflow + "\n# Harmless trailing comment.\n")
-    print("CI workflow smoke tests passed")
+    positive_count, negative_count = _test_secure_extraction_fixtures(workflow)
+    validate_workflow(workflow + "\n# Harmless trailing comment.\n", current_policy)
+    _verify_upstream_download_artifact_warning_contract()
+    print(
+        "CI workflow smoke tests passed: exact Node 24 pins, raw artifact controls, "
+        f"{positive_count} secure extraction positive fixture and "
+        f"{negative_count} secure extraction negative fixtures"
+    )
     return 0
 
 
-def validate_workflow(workflow: str) -> None:
+def validate_workflow(workflow: str, current_policy: dict | None = None) -> None:
+    if current_policy is None:
+        current_policy = _load_current_ci_policy(REPO_ROOT)
     workflow = _normalize_newlines(workflow)
     code = _without_comment_lines(workflow)
     lines = code.splitlines()
@@ -115,9 +252,20 @@ def validate_workflow(workflow: str) -> None:
     checkout = _action_step(steps, "actions/checkout")
     checkout_ref = _action_ref(checkout, "actions/checkout")
     _require_safe_action_ref("actions/checkout", checkout_ref)
+    _require_current_action(checkout, "actions/checkout", current_policy)
+    checkout_with = _mapping_block(checkout, "with", 8)
     _require(
-        _scalar_value(checkout, "fetch-depth", 10) == "0",
+        _direct_mapping_pairs(checkout_with, 10)
+        == [("fetch-depth", "0"), ("persist-credentials", "false")],
+        "checkout inputs must retain fetch-depth and disable persisted credentials",
+    )
+    _require(
+        _scalar_value(checkout_with, "fetch-depth", 10) == "0",
         "checkout action must use fetch-depth: 0 for full history",
+    )
+    _require(
+        _scalar_value(checkout_with, "persist-credentials", 10) == "false",
+        "checkout action must use persist-credentials: false",
     )
     _require(
         _scalar_value(checkout, "ref", 10) is None,
@@ -127,6 +275,7 @@ def validate_workflow(workflow: str) -> None:
     setup_python = _action_step(steps, "actions/setup-python")
     setup_ref = _action_ref(setup_python, "actions/setup-python")
     _require_safe_action_ref("actions/setup-python", setup_ref)
+    _require_current_action(setup_python, "actions/setup-python", current_policy)
     python_version = _scalar_value(setup_python, "python-version", 10)
     _require(
         _unquote(python_version) == "3.11.9",
@@ -167,8 +316,8 @@ def validate_workflow(workflow: str) -> None:
     smoke_step = _named_step(steps, "Run tracked smoke suite")
     installer_step = _named_step(steps, "Validate locked build dependencies")
     _require(
-        steps.index(smoke_step) < steps.index(installer_step),
-        "tracked smoke suite must run before build dependency installation",
+        steps.index(installer_step) < steps.index(smoke_step),
+        "locked build dependencies must be installed before the tracked smoke suite",
     )
     installer_text = "\n".join(installer_step)
     for required in (
@@ -206,7 +355,13 @@ def validate_workflow(workflow: str) -> None:
     for required in (
         '$env:RUNNER_TEMP',
         'b"MZ synthetic CI fixture; this file is not executable.\\n"',
-        'zipfile.ZipInfo("SYNTHETIC.txt", date_time=(1980, 1, 1, 0, 0, 0))',
+        '"data/bin/aria2c.exe"',
+        '"data/bin/deno.exe"',
+        '"data/bin/ffmpeg.exe"',
+        '"data/bin/ffprobe.exe"',
+        '"data/bin/yt-dlp.exe"',
+        '"native/_tkinter.pyd"',
+        '"python311.dll"',
         "import hashlib",
         "portable_hash = hashlib.sha256(archive.read_bytes()).hexdigest()",
         '"# Synthetic CI release\\n\\n"',
@@ -218,6 +373,8 @@ def validate_workflow(workflow: str) -> None:
         "$PostInjectionHash",
         "$SyntheticNotesText.Contains($PostInjectionHash)",
         "$SyntheticNotesText.Contains($PreInjectionHash)",
+        "python scripts/create_synthetic_release_sbom_input.py",
+        "$SbomInput",
         '"SYNTHETIC_SOURCE_FIXTURE.txt"',
         '"SOURCE_MANIFEST.json"',
         'b"synthetic fixture\\n"',
@@ -230,9 +387,10 @@ def validate_workflow(workflow: str) -> None:
         "--control-commit $Commit",
         "--prerelease true",
         "--policy legal/release-policy.json",
-        "--asset-contract legal/release-assets-v2.json",
+        "--asset-contract legal/release-assets-v3.json",
         "--legal-payload",
         "--source-assets-root",
+        "--sbom-input $SbomInput",
         "--require-release-ready false",
         "--require-release-ready true 2>&1",
         "$PSNativeCommandUseErrorActionPreference = $false",
@@ -299,16 +457,28 @@ def validate_workflow(workflow: str) -> None:
     )
     upload_ref = _action_ref(upload_step, "actions/upload-artifact")
     _require_safe_action_ref("actions/upload-artifact", upload_ref)
-    for required in (
-        "id: upload-release-bundle",
-        "ci-release-bundle-${{ github.run_id }}-${{ github.run_attempt }}",
-        "if-no-files-found: error",
-        "compression-level: 0",
-        "overwrite: false",
-        "include-hidden-files: false",
-        "retention-days: 1",
-    ):
-        _require(required in "\n".join(upload_step), f"synthetic upload is missing: {required}")
+    _require_current_action(upload_step, "actions/upload-artifact", current_policy)
+    _require(
+        "id: upload-release-bundle" in "\n".join(upload_step),
+        "synthetic upload step ID is missing",
+    )
+    upload_with = _mapping_block(upload_step, "with", 8)
+    _require(
+        _direct_mapping_pairs(upload_with, 10)
+        == [
+            ("name", "ci-release-bundle-${{ github.run_id }}-${{ github.run_attempt }}"),
+            (
+                "path",
+                "${{ runner.temp }}/s9h-ci-release-${{ github.run_id }}-${{ github.run_attempt }}/publish-bundle",
+            ),
+            ("if-no-files-found", "error"),
+            ("compression-level", "0"),
+            ("overwrite", "false"),
+            ("include-hidden-files", "false"),
+            ("retention-days", "1"),
+        ],
+        "synthetic upload inputs, retention-days or archive behavior changed",
+    )
     report_text = "\n".join(report_step)
     _require("^[0-9a-f]{64}$" in report_text, "producer artifact digest validation is missing")
 
@@ -327,12 +497,13 @@ def validate_workflow(workflow: str) -> None:
         "handoff runner must be windows-2022",
     )
     handoff_steps = _step_blocks(handoff)
-    _require(len(handoff_steps) == 3, "handoff job must contain exactly three steps")
+    _require(len(handoff_steps) == 4, "handoff job must contain exactly four steps")
     output_check = _named_step(handoff_steps, "Validate immutable synthetic bundle outputs")
     download = _action_step(handoff_steps, "actions/download-artifact")
+    extractor = _named_step(handoff_steps, RAW_EXTRACTION_STEP)
     verifier = _named_step(handoff_steps, "Verify synthetic release bundle handoff")
     _require(
-        handoff_steps == [output_check, download, verifier],
+        handoff_steps == [output_check, download, extractor, verifier],
         "handoff job step order is invalid",
     )
     output_text = "\n".join(output_check)
@@ -344,38 +515,151 @@ def validate_workflow(workflow: str) -> None:
         _require(required in output_text, f"handoff output validation is missing: {required}")
     download_ref = _action_ref(download, "actions/download-artifact")
     _require_safe_action_ref("actions/download-artifact", download_ref)
+    _require_current_action(download, "actions/download-artifact", current_policy)
     download_text = "\n".join(download)
+    download_env = _mapping_block(download, "env", 8)
+    _require(
+        _direct_mapping_pairs(download_env, 10)
+        == [("NODE_OPTIONS", "--throw-deprecation")],
+        "handoff download NODE_OPTIONS must fail on Node deprecations",
+    )
     download_with = _mapping_block(download, "with", 8)
     _require(
         _scalar_value(download_with, "merge-multiple", 10) == "true",
         "handoff download merge-multiple must be the YAML boolean true",
     )
     _require(
+        _scalar_value(download_with, "skip-decompress", 10) == "true",
+        "handoff download skip-decompress must be the YAML boolean true",
+    )
+    _require(
+        _scalar_value(download_with, "digest-mismatch", 10) == "error",
+        "handoff download digest mismatch must fail with error",
+    )
+    _require(
         _direct_mapping_pairs(download_with, 10)
         == [
             ("artifact-ids", "${{ needs.windows-smoke.outputs.artifact-id }}"),
-            ("path", "release-bundle"),
+            ("path", "artifact-download"),
             ("merge-multiple", "true"),
+            ("skip-decompress", "true"),
+            ("digest-mismatch", "error"),
         ],
-        "handoff download must use only the producer artifact ID",
+        "handoff download must preserve the immutable raw-artifact contract",
     )
+    extractor_text = "\n".join(extractor)
+    extractor_env = _mapping_block(extractor, "env", 8)
+    _require(
+        _direct_mapping_pairs(extractor_env, 10)
+        == [
+            (
+                "ARTIFACT_DIGEST",
+                "${{ needs.windows-smoke.outputs.artifact-digest }}",
+            )
+        ],
+        "secure extraction must use only the immutable producer digest",
+    )
+    for required in (
+        "Add-Type -AssemblyName System.IO.Compression",
+        "Get-RawZipEntryNames",
+        "raw NUL or backslash entry name",
+        "$entryName -cne [string]$entry.FullName",
+        "$MaxEntryCount = 128",
+        "$MaxTotalUncompressedBytes = 16777216",
+        RAW_EXTRACTION_SUCCESS,
+        'Join-Path $workspace "artifact-download"',
+        'Join-Path $workspace "release-bundle"',
+        "Assert-BelowRoot $workspace $rawRoot",
+        "Assert-BelowRoot $workspace $destinationRoot",
+        "$rawFiles.Count -ne 1",
+        "$rawDirectories.Count -ne 0",
+        "$rawReparsePoints.Count -ne 0",
+        '^[0-9a-f]{64}$',
+        "Get-FileHash -LiteralPath $rawArchive.FullName -Algorithm SHA256",
+        "$actualDigest -cne $env:ARTIFACT_DIGEST",
+        "[IO.Compression.ZipArchive]::new",
+        "$entries.Count -gt $MaxEntryCount",
+        "$entryName.IndexOf([char]0)",
+        '$entryName.Contains("\\")',
+        '$entryName.Contains(":")',
+        '$entryName.StartsWith("/")',
+        "[IO.Path]::IsPathRooted($entryName)",
+        "$_ -ceq \".\" -or $_ -ceq \"..\"",
+        "[StringComparer]::Ordinal",
+        "[StringComparer]::OrdinalIgnoreCase",
+        "$caseInsensitivePaths.Add($normalizedPath)",
+        "Assert-WindowsSafePathSegment",
+        "$WindowsReservedDeviceBasenames",
+        '$Segment.EndsWith(".", [StringComparison]::Ordinal)',
+        '$Segment.EndsWith(" ", [StringComparison]::Ordinal)',
+        "$Segment.IndexOfAny",
+        "[int]$character -le 0x1F",
+        "$resolvedTargetPaths",
+        "$resolvedTargetPaths.Add($targetPath)",
+        "Raw artifact ZIP entries resolve to a duplicate Windows destination",
+        "$unixFileType -eq 0xA000",
+        "$declaredTotal -gt $MaxTotalUncompressedBytes",
+        'Assert-BelowRoot $destinationRoot $targetPath "Raw artifact ZIP entry"',
+        "[IO.FileMode]::CreateNew",
+        "$actualTotal -gt $MaxTotalUncompressedBytes",
+        "$archive.Dispose()",
+        "$archiveStream.Dispose()",
+        "Release bundle contains a reparse point after extraction",
+        "[IO.Directory]::Delete($rawRoot, $true)",
+        "Raw artifact root was not removed after extraction",
+        "Write-Host $SuccessMessage",
+    ):
+        _require(required in extractor_text, f"secure extraction contract is missing: {required}")
+    for required_once in (
+        "function Assert-WindowsSafePathSegment(",
+        "$WindowsReservedDeviceBasenames =",
+        "$WindowsReservedDeviceBasenames.Contains($deviceBaseForComparison)",
+        '$Segment.EndsWith(".", [StringComparison]::Ordinal)',
+        '$Segment.EndsWith(" ", [StringComparison]::Ordinal)',
+        "$Segment.IndexOfAny",
+        "[int]$character -le 0x1F",
+        "$resolvedTargetPaths =",
+        "$resolvedTargetPaths.Add($targetPath)",
+    ):
+        _require(
+            extractor_text.count(required_once) == 1,
+            f"secure extraction control must occur exactly once: {required_once}",
+        )
+    for forbidden in (
+        "Expand-Archive",
+        "Invoke-WebRequest",
+        "Invoke-RestMethod",
+        "Start-Process",
+        "python ",
+        "pip ",
+        "gh api",
+        "curl ",
+        "wget ",
+        "7z ",
+    ):
+        _require(
+            forbidden.casefold() not in extractor_text.casefold(),
+            f"secure extraction uses a forbidden command: {forbidden}",
+        )
     verifier_text = "\n".join(verifier)
     for required in (
-        "Synthetic release bundle v2 handoff verified",
+        "Synthetic release bundle v3 handoff verified",
         "v0.0.0-ci",
         "${{ github.sha }}",
         "Get-FileHash",
         "ConvertFrom-Json",
-        "s9h-release-bundle-v2",
+        "s9h-release-bundle-v3",
         "release_ready",
         "legal_compliance_certified",
         "source_availability_certified",
         "legal-payload",
         "aria2-source",
         "ffmpeg-source",
+        "release-sbom",
         "assets/$env:EXPECTED_LEGAL",
         "assets/$env:EXPECTED_ARIA2_SOURCE",
         "assets/$env:EXPECTED_FFMPEG_SOURCE",
+        "assets/$env:EXPECTED_SBOM",
         "SHA256SUMS.txt",
         "ReparsePoint",
     ):
@@ -395,6 +679,18 @@ def validate_workflow(workflow: str) -> None:
     handoff_text = "\n".join(handoff)
     _require("actions/checkout@" not in handoff_text, "handoff job must not checkout source")
     _require("actions/setup-python@" not in handoff_text, "handoff job must not setup Python")
+    _require(
+        handoff_text.count("actions/download-artifact@") == 1,
+        "handoff job must contain exactly one download action",
+    )
+    for forbidden in (
+        "NODE_NO_WARNINGS",
+        "--no-deprecation",
+        "--no-warnings",
+        "ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION",
+        "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24",
+    ):
+        _require(forbidden not in handoff_text, f"handoff warning suppression is forbidden: {forbidden}")
 
     _require("continue-on-error" not in code, "continue-on-error must be absent")
     _forbid(
@@ -413,6 +709,11 @@ def validate_workflow(workflow: str) -> None:
         code,
         r"(?i)(?:secrets\s*\.|GH_TOKEN|github\.token)",
         "secret references must be absent",
+    )
+    _forbid(
+        code,
+        r"(?im)^\s*git\s+(?:push|fetch|pull|clone|submodule)\b",
+        "CI must not require persisted Git credentials",
     )
     _forbid(
         code,
@@ -570,6 +871,23 @@ def _require_safe_action_ref(action: str, ref: str) -> None:
     )
 
 
+def _require_current_action(step: list[str], action: str, current_policy: dict) -> None:
+    text = "\n".join(step)
+    match = re.search(
+        rf"(?m)^\s*(?:-\s*)?uses:\s*{re.escape(action)}@([^\s#]+)\s+#\s*"
+        rf"(v\d+\.\d+\.\d+)\s*$",
+        text,
+    )
+    _require(match is not None, f"{action} must include an exact semantic-version comment")
+    ref, comment = match.groups()
+    expected = current_policy[action]
+    _require(ref == expected["commit"], f"{action} ref differs from selected release")
+    _require(
+        comment == expected["workflow_comment"],
+        f"{action} semantic-version comment differs from inventory",
+    )
+
+
 def _test_negative_mutations(workflow: str) -> None:
     mutations = (
         (
@@ -585,6 +903,20 @@ def _test_negative_mutations(workflow: str) -> None:
             "missing fetch depth",
             _replace_once(workflow, "          fetch-depth: 0\n", ""),
             "fetch-depth",
+        ),
+        (
+            "missing persist credentials control",
+            _replace_once(workflow, "          persist-credentials: false\n", ""),
+            "credentials",
+        ),
+        (
+            "persisted checkout credentials",
+            _replace_once(
+                workflow,
+                "          persist-credentials: false",
+                "          persist-credentials: true",
+            ),
+            "credentials",
         ),
         (
             "workflow dispatch",
@@ -778,7 +1110,7 @@ def _test_negative_mutations(workflow: str) -> None:
         ),
         (
             "bundle v1 consumer",
-            _replace_once(workflow, "s9h-release-bundle-v2", "s9h-release-bundle-v1"),
+            _replace_once(workflow, "s9h-release-bundle-v3", "s9h-release-bundle-v1"),
             "handoff verifier",
         ),
         (
@@ -828,13 +1160,13 @@ def _test_negative_mutations(workflow: str) -> None:
             "RUNNER_TEMP",
         ),
         (
-            "installer before smoke suite",
+            "smoke suite before installer",
             _move_named_step_before(
                 workflow,
-                "Validate locked build dependencies",
                 "Run tracked smoke suite",
+                "Validate locked build dependencies",
             ),
-            "before build dependency installation",
+            "installed before the tracked smoke suite",
         ),
         (
             "missing installer step",
@@ -859,6 +1191,43 @@ def _test_negative_mutations(workflow: str) -> None:
             "missing merge-multiple",
             _replace_once(workflow, "          merge-multiple: true\n", ""),
             "merge-multiple",
+        ),
+        (
+            "missing skip-decompress",
+            _replace_once(workflow, "          skip-decompress: true\n", ""),
+            "skip-decompress",
+        ),
+        (
+            "false skip-decompress",
+            _replace_once(
+                workflow,
+                "          skip-decompress: true",
+                "          skip-decompress: false",
+            ),
+            "skip-decompress",
+        ),
+        (
+            "quoted true skip-decompress",
+            _replace_once(
+                workflow,
+                "          skip-decompress: true",
+                '          skip-decompress: "true"',
+            ),
+            "skip-decompress",
+        ),
+        (
+            "missing digest mismatch control",
+            _replace_once(workflow, "          digest-mismatch: error\n", ""),
+            "digest mismatch",
+        ),
+        (
+            "ignored digest mismatch",
+            _replace_once(
+                workflow,
+                "          digest-mismatch: error",
+                "          digest-mismatch: ignore",
+            ),
+            "digest mismatch",
         ),
         (
             "false merge-multiple",
@@ -894,16 +1263,16 @@ def _test_negative_mutations(workflow: str) -> None:
                 "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}",
                 "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}, 123",
             ),
-            "artifact ID",
+            "raw-artifact contract",
         ),
         (
             "nested artifact destination",
             _replace_once(
                 workflow,
-                "          path: release-bundle",
-                "          path: release-bundle/nested",
+                "          path: artifact-download",
+                "          path: artifact-download/nested",
             ),
-            "artifact ID",
+            "raw-artifact contract",
         ),
         (
             "artifact name input",
@@ -913,7 +1282,7 @@ def _test_negative_mutations(workflow: str) -> None:
                 "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}\n"
                 "          name: synthetic-release-bundle",
             ),
-            "artifact ID",
+            "raw-artifact contract",
         ),
         (
             "artifact pattern input",
@@ -923,13 +1292,128 @@ def _test_negative_mutations(workflow: str) -> None:
                 "          artifact-ids: ${{ needs.windows-smoke.outputs.artifact-id }}\n"
                 "          pattern: synthetic-*",
             ),
-            "artifact ID",
+            "raw-artifact contract",
+        ),
+        (
+            "missing throw-deprecation",
+            _replace_once(
+                workflow,
+                "        env:\n          NODE_OPTIONS: --throw-deprecation\n",
+                "",
+            ),
+            "mapping is missing: env",
+        ),
+        (
+            "warning suppression",
+            _replace_once(
+                workflow,
+                "          NODE_OPTIONS: --throw-deprecation",
+                "          NODE_OPTIONS: --no-warnings",
+            ),
+            "NODE_OPTIONS",
+        ),
+        (
+            "missing secure extraction step",
+            _remove_named_step(workflow, RAW_EXTRACTION_STEP),
+            "exactly four steps",
+        ),
+        (
+            "secure extraction reordered",
+            _move_named_step_before(
+                workflow,
+                "Verify synthetic release bundle handoff",
+                RAW_EXTRACTION_STEP,
+            ),
+            "step order",
+        ),
+        (
+            "secure extraction continue-on-error",
+            _replace_once(
+                workflow,
+                f"      - name: {RAW_EXTRACTION_STEP}\n",
+                f"      - name: {RAW_EXTRACTION_STEP}\n        continue-on-error: true\n",
+            ),
+            "continue-on-error",
+        ),
+        (
+            "Expand-Archive extraction",
+            _replace_once(
+                workflow,
+                "          Add-Type -AssemblyName System.IO.Compression",
+                "          Expand-Archive -LiteralPath raw.zip -DestinationPath release-bundle",
+            ),
+            "secure extraction contract",
+        ),
+        (
+            "raw digest comparison removed",
+            _replace_once(
+                workflow,
+                "          if ($actualDigest -cne $env:ARTIFACT_DIGEST) {",
+                "          if ($false) {",
+            ),
+            "secure extraction contract",
+        ),
+        (
+            "exact-one-raw-file gate removed",
+            _replace_once(
+                workflow,
+                "              $rawFiles.Count -ne 1 -or",
+                "              $rawFiles.Count -lt 1 -or",
+            ),
+            "secure extraction contract",
+        ),
+        (
+            "path traversal gate removed",
+            _replace_once(
+                workflow,
+                '$_ -ceq "." -or $_ -ceq ".."',
+                '$_ -ceq "." -or $_ -ceq "..."',
+            ),
+            "secure extraction contract",
+        ),
+        (
+            "case-insensitive duplicate gate removed",
+            _replace_once(
+                workflow,
+                "                  if (-not $caseInsensitivePaths.Add($normalizedPath)) {",
+                "                  if ($false) {",
+            ),
+            "secure extraction contract",
+        ),
+        (
+            "UNIX symlink gate removed",
+            _replace_once(
+                workflow,
+                "                  if ($unixFileType -eq 0xA000) {",
+                "                  if ($false) {",
+            ),
+            "secure extraction contract",
+        ),
+        (
+            "declared extraction size cap removed",
+            _replace_once(
+                workflow,
+                "                  if ($declaredTotal -gt $MaxTotalUncompressedBytes) {",
+                "                  if ($false) {",
+            ),
+            "secure extraction contract",
+        ),
+        (
+            "raw archive cleanup removed",
+            _replace_once(
+                workflow,
+                "          [IO.Directory]::Delete($rawRoot, $true)",
+                "          Write-Host \"raw archive retained\"",
+            ),
+            "secure extraction contract",
         ),
         (
             "missing handoff digest validation",
             _replace_once(
                 workflow,
+                "          ARTIFACT_ID: ${{ needs.windows-smoke.outputs.artifact-id }}\n"
                 "          ARTIFACT_DIGEST: ${{ needs.windows-smoke.outputs.artifact-digest }}",
+                "          ARTIFACT_ID: ${{ needs.windows-smoke.outputs.artifact-id }}\n"
                 "          ARTIFACT_DIGEST: invalid",
             ),
             "artifact-digest",
@@ -948,25 +1432,496 @@ def _test_negative_mutations(workflow: str) -> None:
         _expect_contract_failure(label, mutated, expected)
 
 
+def _test_secure_extraction_fixtures(workflow: str) -> tuple[int, int]:
+    _require(os.name == "nt", "secure extraction fixtures require Windows")
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    _require(powershell is not None, "PowerShell is required for secure extraction fixtures")
+    body = _secure_extraction_body(workflow)
+    negative_labels: list[str] = []
+
+    with tempfile.TemporaryDirectory(prefix="s9h-secure-extraction-") as temp_name:
+        temp_root = Path(temp_name).resolve()
+
+        positive_root = temp_root / "positive"
+        positive_workspace = positive_root / "workspace"
+        positive_raw = positive_workspace / "artifact-download"
+        positive_raw.mkdir(parents=True)
+        expected_files = {
+            "RELEASE_MANIFEST.json": b'{"schema_version":3}\n',
+            "assets/checksum.txt": b"0123456789abcdef\n",
+        }
+        positive_archive = positive_raw / "synthetic-artifact.bin"
+        _write_fixture_zip(
+            positive_archive,
+            [
+                ("assets/", b"", None),
+                *[(name, data, None) for name, data in expected_files.items()],
+            ],
+        )
+        positive_digest = _sha256_file(positive_archive)
+        positive_result = _execute_extraction_body(
+            powershell,
+            body,
+            positive_root,
+            positive_workspace,
+            positive_digest,
+        )
+        _require(
+            positive_result.returncode == 0,
+            "secure extraction positive fixture failed: "
+            + _combined_process_output(positive_result),
+        )
+        positive_output = _combined_process_output(positive_result)
+        _require(
+            positive_output.count(RAW_EXTRACTION_SUCCESS) == 1,
+            "secure extraction positive fixture success message differs",
+        )
+        positive_bundle = positive_workspace / "release-bundle"
+        for relative, expected in expected_files.items():
+            path = positive_bundle / Path(relative)
+            _require(path.is_file(), f"secure extraction positive file is missing: {relative}")
+            _require(
+                path.read_bytes() == expected,
+                f"secure extraction positive content differs: {relative}",
+            )
+        _require(not positive_raw.exists(), "secure extraction positive raw root remains")
+        _require(
+            not (positive_root / "outside.txt").exists(),
+            "secure extraction positive fixture wrote outside the workspace",
+        )
+
+        near_reserved_root = temp_root / "positive-near-reserved"
+        near_reserved_workspace = near_reserved_root / "workspace"
+        near_reserved_raw = near_reserved_workspace / "artifact-download"
+        near_reserved_raw.mkdir(parents=True)
+        near_reserved_files = {
+            "conduit.txt": b"conduit\n",
+            "auxiliary.txt": b"auxiliary\n",
+            "com0.txt": b"com0\n",
+            "com10.txt": b"com10\n",
+            "lpt0.txt": b"lpt0\n",
+            "lpt10.txt": b"lpt10\n",
+        }
+        near_reserved_archive = near_reserved_raw / "synthetic-artifact.bin"
+        _write_fixture_zip(
+            near_reserved_archive,
+            [(name, data, None) for name, data in near_reserved_files.items()],
+        )
+        near_reserved_result = _execute_extraction_body(
+            powershell,
+            body,
+            near_reserved_root,
+            near_reserved_workspace,
+            _sha256_file(near_reserved_archive),
+        )
+        _require(
+            near_reserved_result.returncode == 0,
+            "secure extraction near-reserved positive fixture failed: "
+            + _combined_process_output(near_reserved_result),
+        )
+        near_reserved_output = _combined_process_output(near_reserved_result)
+        _require(
+            near_reserved_output.count(RAW_EXTRACTION_SUCCESS) == 1,
+            "secure extraction near-reserved success message differs",
+        )
+        near_reserved_bundle = near_reserved_workspace / "release-bundle"
+        for relative, expected in near_reserved_files.items():
+            path = near_reserved_bundle / relative
+            _require(
+                path.is_file() and path.read_bytes() == expected,
+                f"secure extraction near-reserved content differs: {relative}",
+            )
+        _require(
+            not near_reserved_raw.exists(),
+            "secure extraction near-reserved raw root remains",
+        )
+
+        def run_negative(
+            label: str,
+            entries: list[tuple[str, bytes, int | None]] | None = None,
+            *,
+            digest_override: str | None = None,
+            extra_raw_file: bool = False,
+            raw_subdirectory: bool = False,
+            destination_preexists: bool = False,
+            expect_clean_destination: bool = False,
+            unsupported_compression_entry: str | None = None,
+        ) -> None:
+            case_root = temp_root / f"negative-{len(negative_labels) + 1:02d}"
+            workspace = case_root / "workspace"
+            raw_root = workspace / "artifact-download"
+            raw_root.mkdir(parents=True)
+            archive_path = raw_root / "synthetic-artifact.bin"
+            digest = "0" * 64
+            if entries is not None:
+                _write_fixture_zip(archive_path, entries)
+                if unsupported_compression_entry is not None:
+                    _patch_zip_compression_method(
+                        archive_path,
+                        unsupported_compression_entry,
+                        99,
+                    )
+                digest = _sha256_file(archive_path)
+            if digest_override is not None:
+                digest = digest_override
+            if extra_raw_file:
+                (raw_root / "unexpected.bin").write_bytes(b"unexpected")
+            if raw_subdirectory:
+                (raw_root / "unexpected-directory").mkdir()
+            if destination_preexists:
+                (workspace / "release-bundle").mkdir()
+            result = _execute_extraction_body(
+                powershell,
+                body,
+                case_root,
+                workspace,
+                digest,
+            )
+            output = _combined_process_output(result)
+            _require(result.returncode != 0, f"negative extraction fixture was accepted: {label}")
+            _require(
+                RAW_EXTRACTION_SUCCESS not in output,
+                f"negative extraction fixture printed success: {label}",
+            )
+            for outside_name in (
+                "outside.txt",
+                "outside-traversal.txt",
+                "outside-resolved.txt",
+                "absolute.txt",
+            ):
+                _require(
+                    not (case_root / outside_name).exists()
+                    and not (workspace.parent / outside_name).exists(),
+                    f"negative extraction fixture wrote outside its destination: {label}",
+                )
+            if expect_clean_destination:
+                _require(
+                    not (workspace / "release-bundle").exists(),
+                    f"partial extraction destination was not cleaned: {label}",
+                )
+            negative_labels.append(label)
+
+        valid_entries = [("valid.txt", b"valid\n", None)]
+        mismatch_root = temp_root / "digest-source"
+        mismatch_root.mkdir()
+        mismatch_archive = mismatch_root / "source.zip"
+        _write_fixture_zip(mismatch_archive, valid_entries)
+        mismatch = "0" * 64
+        if _sha256_file(mismatch_archive) == mismatch:
+            mismatch = "1" * 64
+        run_negative("digest mismatch", valid_entries, digest_override=mismatch)
+        run_negative("no raw file")
+        run_negative("two raw files", valid_entries, extra_raw_file=True)
+        run_negative("raw subdirectory", valid_entries, raw_subdirectory=True)
+
+        reparse_case = temp_root / "negative-05"
+        reparse_workspace = reparse_case / "workspace"
+        reparse_workspace.mkdir(parents=True)
+        reparse_target = reparse_case / "raw-target"
+        reparse_target.mkdir()
+        reparse_archive = reparse_target / "synthetic-artifact.bin"
+        _write_fixture_zip(reparse_archive, valid_entries)
+        reparse_root = reparse_workspace / "artifact-download"
+        _create_directory_reparse_point(reparse_root, reparse_target)
+        reparse_result = _execute_extraction_body(
+            powershell,
+            body,
+            reparse_case,
+            reparse_workspace,
+            _sha256_file(reparse_archive),
+        )
+        reparse_output = _combined_process_output(reparse_result)
+        _require(
+            reparse_result.returncode != 0,
+            "negative extraction fixture was accepted: raw-root reparse point",
+        )
+        _require(
+            RAW_EXTRACTION_SUCCESS not in reparse_output,
+            "raw-root reparse fixture printed success",
+        )
+        negative_labels.append("raw-root reparse point")
+
+        run_negative("ZIP traversal", [("../outside-traversal.txt", b"x", None)])
+        run_negative("absolute-path entry", [("/absolute.txt", b"x", None)])
+        run_negative("backslash entry", [("nested\\escape.txt", b"x", None)])
+        run_negative("colon entry", [("ads:name.txt", b"x", None)])
+        run_negative("empty path segment", [("nested//empty.txt", b"x", None)])
+        run_negative("dot path segment", [("nested/./dot.txt", b"x", None)])
+        run_negative(
+            "case-insensitive duplicates",
+            [("Case.txt", b"A", None), ("case.txt", b"B", None)],
+        )
+        run_negative(
+            "exact duplicates",
+            [("same.txt", b"A", None), ("same.txt", b"B", None)],
+        )
+        symlink_attributes = (stat.S_IFLNK | 0o777) << 16
+        run_negative(
+            "UNIX symlink entry",
+            [("link.txt", b"target.txt", symlink_attributes)],
+        )
+        run_negative(
+            "excess entry count",
+            [(f"entry-{index:03d}.txt", b"x", None) for index in range(129)],
+        )
+        run_negative(
+            "excess uncompressed size",
+            [("oversized.bin", b"\0" * (MAX_EXTRACTION_BYTES + 1), None)],
+        )
+        run_negative("destination pre-exists", valid_entries, destination_preexists=True)
+        run_negative(
+            "entry resolving outside destination",
+            [("nested/../../outside-resolved.txt", b"x", None)],
+        )
+        run_negative(
+            "partial extraction failure",
+            [("good.txt", b"good", None), ("unsupported.bin", b"blocked", None)],
+            expect_clean_destination=True,
+            unsupported_compression_entry="unsupported.bin",
+        )
+
+        windows_path_cases = (
+            ("reserved CON", [("CON", b"x", None)]),
+            ("reserved con extension", [("con.txt", b"x", None)]),
+            ("reserved PRN extension", [("PRN.log", b"x", None)]),
+            ("reserved AUX", [("AUX", b"x", None)]),
+            ("reserved NUL extension", [("NUL.txt", b"x", None)]),
+            ("reserved nested COM1", [("dir/COM1.log", b"x", None)]),
+            ("reserved nested COM9", [("dir/COM9.log", b"x", None)]),
+            ("reserved nested LPT1", [("dir/LPT1.log", b"x", None)]),
+            ("reserved nested LPT9", [("dir/LPT9.log", b"x", None)]),
+            ("reserved superscript COM1", [("COM\u00b9.txt", b"x", None)]),
+            ("reserved superscript LPT3", [("LPT\u00b3.log", b"x", None)]),
+            ("reserved CONIN", [("CONIN$.txt", b"x", None)]),
+            ("reserved CONOUT", [("CONOUT$.txt", b"x", None)]),
+            ("trailing dot", [("file.", b"x", None)]),
+            ("trailing space", [("file ", b"x", None)]),
+            ("nested trailing dot", [("dir/name.", b"x", None)]),
+            ("nested trailing space", [("dir/name ", b"x", None)]),
+            ("dot-space suffix", [("file. ", b"x", None)]),
+            ("forbidden question mark", [("bad?.txt", b"x", None)]),
+            ("forbidden asterisk", [("bad*.txt", b"x", None)]),
+            ("forbidden pipe", [("bad|name.txt", b"x", None)]),
+            ('forbidden quote', [('bad"name.txt', b"x", None)]),
+            ("forbidden less-than", [("bad<name.txt", b"x", None)]),
+            ("forbidden greater-than", [("bad>name.txt", b"x", None)]),
+            ("ASCII control", [("bad\u0001name.txt", b"x", None)]),
+            (
+                "trailing-dot alias pair",
+                [("file", b"A", None), ("file.", b"B", None)],
+            ),
+            (
+                "trailing-space alias pair",
+                [("name", b"A", None), ("name ", b"B", None)],
+            ),
+            (
+                "reserved-extension alias pair",
+                [("NUL", b"A", None), ("NUL.txt", b"B", None)],
+            ),
+        )
+        for label, entries in windows_path_cases:
+            run_negative(
+                "Windows path " + label,
+                entries,
+                expect_clean_destination=True,
+            )
+
+        warning_mutation = _replace_once(
+            workflow,
+            "          NODE_OPTIONS: --throw-deprecation",
+            "          NODE_OPTIONS: --no-warnings",
+        )
+        _expect_contract_failure(
+            "warning-suppression environment mutation",
+            warning_mutation,
+            "NODE_OPTIONS",
+        )
+        negative_labels.append("warning-suppression environment mutation")
+
+    _require(
+        len(negative_labels) == 20 + len(windows_path_cases),
+        f"secure extraction negative fixture count differs: {len(negative_labels)}",
+    )
+    return 2, len(negative_labels)
+
+
+def _secure_extraction_body(workflow: str) -> str:
+    normalized = _normalize_newlines(workflow)
+    jobs = _mapping_block(normalized.splitlines(), "jobs", 0)
+    handoff = _mapping_block(jobs, "release-bundle-handoff", 2)
+    extractor = _named_step(_step_blocks(handoff), RAW_EXTRACTION_STEP)
+    run_index = next(
+        (
+            index
+            for index, line in enumerate(extractor)
+            if line == "        run: |"
+        ),
+        None,
+    )
+    _require(run_index is not None, "secure extraction run body is missing")
+    body_lines = []
+    for line in extractor[run_index + 1 :]:
+        _require(
+            not line.strip() or _indent(line) >= 10,
+            "secure extraction run body indentation is invalid",
+        )
+        body_lines.append(line[10:] if len(line) >= 10 else "")
+    body = "\n".join(body_lines).rstrip("\n") + "\n"
+    _require("Set-StrictMode -Version Latest" in body, "secure extraction body is incomplete")
+    return body
+
+
+def _write_fixture_zip(
+    path: Path,
+    entries: list[tuple[str, bytes, int | None]],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    raw_name_replacements: list[tuple[bytes, bytes]] = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name, data, external_attributes in entries:
+                info = zipfile.ZipInfo(name)
+                if "\\" in name:
+                    normalized_name = name.replace("\\", "/")
+                    raw_name_replacements.append(
+                        (normalized_name.encode("utf-8"), name.encode("utf-8"))
+                    )
+                info.compress_type = zipfile.ZIP_DEFLATED
+                if external_attributes is not None:
+                    info.create_system = 3
+                    info.external_attr = external_attributes
+                archive.writestr(info, data)
+    if raw_name_replacements:
+        payload = path.read_bytes()
+        for normalized_name, raw_name in raw_name_replacements:
+            _require(
+                len(normalized_name) == len(raw_name)
+                and payload.count(normalized_name) == 2,
+                "backslash ZIP fixture name could not be patched exactly",
+            )
+            payload = payload.replace(normalized_name, raw_name)
+        path.write_bytes(payload)
+
+
+def _execute_extraction_body(
+    powershell: str,
+    body: str,
+    case_root: Path,
+    workspace: Path,
+    digest: str,
+) -> subprocess.CompletedProcess[str]:
+    case_root.mkdir(parents=True, exist_ok=True)
+    workspace.mkdir(parents=True, exist_ok=True)
+    script_path = case_root / "workflow-secure-extraction.ps1"
+    script_path.write_text(body, encoding="utf-8", newline="\n")
+    environment = os.environ.copy()
+    environment["GITHUB_WORKSPACE"] = str(workspace.resolve())
+    environment["ARTIFACT_DIGEST"] = digest
+    return subprocess.run(
+        [
+            powershell,
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script_path),
+        ],
+        cwd=workspace,
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
+        check=False,
+    )
+
+
+def _patch_zip_compression_method(path: Path, entry_name: str, method: int) -> None:
+    payload = bytearray(path.read_bytes())
+    encoded_name = entry_name.encode("utf-8")
+    positions = []
+    start = 0
+    while True:
+        position = payload.find(encoded_name, start)
+        if position < 0:
+            break
+        positions.append(position)
+        start = position + len(encoded_name)
+    _require(
+        len(positions) == 2,
+        "unsupported-compression ZIP fixture entry count differs",
+    )
+    patched = 0
+    for position in positions:
+        if position >= 30 and payload[position - 30 : position - 26] == b"PK\x03\x04":
+            payload[position - 22 : position - 20] = method.to_bytes(2, "little")
+            patched += 1
+        elif position >= 46 and payload[position - 46 : position - 42] == b"PK\x01\x02":
+            payload[position - 36 : position - 34] = method.to_bytes(2, "little")
+            patched += 1
+    _require(patched == 2, "unsupported-compression ZIP fixture headers differ")
+    path.write_bytes(payload)
+
+
+def _create_directory_reparse_point(link: Path, target: Path) -> None:
+    try:
+        os.symlink(target, link, target_is_directory=True)
+        return
+    except (OSError, NotImplementedError):
+        pass
+    result = subprocess.run(
+        ["cmd", "/d", "/c", "mklink", "/J", str(link), str(target)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=False,
+    )
+    _require(
+        result.returncode == 0 and link.exists(),
+        "raw-root reparse fixture is unsupported: " + _combined_process_output(result),
+    )
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _combined_process_output(result: subprocess.CompletedProcess[str]) -> str:
+    return (result.stdout + "\n" + result.stderr).strip()
+
+
+def _verify_upstream_download_artifact_warning_contract() -> None:
+    expected = {
+        "release": "v8.0.1",
+        "commit": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+        "issue": "actions/download-artifact#484",
+        "warning_path": "upstream extraction path",
+        "supported_input": "skip-decompress",
+        "digest_check": "remains inside actions/download-artifact",
+        "repository_extraction": "independently fail-closed",
+        "node_options": "--throw-deprecation",
+    }
+    _require(
+        UPSTREAM_DOWNLOAD_ARTIFACT_WARNING_CONTRACT == expected,
+        "upstream download-artifact warning regression contract differs",
+    )
+
+
 def _test_immutable_action_policy(workflow: str) -> None:
     checkout_ref = _workflow_action_ref(workflow, "actions/checkout")
     setup_ref = _workflow_action_ref(workflow, "actions/setup-python")
     upload_ref = _workflow_action_ref(workflow, "actions/upload-artifact")
     download_ref = _workflow_action_ref(workflow, "actions/download-artifact")
-    generic_pins = _replace_action_ref(
-        _replace_action_ref(
-            _replace_action_ref(
-                _replace_action_ref(workflow, "actions/checkout", "a" * 40),
-                "actions/setup-python",
-                "b" * 40,
-            ),
-            "actions/upload-artifact",
-            "c" * 40,
-        ),
-        "actions/download-artifact",
-        "d" * 40,
-    )
-    validate_workflow(generic_pins)
 
     mutations = (
         (
@@ -1000,6 +1955,18 @@ def _test_immutable_action_policy(workflow: str) -> None:
         (
             "nonhex 40-character ref",
             _replace_action_ref(workflow, "actions/checkout", "g" * 40),
+        ),
+        (
+            "different valid full SHA",
+            _replace_action_ref(workflow, "actions/checkout", "a" * 40),
+        ),
+        (
+            "semantic-version comment mismatch",
+            _replace_once(workflow, "# v6.1.0", "# v6.0.0"),
+        ),
+        (
+            "third-party checkout substitution",
+            _replace_once(workflow, "actions/checkout@", "third-party/checkout@"),
         ),
         (
             "mutable runner",

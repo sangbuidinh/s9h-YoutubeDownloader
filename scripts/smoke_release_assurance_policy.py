@@ -127,6 +127,12 @@ def _attestation_before_final_bytes(policy: dict[str, Any]) -> None:
     sequence.insert(1, attestation)
 
 
+def _sbom_before_signing(policy: dict[str, Any]) -> None:
+    sequence = policy["release_integration"]["sequence"]
+    sbom = sequence.pop(6)
+    sequence.insert(1, sbom)
+
+
 def main() -> int:
     root = Path(__file__).resolve().parent.parent
     repository_policy, repository_raw = _load_repository_policy(root)
@@ -144,7 +150,7 @@ def main() -> int:
         ("duplicate JSON key", "duplicate-key", {"raw_mutation": _duplicate_top_key}),
         ("unknown top-level key", "top-level-schema", {"mutation": _add((), "unexpected", False)}),
         ("unknown nested key", "nested-schema", {"mutation": _add(("authenticode",), "unexpected", False)}),
-        ("schema version changed", "fixed-value", {"mutation": _set(("schema_version",), 2)}),
+        ("schema version changed", "fixed-value", {"mutation": _set(("schema_version",), 1)}),
         ("baseline commit malformed", "baseline", {"mutation": _set(("assessment_baseline",), "not-a-commit")}),
         ("Authenticode readiness true", "auth-readiness", {"mutation": _set(("authenticode", "readiness"), True)}),
         ("certificate provisioned true", "auth-certificate", {"mutation": _set(("authenticode", "certificate_provisioned"), True)}),
@@ -158,7 +164,11 @@ def main() -> int:
         ("SBOM format changed", "sbom-format", {"mutation": _set(("sbom", "format"), "CycloneDX")}),
         ("SPDX predicate changed", "sbom-predicate", {"mutation": _set(("sbom", "predicate_type"), "https://example.invalid/predicate")}),
         ("required SBOM scope removed", "sbom-scope", {"mutation": _delete_list_item(("sbom", "coverage_categories"), "aria2")}),
-        ("generator marked selected", "sbom-generator", {"mutation": _set(("sbom", "generator_selected"), True)}),
+        ("generator selection removed", "sbom-generator", {"mutation": _set(("sbom", "generator_selected"), False)}),
+        ("SBOM implementation removed", "sbom-implementation", {"mutation": _set(("sbom", "implementation_status"), False)}),
+        ("synthetic integration claim removed", "sbom-implementation", {"mutation": _set(("sbom", "implementation_evidence", "synthetic_integration_validated"), False)}),
+        ("production SBOM claim enabled", "sbom-implementation", {"mutation": _set(("sbom", "implementation_evidence", "production_sbom_generated"), True)}),
+        ("generator version changed", "sbom-implementation", {"mutation": _set(("sbom", "implementation_evidence", "generator_version"), "9.9.9")}),
         ("empty SBOM blockers", "sbom-blockers", {"mutation": _set(("sbom", "blockers"), [])}),
         ("provenance readiness true", "provenance-readiness", {"mutation": _set(("provenance", "readiness"), True)}),
         ("provenance action changed", "provenance-action", {"mutation": _set(("provenance", "action_repository"), "example/attest")}),
@@ -171,6 +181,7 @@ def main() -> int:
         ("empty provenance blockers", "provenance-blockers", {"mutation": _set(("provenance", "blockers"), [])}),
         ("final-byte ordering disabled", "final-byte-order", {"mutation": _set(("release_integration", "all_byte_changes_before_finalization"), False)}),
         ("checksum before signing", "final-byte-order", {"mutation": _checksum_before_signing}),
+        ("final SBOM before signing", "final-byte-order", {"mutation": _sbom_before_signing}),
         ("attestation before final byte changes", "final-byte-order", {"mutation": _attestation_before_final_bytes}),
         ("release-assurance readiness true", "integration-readiness", {"mutation": _set(("release_integration", "readiness", "release_assurance_ready"), True)}),
         ("claim set true", "claims", {"mutation": _set(("claims", "sbom_generated"), True)}),

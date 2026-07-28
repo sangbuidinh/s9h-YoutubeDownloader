@@ -11,11 +11,16 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+import release_sbom
 import verify_release_legal_payload as legal_payload
 
 
-SCHEMA_VERSION = 2
-BUNDLE_FORMAT = "s9h-release-bundle-v2"
+V2_MANIFEST_SCHEMA_VERSION = 2
+V2_BUNDLE_FORMAT = "s9h-release-bundle-v2"
+V3_MANIFEST_SCHEMA_VERSION = 3
+V3_BUNDLE_FORMAT = "s9h-release-bundle-v3"
+V2_CONTRACT_PATH = "legal/release-assets-v2.json"
+V3_CONTRACT_PATH = "legal/release-assets-v3.json"
 EXE_NAME = "Youtube.Downloaderbs.exe"
 CHECKSUM_NAME = "SHA256SUMS.txt"
 MANIFEST_NAME = "RELEASE_MANIFEST.json"
@@ -53,10 +58,11 @@ def main() -> int:
             "asset_contract": args.asset_contract,
             "legal_payload_path": args.legal_payload,
             "source_assets_root": args.source_assets_root,
+            "sbom_input": args.sbom_input,
         }
         if args.command == "create":
             create_bundle(release_root=args.release_root, **common)
-            print("Release bundle v2 created and verified")
+            print(f"Release bundle {_bundle_version_label(args.asset_contract)} created and verified")
         else:
             verify_bundle(
                 require_release_ready=_parse_boolean(
@@ -65,7 +71,7 @@ def main() -> int:
                 ),
                 **common,
             )
-            print("Release bundle v2 verified")
+            print(f"Release bundle {_bundle_version_label(args.asset_contract)} verified")
     except (BundleError, legal_payload.LegalPayloadError, OSError, UnicodeError) as exc:
         print(f"Release bundle error: {exc}", file=sys.stderr)
         return 1
@@ -73,7 +79,7 @@ def main() -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Create or verify a release bundle v2")
+    parser = argparse.ArgumentParser(description="Create or verify a versioned release bundle")
     subparsers = parser.add_subparsers(dest="command", required=True)
     create = subparsers.add_parser("create")
     create.add_argument("--release-root", required=True, type=Path)
@@ -94,6 +100,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--asset-contract", required=True, type=Path)
     parser.add_argument("--legal-payload", required=True, type=Path)
     parser.add_argument("--source-assets-root", required=True, type=Path)
+    parser.add_argument("--sbom-input", type=Path)
 
 
 def create_bundle(
@@ -108,9 +115,17 @@ def create_bundle(
     asset_contract: Path,
     legal_payload_path: Path,
     source_assets_root: Path,
+    sbom_input: Path | None = None,
 ) -> None:
     _validate_metadata(tag, source_commit, control_commit, prerelease)
     control = _load_control_state(policy, asset_contract, tag)
+    evidence = _load_contract_sbom_evidence(
+        control,
+        sbom_input,
+        tag=tag,
+        source_commit=source_commit,
+        control_commit=control_commit,
+    )
     release_root = _require_directory_root(release_root, "release root")
     source_assets_root = _require_directory_root(source_assets_root, "source assets root")
     bundle_root = _prepare_bundle_root(bundle_root)
@@ -154,19 +169,22 @@ def create_bundle(
     assets_root = bundle_root / "assets"
     assets_root.mkdir()
     for role, name in sorted(names.items(), key=lambda item: item[1]):
+        if role == "release-sbom":
+            continue
         _copy_binary(source_files[name], assets_root / name)
     _copy_binary(source_files[NOTES_NAME], bundle_root / NOTES_NAME)
 
     assets = [
         _asset_record(assets_root / name, role)
         for role, name in sorted(names.items(), key=lambda item: item[1])
+        if role != "release-sbom"
     ]
     checksum_path = assets_root / CHECKSUM_NAME
-    checksum_path.write_bytes(_checksum_bytes(assets))
     notes_path = bundle_root / NOTES_NAME
+    checksum_bytes = _checksum_bytes(assets)
     manifest = {
-        "schema_version": SCHEMA_VERSION,
-        "bundle_format": BUNDLE_FORMAT,
+        "schema_version": control["manifest_schema_version"],
+        "bundle_format": control["bundle_format"],
         "release_tag": tag,
         "prerelease": prerelease,
         "source_commit": source_commit,
@@ -175,10 +193,35 @@ def create_bundle(
         "legal_compliance_certified": False,
         "source_availability_certified": False,
         "assets": assets,
-        "checksum_file": _file_record(checksum_path),
+        "checksum_file": _bytes_record(CHECKSUM_NAME, checksum_bytes),
         "release_notes": _file_record(notes_path),
         "release_blockers": control["release_blockers"],
     }
+    if control["requires_sbom"]:
+        if evidence is None:
+            raise BundleError("release SBOM evidence is required by the selected contract")
+        _verify_sbom_evidence_base(evidence, manifest, checksum_bytes)
+        sbom_path = assets_root / names["release-sbom"]
+        try:
+            sbom_bytes = release_sbom.generate_bytes(evidence)
+        except release_sbom.SbomError as exc:
+            raise BundleError(str(exc)) from exc
+        if sbom_path.name != release_sbom.expected_filename(evidence["release"]["version"]):
+            raise BundleError("release SBOM filename is invalid")
+        sbom_path.write_bytes(sbom_bytes)
+        assets = sorted(
+            [*assets, _asset_record(sbom_path, "release-sbom")],
+            key=lambda item: item["name"],
+        )
+        checksum_path.write_bytes(_checksum_bytes(assets))
+        manifest = {
+            **manifest,
+            "assets": assets,
+            "checksum_file": _file_record(checksum_path),
+        }
+    else:
+        checksum_path.write_bytes(checksum_bytes)
+        manifest["checksum_file"] = _file_record(checksum_path)
     (bundle_root / MANIFEST_NAME).write_bytes(_canonical_json_bytes(manifest))
 
     verify_bundle(
@@ -191,6 +234,7 @@ def create_bundle(
         asset_contract=asset_contract,
         legal_payload_path=assets_root / names["legal-payload"],
         source_assets_root=assets_root,
+        sbom_input=sbom_input,
         require_release_ready=False,
     )
 
@@ -207,11 +251,19 @@ def verify_bundle(
     legal_payload_path: Path,
     source_assets_root: Path,
     require_release_ready: bool,
+    sbom_input: Path | None = None,
 ) -> None:
     _validate_metadata(tag, source_commit, control_commit, prerelease)
     if type(require_release_ready) is not bool:
         raise BundleError("require-release-ready flag is invalid")
     control = _load_control_state(policy, asset_contract, tag)
+    evidence = _load_contract_sbom_evidence(
+        control,
+        sbom_input,
+        tag=tag,
+        source_commit=source_commit,
+        control_commit=control_commit,
+    )
     bundle_root = _require_directory_root(bundle_root, "bundle root")
     source_assets_root = _require_directory_root(source_assets_root, "source assets root")
     _require_no_reparse_tree(bundle_root)
@@ -241,6 +293,8 @@ def verify_bundle(
         prerelease=prerelease,
         names=names,
         release_blockers=control["release_blockers"],
+        manifest_schema_version=control["manifest_schema_version"],
+        bundle_format=control["bundle_format"],
     )
     _verify_release_notes_portable_checksum(
         bundle_root,
@@ -254,6 +308,18 @@ def verify_bundle(
     _require_utf8_lf(checksum_bytes, CHECKSUM_NAME)
     if checksum_bytes != _checksum_bytes(assets):
         raise BundleError("checksum file content is invalid")
+    if control["requires_sbom"]:
+        if evidence is None:
+            raise BundleError("release SBOM evidence is required by the selected contract")
+        try:
+            release_sbom.verify_document(
+                (bundle_root / "assets" / names["release-sbom"]).read_bytes(),
+                evidence,
+                final_manifest=manifest,
+                final_checksum_bytes=checksum_bytes,
+            )
+        except release_sbom.SbomError as exc:
+            raise BundleError(str(exc)) from exc
 
     assets_root = bundle_root / "assets"
     if not _starts_with_mz(assets_root / EXE_NAME):
@@ -319,14 +385,11 @@ def _verify_release_notes_portable_checksum(
 def _load_control_state(policy_path: Path, asset_contract_path: Path, tag: str) -> dict[str, Any]:
     asset_contract_path = asset_contract_path.expanduser().resolve(strict=False)
     control_root = asset_contract_path.parent.parent
-    expected_contract = control_root / legal_payload.CONTRACT_PATH
     expected_policy = control_root / POLICY_PATH
     expected_source_kits = control_root / SOURCE_KITS_PATH
-    if asset_contract_path != expected_contract.resolve(strict=False):
-        raise BundleError("release asset contract path is invalid")
     if policy_path.expanduser().resolve(strict=False) != expected_policy.resolve(strict=False):
         raise BundleError("release policy path is invalid")
-    contract = legal_payload.load_asset_contract(asset_contract_path)
+    contract = _load_bundle_contract(asset_contract_path, control_root)
     policy = _load_canonical_json_file(expected_policy, "release policy")
     source_kits = _load_canonical_json_file(expected_source_kits, "source kit requirements")
     _validate_blocked_control_state(policy, source_kits, tag)
@@ -339,8 +402,123 @@ def _load_control_state(policy_path: Path, asset_contract_path: Path, tag: str) 
     return {
         "control_root": control_root.resolve(),
         "contract": contract,
+        "manifest_schema_version": contract["manifest_schema_version"],
+        "bundle_format": contract["bundle_format"],
+        "requires_sbom": contract["requires_sbom"],
         "release_blockers": blockers,
     }
+
+
+def _load_bundle_contract(path: Path, control_root: Path) -> dict[str, Any]:
+    expected_v2 = (control_root / V2_CONTRACT_PATH).resolve(strict=False)
+    expected_v3 = (control_root / V3_CONTRACT_PATH).resolve(strict=False)
+    if path == expected_v2:
+        legacy = legal_payload.load_asset_contract(path)
+        templates = {
+            "application-executable": EXE_NAME,
+            "portable-package": "Youtube-Downloaderbs-{tag}.zip",
+            "legal-payload": legacy["legal_payload_asset_template"],
+        }
+        for item in legacy["required_source_asset_templates"]:
+            role = SOURCE_ROLE_BY_ID.get(item["id"])
+            if role is None:
+                raise BundleError("source asset role is invalid")
+            templates[role] = item["filename"]
+        if set(templates) != {
+            "application-executable",
+            "portable-package",
+            "legal-payload",
+            "aria2-source",
+            "ffmpeg-source",
+        }:
+            raise BundleError("legacy release asset contract is invalid")
+        return {
+            "contract_version": 2,
+            "manifest_schema_version": V2_MANIFEST_SCHEMA_VERSION,
+            "bundle_format": V2_BUNDLE_FORMAT,
+            "requires_sbom": False,
+            "asset_templates": templates,
+            "release_blockers": legacy["release_blockers"],
+        }
+    if path != expected_v3:
+        raise BundleError("release asset contract path is invalid")
+
+    value = _load_canonical_json_file(path, "release assets v3 contract")
+    expected_keys = {
+        "schema_version",
+        "bundle_format",
+        "bundle_manifest_schema_version",
+        "sbom_input_required",
+        "legal_payload_format",
+        "release_readiness",
+        "legal_compliance_certified",
+        "source_availability_certified",
+        "source_kits_ready",
+        "portable_legal_root",
+        "release_assets",
+        "legal_payload_files",
+        "release_blockers",
+    }
+    if not isinstance(value, dict) or set(value) != expected_keys:
+        raise BundleError("release assets v3 contract fields are invalid")
+    legacy = legal_payload.load_asset_contract(expected_v2)
+    if (
+        value["schema_version"] != 1
+        or value["bundle_format"] != V3_BUNDLE_FORMAT
+        or value["bundle_manifest_schema_version"] != V3_MANIFEST_SCHEMA_VERSION
+        or value["sbom_input_required"] is not True
+        or value["legal_payload_format"] != legacy["legal_payload_format"]
+        or value["release_readiness"] != legacy["release_readiness"]
+        or value["legal_compliance_certified"] is not False
+        or value["source_availability_certified"] is not False
+        or value["source_kits_ready"] is not False
+        or value["portable_legal_root"] != legacy["portable_legal_root"]
+        or value["legal_payload_files"] != legacy["legal_payload_files"]
+        or value["release_blockers"] != legacy["release_blockers"]
+    ):
+        raise BundleError("release assets v3 contract values are invalid")
+
+    assets = value["release_assets"]
+    if not isinstance(assets, list) or len(assets) != 6:
+        raise BundleError("release assets v3 declarations are invalid")
+    expected_roles = [
+        "application-executable",
+        "portable-package",
+        "legal-payload",
+        "aria2-source",
+        "ffmpeg-source",
+        "release-sbom",
+    ]
+    templates: dict[str, str] = {}
+    for expected_role, item in zip(expected_roles, assets, strict=True):
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"role", "filename", "required"}
+            or item["role"] != expected_role
+            or item["required"] is not True
+        ):
+            raise BundleError("release assets v3 declarations are invalid")
+        template = item["filename"]
+        _expand_asset_template(template, "v0.0.0-contract")
+        templates[expected_role] = template
+    if templates["application-executable"] != EXE_NAME:
+        raise BundleError("release assets v3 executable declaration is invalid")
+    return {
+        "contract_version": 3,
+        "manifest_schema_version": V3_MANIFEST_SCHEMA_VERSION,
+        "bundle_format": V3_BUNDLE_FORMAT,
+        "requires_sbom": True,
+        "asset_templates": templates,
+        "release_blockers": value["release_blockers"],
+    }
+
+
+def _bundle_version_label(path: Path) -> str:
+    if path.name == Path(V2_CONTRACT_PATH).name:
+        return "v2"
+    if path.name == Path(V3_CONTRACT_PATH).name:
+        return "v3"
+    raise BundleError("release asset contract path is invalid")
 
 
 def _validate_blocked_control_state(policy: object, source_kits: object, tag: str) -> None:
@@ -402,28 +580,16 @@ def _policy_release(policy: dict[str, Any], tag: str) -> dict[str, Any]:
 
 def _asset_names(tag: str, contract: dict[str, Any]) -> dict[str, str]:
     names = {
-        "application-executable": EXE_NAME,
-        "portable-package": _zip_name(tag),
-        "legal-payload": _expand_asset_template(contract["legal_payload_asset_template"], tag),
+        role: _expand_asset_template(template, tag)
+        for role, template in contract["asset_templates"].items()
     }
-    for item in contract["required_source_asset_templates"]:
-        role = SOURCE_ROLE_BY_ID.get(item["id"])
-        if role is None:
-            raise BundleError("source asset role is invalid")
-        names[role] = _expand_asset_template(item["filename"], tag)
-    if set(names) != {
-        "application-executable",
-        "portable-package",
-        "legal-payload",
-        "aria2-source",
-        "ffmpeg-source",
-    } or len(set(names.values())) != 5:
+    if set(names) != set(contract["asset_templates"]) or len(set(names.values())) != len(names):
         raise BundleError("release asset names are invalid")
     return names
 
 
 def _expand_asset_template(template: object, tag: str) -> str:
-    if not isinstance(template, str) or template.count("{tag}") != 1:
+    if not isinstance(template, str) or template.count("{tag}") not in {0, 1}:
         raise BundleError("release asset template is invalid")
     if any(character in template for character in "*?[]"):
         raise BundleError("release asset template contains a wildcard")
@@ -443,6 +609,8 @@ def _validate_manifest(
     prerelease: bool,
     names: dict[str, str],
     release_blockers: list[str],
+    manifest_schema_version: int,
+    bundle_format: str,
 ) -> None:
     if not isinstance(manifest, dict):
         raise BundleError("release manifest must be an object")
@@ -466,8 +634,8 @@ def _validate_manifest(
         "release manifest",
     )
     checks = (
-        (manifest["schema_version"] == SCHEMA_VERSION, "release manifest schema is invalid"),
-        (manifest["bundle_format"] == BUNDLE_FORMAT, "release manifest bundle format is invalid"),
+        (manifest["schema_version"] == manifest_schema_version, "release manifest schema is invalid"),
+        (manifest["bundle_format"] == bundle_format, "release manifest bundle format is invalid"),
         (manifest["release_tag"] == tag, "release manifest tag is invalid"),
         (type(manifest["prerelease"]) is bool and manifest["prerelease"] == prerelease, "release manifest prerelease flag is invalid"),
         (manifest["source_commit"] == source_commit, "release manifest source commit is invalid"),
@@ -482,15 +650,15 @@ def _validate_manifest(
             raise BundleError(message)
 
     assets = manifest["assets"]
-    if not isinstance(assets, list) or len(assets) != 5:
+    if not isinstance(assets, list) or len(assets) != len(names):
         raise BundleError("release manifest assets are invalid")
     for item in assets:
-        _validate_asset_record(item)
+        _validate_asset_record(item, set(names))
     expected_pairs = sorted((name, role) for role, name in names.items())
     actual_pairs = [(item["name"], item["role"]) for item in assets]
     if actual_pairs != expected_pairs:
         raise BundleError("release manifest asset names or roles are invalid")
-    if len({item["role"] for item in assets}) != 5:
+    if len({item["role"] for item in assets}) != len(names):
         raise BundleError("release manifest asset roles are not unique")
     for item in assets:
         _verify_record(bundle_root / "assets" / item["name"], item)
@@ -507,17 +675,11 @@ def _validate_manifest(
     _verify_record(bundle_root / NOTES_NAME, notes)
 
 
-def _validate_asset_record(value: object) -> None:
+def _validate_asset_record(value: object, allowed_roles: set[str]) -> None:
     if not isinstance(value, dict):
         raise BundleError("asset record is invalid")
     _require_exact_keys(value, {"name", "role", "size", "sha256"}, "asset record")
-    if value["role"] not in {
-        "application-executable",
-        "portable-package",
-        "legal-payload",
-        "aria2-source",
-        "ffmpeg-source",
-    }:
+    if value["role"] not in allowed_roles:
         raise BundleError("asset role is invalid")
     _validate_record_values(value, "asset")
 
@@ -706,6 +868,77 @@ def _asset_record(path: Path, role: str) -> dict[str, object]:
         "size": path.stat().st_size,
         "sha256": _sha256(path),
     }
+
+
+def _bytes_record(name: str, data: bytes) -> dict[str, object]:
+    return {
+        "name": name,
+        "size": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+
+
+def _load_sbom_evidence(
+    path: Path,
+    *,
+    tag: str,
+    source_commit: str,
+    control_commit: str,
+) -> dict[str, Any]:
+    path = path.expanduser().resolve(strict=False)
+    if not path.is_file() or _is_reparse(path):
+        raise BundleError("release SBOM evidence is unavailable")
+    try:
+        evidence = release_sbom.load_input(path)
+    except release_sbom.SbomError as exc:
+        raise BundleError(str(exc)) from exc
+    release = evidence["release"]
+    if (
+        release["tag"] != tag
+        or release["source_commit"] != source_commit
+        or release["control_commit"] != control_commit
+    ):
+        raise BundleError("release SBOM evidence identity mismatch")
+    return evidence
+
+
+def _load_contract_sbom_evidence(
+    control: dict[str, Any],
+    path: Path | None,
+    *,
+    tag: str,
+    source_commit: str,
+    control_commit: str,
+) -> dict[str, Any] | None:
+    if control["requires_sbom"]:
+        if path is None:
+            raise BundleError("release SBOM evidence is required by the selected contract")
+        return _load_sbom_evidence(
+            path,
+            tag=tag,
+            source_commit=source_commit,
+            control_commit=control_commit,
+        )
+    if path is not None:
+        raise BundleError("release SBOM evidence is not allowed by the selected v2 contract")
+    return None
+
+
+def _verify_sbom_evidence_base(
+    evidence: dict[str, Any],
+    manifest: dict[str, Any],
+    checksum_bytes: bytes,
+) -> None:
+    if evidence["release_manifest"] != manifest:
+        raise BundleError("release SBOM evidence manifest mismatch")
+    expected_checksums = [
+        {"name": item["name"], "sha256": item["sha256"]}
+        for item in manifest["assets"]
+    ]
+    if evidence["checksum_records"] != expected_checksums:
+        raise BundleError("release SBOM evidence checksum mismatch")
+    if checksum_bytes != _checksum_bytes(manifest["assets"]):
+        raise BundleError("release SBOM evidence checksum bytes mismatch")
 
 
 def _checksum_bytes(assets: list[dict[str, Any]]) -> bytes:

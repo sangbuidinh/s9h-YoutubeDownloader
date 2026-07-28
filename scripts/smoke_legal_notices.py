@@ -141,6 +141,7 @@ def _run_checkout_policy_tests() -> None:
         ("CRLF .gitattributes", _crlf_gitattributes, "LF line endings"),
         ("BOM .gitattributes", _bom_gitattributes, "UTF-8 BOM"),
         ("malformed attribute syntax", _malformed_gitattributes, "malformed attribute syntax"),
+        ("enabled vendor notice whitespace checks", _enable_vendor_notice_whitespace, "unsupported attributes"),
         ("local absolute attribute path", _local_attribute_path, "local absolute path"),
     )
     for label, mutation, expected_message in mutations:
@@ -314,6 +315,11 @@ def _run_phase6b2a_mutations() -> None:
 
 def _run_phase6b2b1_mutations() -> None:
     _expect_failure("missing release-assets contract", _missing_release_assets, "top-level legal JSON count")
+    _expect_failure(
+        "missing release-assets v3 contract",
+        _missing_release_assets_v3,
+        "top-level legal JSON count",
+    )
     _expect_failure("wrong bundle format", _wrong_bundle_format, "asset contract")
     _expect_failure("wrong legal payload format", _wrong_legal_payload_format, "asset contract")
     _expect_failure("release readiness ready", _release_readiness_ready, "asset contract")
@@ -408,6 +414,10 @@ def _copy_fixture(root: Path) -> None:
     shutil.copy2(
         REPO_ROOT / "docs/source-kit-feasibility.md",
         root / "docs/source-kit-feasibility.md",
+    )
+    shutil.copy2(
+        REPO_ROOT / "docs/release-sbom.md",
+        root / "docs/release-sbom.md",
     )
     shutil.copy2(
         REPO_ROOT / "docs/sbom-generator-feasibility.md",
@@ -633,6 +643,10 @@ def _missing_release_assets(root: Path) -> None:
     (root / verifier.release_payload.CONTRACT_PATH).unlink()
 
 
+def _missing_release_assets_v3(root: Path) -> None:
+    (root / "legal" / "release-assets-v3.json").unlink()
+
+
 def _mutate_release_assets(root: Path, mutation: Callable[[dict], None]) -> None:
     path = root / verifier.release_payload.CONTRACT_PATH
     document = json.loads(path.read_text(encoding="utf-8"))
@@ -753,6 +767,16 @@ def _bom_gitattributes(root: Path) -> None:
 
 def _malformed_gitattributes(root: Path) -> None:
     _rewrite_gitattributes(root, lambda data: data + b"malformed\n")
+
+
+def _enable_vendor_notice_whitespace(root: Path) -> None:
+    _rewrite_gitattributes(
+        root,
+        lambda data: data.replace(
+            b"fastjsonschema-2.21.2-LICENSE.txt -text -whitespace",
+            b"fastjsonschema-2.21.2-LICENSE.txt -text whitespace",
+        ),
+    )
 
 
 def _local_attribute_path(root: Path) -> None:

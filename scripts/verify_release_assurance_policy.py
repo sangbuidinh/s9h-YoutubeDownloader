@@ -80,6 +80,7 @@ SBOM_KEYS = {
     "format",
     "future_properties",
     "generator_selected",
+    "implementation_evidence",
     "implementation_status",
     "non_claims",
     "predicate_type",
@@ -361,9 +362,9 @@ def _validate_authenticode(value: Any) -> None:
 
 def _validate_sbom(value: Any) -> None:
     sbom = _require_object(value, SBOM_KEYS, "sbom")
-    _require_false(sbom["implementation_status"], "sbom-readiness", "SBOM implementation status")
+    _require_true(sbom["implementation_status"], "sbom-implementation", "SBOM implementation status")
     _require_false(sbom["readiness"], "sbom-readiness", "SBOM readiness")
-    _require_false(sbom["generator_selected"], "sbom-generator", "SBOM generator selected")
+    _require_true(sbom["generator_selected"], "sbom-generator", "SBOM generator selected")
     if _require_string(sbom["format"], "SBOM format") != "SPDX-2.3-json":
         _fail("sbom-format", "SBOM format must be SPDX-2.3-json")
     if _require_string(sbom["predicate_type"], "SBOM predicate type") != "https://spdx.dev/Document/v2.3":
@@ -399,6 +400,38 @@ def _validate_sbom(value: Any) -> None:
     )
     for key in properties:
         _require_true(properties[key], "sbom-properties", f"SBOM property {key}")
+    implementation = _require_object(
+        sbom["implementation_evidence"],
+        {
+            "generator_id",
+            "generator_version",
+            "production_sbom_generated",
+            "production_sbom_reconciled",
+            "schema_blob_sha1",
+            "schema_commit",
+            "schema_repository",
+            "schema_tag",
+            "schema_validation_dependency",
+            "schema_validation_dependency_version",
+            "synthetic_integration_validated",
+        },
+        "SBOM implementation evidence",
+    )
+    expected_implementation = {
+        "generator_id": "s9h-project-owned-deterministic-spdx-generator",
+        "generator_version": "1.0.0",
+        "production_sbom_generated": False,
+        "production_sbom_reconciled": False,
+        "schema_blob_sha1": "ee61e6686e885f8139c132647fd0b4f483b8fb81",
+        "schema_commit": "aadf3b0b8dbbabdb4d880b0fc714255fea436ff7",
+        "schema_repository": "spdx/spdx-spec",
+        "schema_tag": "v2.3",
+        "schema_validation_dependency": "fastjsonschema",
+        "schema_validation_dependency_version": "2.21.2",
+        "synthetic_integration_validated": True,
+    }
+    if implementation != expected_implementation:
+        _fail("sbom-implementation", "SBOM implementation evidence changed")
     non_claims = _require_object(
         sbom["non_claims"],
         {
@@ -417,14 +450,13 @@ def _validate_sbom(value: Any) -> None:
         "sbom-blockers",
         "SBOM blockers",
         {
-            "generator not selected",
-            "generator version not pinned",
-            "PyInstaller dependency extraction strategy not implemented",
-            "distributed Python package inventory not reconciled",
-            "bundled runtime inventory not reconciled",
-            "SPDX schema validation not implemented",
-            "release-manifest cross-check not implemented",
+            "final distributed Python package inventory not supplied",
+            "final external runtime inventory not supplied",
+            "final PyInstaller executable/CArchive inventory not supplied",
+            "final portable-package inventory not supplied",
+            "final release artifact inventory not supplied",
             "production SBOM not generated",
+            "production SBOM not reconciled against final immutable application bytes",
         },
     )
 
@@ -527,7 +559,7 @@ def _validate_release_integration(value: Any) -> None:
         "release integration blockers",
         {
             "Authenticode signing and verification are not integrated",
-            "production SBOM generation and validation are not integrated",
+            "production SBOM has not been generated or reconciled against final immutable application bytes",
             "final checksum and manifest synchronization is not integrated with assurance artifacts",
             "provenance and SBOM attestation verification are not integrated",
         },
@@ -548,8 +580,8 @@ def verify_policy_file(root: Path) -> None:
 
     if list(policy) != TOP_LEVEL_KEYS:
         _fail("top-level-schema", "top-level policy fields or order are invalid")
-    if policy["schema_version"] != 1 or type(policy["schema_version"]) is not int:
-        _fail("fixed-value", "schema_version must be integer 1")
+    if policy["schema_version"] != 2 or type(policy["schema_version"]) is not int:
+        _fail("fixed-value", "schema_version must be integer 2")
     if policy["policy_id"] != "s9h-release-assurance-v1":
         _fail("fixed-value", "policy_id changed")
     if policy["product"] != "Youtube Downloaderbs":

@@ -306,9 +306,9 @@ def _change_assurance_policy(root: Path, baseline: dict[str, object]) -> None:
     del baseline
     path = root / verifier.ASSURANCE_POLICY_PATH
     policy = json.loads(path.read_text(encoding="utf-8"))
-    policy["sbom"]["generator_selected"] = True
+    policy["sbom"]["generator_selected"] = False
     path.write_bytes(_canonical(policy))
-    if json.loads(path.read_text(encoding="utf-8"))["sbom"]["generator_selected"] is not True:
+    if json.loads(path.read_text(encoding="utf-8"))["sbom"]["generator_selected"] is not False:
         raise AssertionError("assurance-policy mutation did not occur")
 
 
@@ -323,7 +323,7 @@ def _cases() -> list[NegativeCase]:
         NegativeCase("duplicate-top-level-key", "duplicate-key", "duplicate JSON key: assessment_baseline", _raw_mutation(_duplicate_key)),
         NegativeCase("noncanonical-json", "canonical-json", "feasibility JSON is not canonical two-space sorted JSON", _raw_mutation(lambda raw: json.dumps(json.loads(raw), ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n")),
         NegativeCase("unknown-top-level-key", "top-level-schema", "top-level feasibility fields are invalid", _data_mutation(lambda data: data.__setitem__("unknown", False))),
-        NegativeCase("schema-version-changed", "fixed-value", "schema_version must be integer 1", _data_mutation(lambda data: data.__setitem__("schema_version", 2))),
+        NegativeCase("schema-version-changed", "fixed-value", "schema_version must be integer 2", _data_mutation(lambda data: data.__setitem__("schema_version", 1))),
         NegativeCase("document-id-changed", "fixed-value", "fixed feasibility identity changed: document_id", _data_mutation(lambda data: data.__setitem__("document_id", "changed"))),
         NegativeCase("assessment-baseline-changed", "baseline", "fixed feasibility identity changed: assessment_baseline", _data_mutation(lambda data: data.__setitem__("assessment_baseline", "0" * 40))),
         NegativeCase("repository-changed", "fixed-value", "fixed feasibility identity changed: repository", _data_mutation(lambda data: data.__setitem__("repository", "example/changed"))),
@@ -362,8 +362,8 @@ def _cases() -> list[NegativeCase]:
         NegativeCase("unsupported-evidence-state", "evidence-state", "unsupported capability evidence state", _data_mutation(_unsupported_evidence_state)),
         NegativeCase("primary-generator-changed", "decision", "primary generator changed", _data_mutation(lambda data: _set_decision(data, "primary_generator", "anchore-syft"))),
         NegativeCase("selected-comparator-changed", "decision", "selected comparator changed", _data_mutation(lambda data: _set_decision(data, "selected_comparator", "microsoft-sbom-tool"))),
-        NegativeCase("production-generator-selected", "authorization", "decision authorization must remain false: production_generator_selected", _data_mutation(lambda data: _set_decision(data, "production_generator_selected", True))),
-        NegativeCase("prototype-implementation-authorized", "authorization", "decision authorization must remain false: prototype_implementation_authorized", _data_mutation(lambda data: _set_decision(data, "prototype_implementation_authorized", True))),
+        NegativeCase("production-generator-selection-removed", "authorization", "decision implementation state must remain true: production_generator_selected", _data_mutation(lambda data: _set_decision(data, "production_generator_selected", False))),
+        NegativeCase("prototype-implementation-authorization-removed", "authorization", "decision implementation state must remain true: prototype_implementation_authorized", _data_mutation(lambda data: _set_decision(data, "prototype_implementation_authorized", False))),
         NegativeCase("external-comparator-authorized", "authorization", "decision authorization must remain false: external_comparator_execution_authorized", _data_mutation(lambda data: _set_decision(data, "external_comparator_execution_authorized", True))),
         NegativeCase("production-generation-authorized", "authorization", "decision authorization must remain false: production_sbom_generation_authorized", _data_mutation(lambda data: _set_decision(data, "production_sbom_generation_authorized", True))),
         NegativeCase("release-integration-authorized", "authorization", "decision authorization must remain false: release_integration_authorized", _data_mutation(lambda data: _set_decision(data, "release_integration_authorized", True))),
@@ -375,7 +375,7 @@ def _cases() -> list[NegativeCase]:
         NegativeCase("fail-closed-condition-removed", "fail-closed", "prototype fail-closed conditions changed", _data_mutation(_remove_fail_closed_condition)),
         NegativeCase("private-key-material", "private-key-material", "private-key PEM material is forbidden", _data_mutation(_insert_private_key)),
         NegativeCase("local-user-profile-path", "user-path", "local user-profile paths are forbidden", _data_mutation(_insert_user_path)),
-        NegativeCase("assurance-generator-selected", "assurance-policy", "existing assurance policy SBOM state must remain false", _change_assurance_policy),
+        NegativeCase("assurance-generator-selection-removed", "assurance-policy", "assurance policy SBOM implementation state must remain true", _change_assurance_policy),
     ]
 
 

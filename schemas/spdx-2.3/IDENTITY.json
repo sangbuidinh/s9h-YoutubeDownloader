@@ -1,0 +1,11 @@
+{
+  "license_blob_sha1": "44a22d370bba8d13c7dd7449d71b40ea8842788e",
+  "license_path": "LICENSE",
+  "license_spdx": "CC-BY-3.0",
+  "repository": "spdx/spdx-spec",
+  "schema_blob_sha1": "ee61e6686e885f8139c132647fd0b4f483b8fb81",
+  "schema_path": "schemas/spdx-schema.json",
+  "schema_version": "SPDX-2.3",
+  "source_commit": "aadf3b0b8dbbabdb4d880b0fc714255fea436ff7",
+  "source_tag": "v2.3"
+}
