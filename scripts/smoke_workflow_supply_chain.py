@@ -81,6 +81,17 @@ CURRENT_CI_ACTIONS = {
         "lifecycle": "current",
         "occurrence_count": 1,
     },
+    "actions/attest": {
+        "repository": "actions/attest",
+        "release_tag": "v4.2.0",
+        "workflow_comment": "v4.2.0",
+        "commit": "f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6",
+        "declared_runtime": "node24",
+        "official_repository": True,
+        "action_yml_blob": "f3d593f3020cf14b65d2789e3788d015354475e9",
+        "lifecycle": "current",
+        "occurrence_count": 2,
+    },
 }
 HISTORICAL_ACTIONS = {
     "actions/checkout": {
@@ -152,6 +163,7 @@ EXPECTED_WORKFLOW_ACTION_COUNTS = {
         "actions/setup-python": 1,
         "actions/upload-artifact": 1,
         "actions/download-artifact": 1,
+        "actions/attest": 2,
     },
     ".github/workflows/prerelease-v1.2.7-rc.1.yml": {
         "actions/checkout": 2,
@@ -219,7 +231,8 @@ ACTION_LINE = re.compile(
 )
 PERMISSION_LINE = re.compile(
     r"^(\s*)(contents|actions|checks|packages|pull-requests|"
-    r"id-token|issues|deployments)\s*:\s*(read|write)\s*$"
+    r"id-token|issues|deployments|attestations|artifact-metadata|"
+    r"security-events)\s*:\s*(read|write)\s*$"
 )
 
 
@@ -337,7 +350,7 @@ def validate_supply_chain(documents: dict[str, str], inventory: dict) -> None:
         )
 
     total_count = sum(len(rows) for rows in uses_by_profile_action.values())
-    _require(total_count == 35, "total immutable action count must be 35")
+    _require(total_count == 37, "total immutable action count must be 37")
     for profile_name, profile in profiles.items():
         for repository, entry in profile["actions"].items():
             rows = uses_by_profile_action[(profile_name, repository)]
@@ -548,14 +561,30 @@ def _validate_permissions(path: str, workflow: str) -> None:
             writes.append((number, len(match.group(1)), match.group(2)))
 
     if path == ".github/workflows/ci.yml":
-        _require(not writes, "CI must not contain job-level write permission")
-        for job_name in ("windows-smoke", "release-bundle-handoff"):
-            job = _mapping_block(lines, job_name, 2)
-            _require(
-                _direct_mapping_pairs(_mapping_block(job, "permissions", 4), 6)
-                == [("contents", "read")],
-                f"CI {job_name} job must have contents read only",
-            )
+        producer = _mapping_block(lines, "windows-smoke", 2)
+        _require(
+            _direct_mapping_pairs(_mapping_block(producer, "permissions", 4), 6)
+            == [("contents", "read")],
+            "CI windows-smoke job must have contents read only",
+        )
+        consumer = _mapping_block(lines, "release-bundle-handoff", 2)
+        _require(
+            _direct_mapping_pairs(_mapping_block(consumer, "permissions", 4), 6)
+            == [
+                ("contents", "read"),
+                ("id-token", "write"),
+                ("attestations", "write"),
+            ],
+            "CI handoff job attestation permissions differ",
+        )
+        _require(
+            [(indent, permission) for _, indent, permission in writes]
+            == [
+                (6, "id-token"),
+                (6, "attestations"),
+            ],
+            "CI must contain only job-scoped id-token and attestations writes",
+        )
         return
 
     build_job = _mapping_block(lines, "build", 2)
@@ -618,9 +647,43 @@ def _validate_action_placement(path: str, workflow: str) -> None:
         download = _action_steps(consumer_steps, "actions/download-artifact")[0]
         extractor = _named_step(consumer_steps, RAW_EXTRACTION_STEP)
         verifier = _named_step(consumer_steps, "Verify synthetic release bundle handoff")
+        fork_skip = _named_step(
+            consumer_steps,
+            "Report fork pull request attestation skip",
+        )
+        subject_validation = _named_step(
+            consumer_steps,
+            "Validate synthetic attestation subjects",
+        )
+        provenance = _named_step(consumer_steps, "Attest synthetic provenance")
+        sbom_attestation = _named_step(consumer_steps, "Attest synthetic SBOM")
+        online_verification = _named_step(
+            consumer_steps,
+            "Verify synthetic attestations online",
+        )
+        offline_verification = _named_step(
+            consumer_steps,
+            "Verify synthetic attestation bundles offline",
+        )
         _require(
-            consumer_steps == [output_validation, download, extractor, verifier],
+            consumer_steps
+            == [
+                output_validation,
+                download,
+                extractor,
+                verifier,
+                fork_skip,
+                subject_validation,
+                provenance,
+                sbom_attestation,
+                online_verification,
+                offline_verification,
+            ],
             "CI consumer raw artifact handoff step order is invalid",
+        )
+        _require(
+            len(_action_steps(consumer_steps, "actions/attest")) == 2,
+            "CI consumer actions/attest count is invalid",
         )
         download_env = _mapping_block(download, "env", 8)
         _require(
@@ -706,8 +769,6 @@ def _validate_action_placement(path: str, workflow: str) -> None:
             "wget ",
             "gh api",
             "secrets.",
-            "GH_TOKEN",
-            "github.token",
             "persist-credentials",
             "NODE_NO_WARNINGS",
             "--no-deprecation",

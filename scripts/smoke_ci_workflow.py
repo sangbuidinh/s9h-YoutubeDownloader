@@ -51,6 +51,11 @@ EXPECTED_CURRENT_ACTIONS = {
         "commit": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
         "action_yml_blob": "8b8c65029ccad20750a29fecb438eca5a607fc57",
     },
+    "actions/attest": {
+        "release_tag": "v4.2.0",
+        "commit": "f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6",
+        "action_yml_blob": "f3d593f3020cf14b65d2789e3788d015354475e9",
+    },
 }
 
 
@@ -124,7 +129,11 @@ def _load_current_ci_policy(root: Path) -> dict:
             f"{repository} must be recorded as an official repository",
         )
         _require(entry["lifecycle"] == "current", f"{repository} lifecycle must be current")
-        _require(entry["occurrence_count"] == 1, f"{repository} occurrence count must be one")
+        expected_occurrence_count = 2 if repository == "actions/attest" else 1
+        _require(
+            entry["occurrence_count"] == expected_occurrence_count,
+            f"{repository} occurrence count differs",
+        )
         _require(
             IMMUTABLE_ACTION_REF.fullmatch(entry["commit"]) is not None,
             f"{repository} selected commit must be a full lowercase SHA",
@@ -210,7 +219,15 @@ def validate_workflow(workflow: str, current_policy: dict | None = None) -> None
         permissions == [("contents", "read")],
         "top-level permissions must contain only contents: read",
     )
-    for permission in ("contents", "actions", "packages", "id-token", "pull-requests"):
+    for permission in (
+        "contents",
+        "actions",
+        "packages",
+        "pull-requests",
+        "artifact-metadata",
+        "deployments",
+        "security-events",
+    ):
         _require(
             re.search(rf"(?m)^\s*{re.escape(permission)}\s*:\s*write\s*$", code)
             is None,
@@ -489,23 +506,58 @@ def validate_workflow(workflow: str, current_policy: dict | None = None) -> None
     )
     _require(
         _direct_mapping_pairs(_mapping_block(handoff, "permissions", 4), 6)
-        == [("contents", "read")],
-        "handoff permissions must contain only contents: read",
+        == [
+            ("contents", "read"),
+            ("id-token", "write"),
+            ("attestations", "write"),
+        ],
+        "handoff permissions must contain only the attestation job permission set",
     )
     _require(
         _scalar_value(handoff, "runs-on", 4) == "windows-2022",
         "handoff runner must be windows-2022",
     )
     handoff_steps = _step_blocks(handoff)
-    _require(len(handoff_steps) == 4, "handoff job must contain exactly four steps")
+    _require(len(handoff_steps) == 10, "handoff job must contain exactly ten steps")
     output_check = _named_step(handoff_steps, "Validate immutable synthetic bundle outputs")
     download = _action_step(handoff_steps, "actions/download-artifact")
     extractor = _named_step(handoff_steps, RAW_EXTRACTION_STEP)
     verifier = _named_step(handoff_steps, "Verify synthetic release bundle handoff")
+    fork_skip = _named_step(handoff_steps, "Report fork pull request attestation skip")
+    subject_validation = _named_step(handoff_steps, "Validate synthetic attestation subjects")
+    provenance = _named_step(handoff_steps, "Attest synthetic provenance")
+    sbom_attestation = _named_step(handoff_steps, "Attest synthetic SBOM")
+    online_verification = _named_step(handoff_steps, "Verify synthetic attestations online")
+    offline_verification = _named_step(
+        handoff_steps,
+        "Verify synthetic attestation bundles offline",
+    )
     _require(
-        handoff_steps == [output_check, download, extractor, verifier],
+        handoff_steps
+        == [
+            output_check,
+            download,
+            extractor,
+            verifier,
+            fork_skip,
+            subject_validation,
+            provenance,
+            sbom_attestation,
+            online_verification,
+            offline_verification,
+        ],
         "handoff job step order is invalid",
     )
+    attest_steps = [
+        step
+        for step in handoff_steps
+        if re.search(r"\buses:\s*actions/attest@", "\n".join(step))
+    ]
+    _require(len(attest_steps) == 2, "actions/attest must appear exactly twice")
+    for attest_step in attest_steps:
+        attest_ref = _action_ref(attest_step, "actions/attest")
+        _require_safe_action_ref("actions/attest", attest_ref)
+        _require_current_action(attest_step, "actions/attest", current_policy)
     output_text = "\n".join(output_check)
     for required in (
         "${{ needs.windows-smoke.outputs.artifact-id }}",
@@ -705,20 +757,33 @@ def validate_workflow(workflow: str, current_policy: dict | None = None) -> None
         "release publishing action must be absent",
     )
     _forbid(code, r"(?im)^\s*gh\s+release\b", "gh release command must be absent")
-    _forbid(
-        code,
-        r"(?i)(?:secrets\s*\.|GH_TOKEN|github\.token)",
-        "secret references must be absent",
+    _forbid(code, r"(?i)secrets\s*\.", "external secret references must be absent")
+    _require(
+        code.count("          GH_TOKEN: ${{ github.token }}") == 1,
+        "the built-in GitHub token must be scoped to one online verification step",
     )
     _forbid(
         code,
         r"(?im)^\s*git\s+(?:push|fetch|pull|clone|submodule)\b",
         "CI must not require persisted Git credentials",
     )
+    attestation_condition = (
+        "${{ github.event_name == 'push' || "
+        "(github.event_name == 'pull_request' && "
+        "github.event.pull_request.head.repo.full_name == github.repository) }}"
+    )
+    fork_skip_condition = (
+        "${{ github.event_name == 'pull_request' && "
+        "github.event.pull_request.head.repo.full_name != github.repository }}"
+    )
+    condition_scrubbed = code.replace(attestation_condition, "").replace(
+        fork_skip_condition,
+        "",
+    )
     _forbid(
-        code,
+        condition_scrubbed,
         r"\$\{\{\s*github\.event\.",
-        "untrusted event interpolation must be absent",
+        "untrusted event interpolation must be absent outside approved conditions",
     )
     _verify_no_sensitive_literals(code)
 
@@ -1315,7 +1380,7 @@ def _test_negative_mutations(workflow: str) -> None:
         (
             "missing secure extraction step",
             _remove_named_step(workflow, RAW_EXTRACTION_STEP),
-            "exactly four steps",
+            "exactly ten steps",
         ),
         (
             "secure extraction reordered",
