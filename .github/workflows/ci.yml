@@ -408,6 +408,8 @@ jobs:
     needs: windows-smoke
     permissions:
       contents: read
+      id-token: write
+      attestations: write
     runs-on: windows-2022
 
     steps:
@@ -1156,3 +1158,275 @@ jobs:
               }
           }
           Write-Host "Synthetic release bundle v3 handoff verified"
+
+      - name: Report non-upstream attestation skip
+        if: ${{ github.repository != 'sangbuidinh/s9h-YoutubeDownloader' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) }}
+        shell: pwsh
+        run: |
+          Write-Host "OIDC, actions/attest, and attestation verification are skipped because this is not an authorized upstream context."
+
+      - name: Validate synthetic attestation subjects
+        if: ${{ github.repository == 'sangbuidinh/s9h-YoutubeDownloader' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          function Assert-BelowRoot(
+              [string]$Root,
+              [string]$Candidate,
+              [string]$Label
+          ) {
+              $separator = [IO.Path]::DirectorySeparatorChar
+              $prefix = $Root.TrimEnd($separator) + $separator
+              if (-not $Candidate.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                  throw "$Label escaped the verified release bundle"
+              }
+          }
+
+          $bundle = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE "release-bundle"))
+          $assets = [IO.Path]::GetFullPath((Join-Path $bundle "assets"))
+          Assert-BelowRoot $bundle $assets "Synthetic asset root"
+
+          $ExpectedSubjects = @(
+              "Youtube.Downloaderbs.exe",
+              "Youtube-Downloaderbs-v0.0.0-ci.zip",
+              "Youtube-Downloaderbs-v0.0.0-ci-legal.zip",
+              "Youtube-Downloaderbs-v0.0.0-ci.spdx.json",
+              "SHA256SUMS.txt",
+              "RELEASE_MANIFEST.json"
+          )
+          $subjectPaths = [ordered]@{
+              "Youtube.Downloaderbs.exe" = Join-Path $assets "Youtube.Downloaderbs.exe"
+              "Youtube-Downloaderbs-v0.0.0-ci.zip" = Join-Path $assets "Youtube-Downloaderbs-v0.0.0-ci.zip"
+              "Youtube-Downloaderbs-v0.0.0-ci-legal.zip" = Join-Path $assets "Youtube-Downloaderbs-v0.0.0-ci-legal.zip"
+              "Youtube-Downloaderbs-v0.0.0-ci.spdx.json" = Join-Path $assets "Youtube-Downloaderbs-v0.0.0-ci.spdx.json"
+              "SHA256SUMS.txt" = Join-Path $assets "SHA256SUMS.txt"
+              "RELEASE_MANIFEST.json" = Join-Path $bundle "RELEASE_MANIFEST.json"
+          }
+          if (@(Compare-Object @($subjectPaths.Keys) $ExpectedSubjects -SyncWindow 0).Count -ne 0) {
+              throw "Synthetic provenance subject set is not exact"
+          }
+
+          $attestationRoot = [IO.Path]::GetFullPath(
+              (Join-Path $env:RUNNER_TEMP "s9h-ci-attestation-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT")
+          )
+          $runnerTemp = [IO.Path]::GetFullPath($env:RUNNER_TEMP)
+          Assert-BelowRoot $runnerTemp $attestationRoot "Synthetic attestation root"
+          if ([IO.Directory]::Exists($attestationRoot)) {
+              [IO.Directory]::Delete($attestationRoot, $true)
+          }
+          [IO.Directory]::CreateDirectory($attestationRoot) | Out-Null
+          $checksumPath = Join-Path $attestationRoot "provenance-subjects.sha256"
+
+          $rows = [Collections.Generic.List[string]]::new()
+          foreach ($name in $ExpectedSubjects) {
+              if ($name -cne [IO.Path]::GetFileName($name) -or $name.Contains("/") -or $name.Contains("\")) {
+                  throw "Synthetic provenance subject name is unsafe"
+              }
+              $path = [IO.Path]::GetFullPath([string]$subjectPaths[$name])
+              Assert-BelowRoot $bundle $path "Synthetic provenance subject"
+              $item = Get-Item -LiteralPath $path
+              if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                  throw "Synthetic provenance subject is not a regular file"
+              }
+              $digest = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($digest -cnotmatch "^[0-9a-f]{64}$") {
+                  throw "Synthetic provenance subject digest is malformed"
+              }
+              $rows.Add("$digest  $name")
+          }
+          [IO.File]::WriteAllText(
+              $checksumPath,
+              (($rows -join "`n") + "`n"),
+              [Text.UTF8Encoding]::new($false)
+          )
+
+          $checksumBytes = [IO.File]::ReadAllBytes($checksumPath)
+          $checksumText = [Text.UTF8Encoding]::new($false, $true).GetString($checksumBytes)
+          if ($checksumText.Contains("`r") -or -not $checksumText.EndsWith("`n") -or $checksumText.EndsWith("`n`n")) {
+              throw "Synthetic provenance checksum file encoding is invalid"
+          }
+          $records = @($checksumText.TrimEnd("`n").Split("`n"))
+          if ($records.Count -ne $ExpectedSubjects.Count) {
+              throw "Synthetic provenance checksum record count is invalid"
+          }
+          $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+          foreach ($record in $records) {
+              if ($record -cnotmatch "^([0-9a-f]{64})  ([^/\\]+)$") {
+                  throw "Synthetic provenance checksum record is malformed"
+              }
+              $recordDigest = $Matches[1]
+              $recordName = $Matches[2]
+              if (-not $seen.Add($recordName) -or $recordName -cnotin $ExpectedSubjects) {
+                  throw "Synthetic provenance checksum subject is duplicate or unexpected"
+              }
+              $actualDigest = (
+                  Get-FileHash -LiteralPath ([string]$subjectPaths[$recordName]) -Algorithm SHA256
+              ).Hash.ToLowerInvariant()
+              if ($recordDigest -cne $actualDigest) {
+                  throw "Synthetic provenance checksum record describes stale bytes"
+              }
+          }
+          if (@(Compare-Object @($seen) $ExpectedSubjects).Count -ne 0) {
+              throw "Synthetic provenance checksum subjects are incomplete"
+          }
+          Write-Host "Synthetic attestation subject contract verified"
+
+      - name: Attest synthetic provenance
+        id: attest-provenance
+        if: ${{ github.repository == 'sangbuidinh/s9h-YoutubeDownloader' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-checksums: ${{ runner.temp }}/s9h-ci-attestation-${{ github.run_id }}-${{ github.run_attempt }}/provenance-subjects.sha256
+          create-storage-record: false
+          show-summary: false
+
+      - name: Attest synthetic SBOM
+        id: attest-sbom
+        if: ${{ github.repository == 'sangbuidinh/s9h-YoutubeDownloader' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ github.workspace }}/release-bundle/assets/Youtube-Downloaderbs-v0.0.0-ci.zip
+          sbom-path: ${{ github.workspace }}/release-bundle/assets/Youtube-Downloaderbs-v0.0.0-ci.spdx.json
+          create-storage-record: false
+          show-summary: false
+
+      - name: Verify synthetic attestations online
+        if: ${{ github.repository == 'sangbuidinh/s9h-YoutubeDownloader' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          $version = (& gh --version 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) {
+              throw "GitHub CLI version could not be read"
+          }
+          Write-Host "GitHub CLI used for synthetic attestation verification: $version"
+          $help = (& gh attestation verify --help 2>&1 | Out-String)
+          if ($LASTEXITCODE -ne 0 -or
+              $help -notmatch "--predicate-type" -or
+              $help -notmatch "--source-digest" -or
+              $help -notmatch "--signer-workflow" -or
+              $help -notmatch "--bundle" -or
+              $help -notmatch "--custom-trusted-root") {
+              throw "Preinstalled GitHub CLI lacks required attestation verification controls"
+          }
+
+          $repository = "sangbuidinh/s9h-YoutubeDownloader"
+          $signerWorkflow = "sangbuidinh/s9h-YoutubeDownloader/.github/workflows/ci.yml"
+          $bundle = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE "release-bundle"))
+          $provenanceSubjects = @(
+              (Join-Path $bundle "assets\Youtube.Downloaderbs.exe"),
+              (Join-Path $bundle "assets\Youtube-Downloaderbs-v0.0.0-ci.zip"),
+              (Join-Path $bundle "assets\Youtube-Downloaderbs-v0.0.0-ci-legal.zip"),
+              (Join-Path $bundle "assets\Youtube-Downloaderbs-v0.0.0-ci.spdx.json"),
+              (Join-Path $bundle "assets\SHA256SUMS.txt"),
+              (Join-Path $bundle "RELEASE_MANIFEST.json")
+          )
+          foreach ($subject in $provenanceSubjects) {
+              & gh attestation verify $subject `
+                  --repo $repository `
+                  --predicate-type "https://slsa.dev/provenance/v1" `
+                  --source-digest $env:GITHUB_SHA `
+                  --signer-workflow $signerWorkflow
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Online synthetic provenance verification failed"
+              }
+          }
+          $portable = Join-Path $bundle "assets\Youtube-Downloaderbs-v0.0.0-ci.zip"
+          & gh attestation verify $portable `
+              --repo $repository `
+              --predicate-type "https://spdx.dev/Document/v2.3" `
+              --source-digest $env:GITHUB_SHA `
+              --signer-workflow $signerWorkflow
+          if ($LASTEXITCODE -ne 0) {
+              throw "Online synthetic SBOM verification failed"
+          }
+          Write-Host "Online synthetic provenance and SBOM attestations verified"
+
+      - name: Verify synthetic attestation bundles offline
+        if: ${{ github.repository == 'sangbuidinh/s9h-YoutubeDownloader' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
+        shell: pwsh
+        env:
+          PROVENANCE_BUNDLE: ${{ steps.attest-provenance.outputs.bundle-path }}
+          SBOM_BUNDLE: ${{ steps.attest-sbom.outputs.bundle-path }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          foreach ($bundlePath in @($env:PROVENANCE_BUNDLE, $env:SBOM_BUNDLE)) {
+              if ([string]::IsNullOrWhiteSpace($bundlePath) -or -not [IO.File]::Exists($bundlePath)) {
+                  throw "Generated synthetic attestation bundle is missing"
+              }
+          }
+          $attestationRoot = [IO.Path]::GetFullPath(
+              (Join-Path $env:RUNNER_TEMP "s9h-ci-attestation-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT")
+          )
+          $trustedRootPath = Join-Path $attestationRoot "trusted_root.jsonl"
+          $trustedRoot = (& gh attestation trusted-root 2>&1 | Out-String)
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($trustedRoot)) {
+              throw "Official attestation trusted root could not be obtained"
+          }
+          [IO.File]::WriteAllText(
+              $trustedRootPath,
+              $trustedRoot,
+              [Text.UTF8Encoding]::new($false)
+          )
+
+          $savedEnvironment = @{}
+          foreach ($name in @("GH_TOKEN", "GITHUB_TOKEN", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")) {
+              $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+          }
+          try {
+              [Environment]::SetEnvironmentVariable("GH_TOKEN", $null)
+              [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null)
+              [Environment]::SetEnvironmentVariable("HTTP_PROXY", "http://127.0.0.1:9")
+              [Environment]::SetEnvironmentVariable("HTTPS_PROXY", "http://127.0.0.1:9")
+              [Environment]::SetEnvironmentVariable("ALL_PROXY", "http://127.0.0.1:9")
+              [Environment]::SetEnvironmentVariable("NO_PROXY", "")
+
+              $repository = "sangbuidinh/s9h-YoutubeDownloader"
+              $signerWorkflow = "sangbuidinh/s9h-YoutubeDownloader/.github/workflows/ci.yml"
+              $bundle = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE "release-bundle"))
+              $provenanceSubjects = @(
+                  (Join-Path $bundle "assets\Youtube.Downloaderbs.exe"),
+                  (Join-Path $bundle "assets\Youtube-Downloaderbs-v0.0.0-ci.zip"),
+                  (Join-Path $bundle "assets\Youtube-Downloaderbs-v0.0.0-ci-legal.zip"),
+                  (Join-Path $bundle "assets\Youtube-Downloaderbs-v0.0.0-ci.spdx.json"),
+                  (Join-Path $bundle "assets\SHA256SUMS.txt"),
+                  (Join-Path $bundle "RELEASE_MANIFEST.json")
+              )
+              foreach ($subject in $provenanceSubjects) {
+                  & gh attestation verify $subject `
+                      --repo $repository `
+                      --bundle $env:PROVENANCE_BUNDLE `
+                      --custom-trusted-root $trustedRootPath `
+                      --predicate-type "https://slsa.dev/provenance/v1" `
+                      --source-digest $env:GITHUB_SHA `
+                      --signer-workflow $signerWorkflow
+                  if ($LASTEXITCODE -ne 0) {
+                      throw "Offline synthetic provenance verification failed"
+                  }
+              }
+              $portable = Join-Path $bundle "assets\Youtube-Downloaderbs-v0.0.0-ci.zip"
+              & gh attestation verify $portable `
+                  --repo $repository `
+                  --bundle $env:SBOM_BUNDLE `
+                  --custom-trusted-root $trustedRootPath `
+                  --predicate-type "https://spdx.dev/Document/v2.3" `
+                  --source-digest $env:GITHUB_SHA `
+                  --signer-workflow $signerWorkflow
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Offline synthetic SBOM verification failed"
+              }
+          }
+          finally {
+              foreach ($name in $savedEnvironment.Keys) {
+                  [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name])
+              }
+          }
+          Write-Host "Offline synthetic provenance and SBOM attestation bundles verified"

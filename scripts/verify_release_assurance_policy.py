@@ -49,19 +49,20 @@ CLAIM_KEYS = {
 }
 PROVENANCE_KEYS = {
     "action_repository",
-    "attestation_generated",
     "blockers",
     "candidate_action_commit",
     "candidate_major_release",
     "candidate_release",
     "final_bytes_only",
-    "implementation_status",
     "provider",
+    "production_attestation_generated",
+    "production_implementation_status",
+    "production_readiness",
     "public_verification_repository",
-    "readiness",
     "sigstore_claim_made",
     "source_kit_subjects_mandatory",
     "subjects",
+    "synthetic_ci_integration",
     "synthetic_ci_attestations_are_release_attestations",
     "verification",
     "workflow_permission_review",
@@ -160,6 +161,14 @@ PRIVATE_KEY_PEM_HEADER_RE = re.compile(
     re.IGNORECASE,
 )
 ATTEST_ACTION_COMMIT = "f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6"
+SYNTHETIC_CI_INTEGRATION = {
+    "ci_integration_validated_remotely": True,
+    "immutable_action_pin_integrated": True,
+    "integration_implemented": True,
+    "job_level_permission_design_implemented": True,
+    "offline_bundle_verification_implemented": True,
+    "online_verification_implemented": True,
+}
 
 
 class PolicyError(ValueError):
@@ -463,9 +472,21 @@ def _validate_sbom(value: Any) -> None:
 
 def _validate_provenance(value: Any) -> None:
     provenance = _require_object(value, PROVENANCE_KEYS, "provenance")
-    _require_false(provenance["implementation_status"], "provenance-readiness", "provenance implementation status")
-    _require_false(provenance["readiness"], "provenance-readiness", "provenance readiness")
-    _require_false(provenance["attestation_generated"], "provenance-readiness", "attestation generated")
+    _require_false(
+        provenance["production_implementation_status"],
+        "provenance-readiness",
+        "production provenance implementation status",
+    )
+    _require_false(
+        provenance["production_readiness"],
+        "provenance-readiness",
+        "production provenance readiness",
+    )
+    _require_false(
+        provenance["production_attestation_generated"],
+        "provenance-readiness",
+        "production attestation generated",
+    )
     _require_false(provenance["sigstore_claim_made"], "unsupported-claim", "Sigstore claim made")
     if provenance["provider"] != "github-artifact-attestations" or provenance["action_repository"] != "actions/attest":
         _fail("provenance-action", "provenance provider or action changed")
@@ -492,44 +513,78 @@ def _validate_provenance(value: Any) -> None:
     if _require_string_list(provenance["subjects"], "provenance subjects") != PROVENANCE_SUBJECTS:
         _fail("provenance-subjects", "provenance subjects changed")
 
+    synthetic = _require_object(
+        provenance["synthetic_ci_integration"],
+        set(SYNTHETIC_CI_INTEGRATION),
+        "synthetic CI integration",
+    )
+    for key, expected in SYNTHETIC_CI_INTEGRATION.items():
+        if synthetic[key] is not expected:
+            _fail("synthetic-integration", f"synthetic CI integration field {key} is invalid")
+
     verification = _require_object(
         provenance["verification"],
-        {"documented_and_tested", "final_subject_names_required", "sha256_subject_digests_required"},
+        {
+            "final_subject_names_required",
+            "production_verification_completed",
+            "sha256_subject_digests_required",
+        },
         "provenance verification",
     )
-    _require_false(verification["documented_and_tested"], "provenance-verification", "attestation verification tested")
+    _require_false(
+        verification["production_verification_completed"],
+        "provenance-verification",
+        "production attestation verification completed",
+    )
     _require_true(verification["final_subject_names_required"], "provenance-verification", "final subject names required")
     _require_true(verification["sha256_subject_digests_required"], "provenance-verification", "SHA256 subject digests required")
 
     permissions = _require_object(
         provenance["workflow_permission_review"],
-        {"integrated", "packages_write_required", "required_job_permissions", "status"},
+        {
+            "artifact_metadata_write_required",
+            "integrated_for_production",
+            "integrated_for_synthetic_ci",
+            "packages_write_required",
+            "required_job_permissions",
+            "status",
+        },
         "workflow permission review",
     )
-    _require_false(permissions["integrated"], "workflow-permissions", "workflow permissions integrated")
+    _require_false(
+        permissions["artifact_metadata_write_required"],
+        "workflow-permissions",
+        "artifact metadata write required",
+    )
+    _require_false(
+        permissions["integrated_for_production"],
+        "workflow-permissions",
+        "production workflow permissions integrated",
+    )
+    _require_true(
+        permissions["integrated_for_synthetic_ci"],
+        "workflow-permissions",
+        "synthetic CI workflow permissions integrated",
+    )
     _require_false(permissions["packages_write_required"], "workflow-permissions", "packages write required")
-    if permissions["status"] != "planned":
+    if permissions["status"] != "synthetic-ci-integrated":
         _fail("workflow-permissions", "workflow permission review status changed")
     if _require_string_list(permissions["required_job_permissions"], "required job permissions") != [
-        "artifact-metadata: write",
         "attestations: write",
         "contents: read",
         "id-token: write",
     ]:
-        _fail("workflow-permissions", "future least-privilege permission plan changed")
+        _fail("workflow-permissions", "synthetic CI least-privilege permission set changed")
     _require_blockers(
         provenance["blockers"],
         "provenance-blockers",
         "provenance blockers",
         {
-            "artifact metadata permission not integrated",
-            "immutable action pin not integrated",
-            "job-level OIDC permission not integrated",
-            "attestation permission not integrated",
-            "final subject strategy not implemented",
-            "final-byte sequencing not implemented",
-            "verification command and policy not tested",
-            "no production attestation exists",
+            "Authenticode is not implemented",
+            "no production final signed bytes exist",
+            "no production provenance attestation exists",
+            "no production SBOM attestation exists",
+            "production attestation verification has not occurred",
         },
     )
 
@@ -561,7 +616,7 @@ def _validate_release_integration(value: Any) -> None:
             "Authenticode signing and verification are not integrated",
             "production SBOM has not been generated or reconciled against final immutable application bytes",
             "final checksum and manifest synchronization is not integrated with assurance artifacts",
-            "provenance and SBOM attestation verification are not integrated",
+            "production provenance and SBOM attestation verification has not occurred",
         },
     )
 

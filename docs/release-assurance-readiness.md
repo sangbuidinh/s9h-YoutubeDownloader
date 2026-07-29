@@ -2,7 +2,7 @@
 
 ## Scope
 
-Phase 7A1 records a planning and verification baseline for Windows Authenticode, an SPDX software bill of materials (SBOM), and GitHub artifact attestations. It does not sign a file, select or provision a credential, generate a production SBOM, create an attestation, change workflow permissions, or authorize publishing.
+Phase 7C preserves the Windows Authenticode and production release-assurance plan while integrating synthetic provenance and SBOM attestations into current CI. It does not sign a file, select or provision a credential, generate a production attestation, modify a historical release workflow, or authorize publishing.
 
 The machine-readable owner is `legal/release-assurance-policy.json`. Its readiness fields and claims are fail-closed. Existing legal, source-availability, source-kit, release, and publishing gates remain independent and unchanged.
 
@@ -13,14 +13,14 @@ The machine-readable owner is `legal/release-assurance-policy.json`. Its readine
 - Product: `Youtube Downloaderbs`
 - Version: `1.3.1`
 - Planning target: a future signed first-party executable, deterministic SPDX 2.3 JSON SBOM, and final-byte GitHub attestations.
-- Implemented state: policy and offline verifier only.
-- Verified state: the Phase 7A1 policy contract can be checked without network access or filesystem writes.
+- Implemented state: deterministic synthetic SBOM and release-bundle controls plus local synthetic attestation workflow integration.
+- Verified state: policy, workflow, subject, permission, and verification-command contracts can be checked locally without invoking `actions/attest` or requesting OIDC.
 - Blocked state: Authenticode, production SBOM, provenance, and combined release assurance are not ready.
 - Future authorization: each implementation stage and any publishing action require separate approval.
 
 ## Non-Claims
 
-Phase 7A1 does not claim that the executable is signed, timestamped, or signature-verified. It does not claim that an SBOM exists or has passed schema and semantic validation. It does not claim that provenance or an SBOM has been attested.
+Phase 7C does not claim that a production executable is signed, timestamped, or signature-verified. It does not claim that a production SBOM or production provenance attestation exists. The synthetic CI integration passed same-repository remote CI, but that result is not production attestation evidence.
 
 An eventual attestation would link subject bytes to build identity and provenance evidence. It would not certify security, absence of vulnerabilities, legal compliance, complete source correspondence, reproducibility, or release readiness. Existing `legal_compliance_certified`, `source_availability_certified`, `source_assets_created`, `source_kits_ready`, `assembly_authorized`, `release_gate_reconsideration_allowed`, `release_ready`, and `publishing_allowed` states remain false.
 
@@ -113,29 +113,29 @@ Records require stable package and relationship ordering, package versions, SHA-
 | Pinned external scanner | Tool-dependent; frozen Python extraction must be proven | Often broad, but exact PE/DLL and nested package behavior must be tested | Version pinning helps, but output stability and offline schema support require evidence | Potentially broad detection; license conclusions may need correction and provenance | Adds a privileged build dependency and its own supply-chain/update burden |
 | Python or package-manager-only generation | Describes declared Python packages, not necessarily frozen runtime contents | Does not cover bundled vendor executables and DLLs adequately | Usually simple and stable, but validates only a partial inventory | Weak final-byte checksum and non-Python license coverage | Lowest setup burden but structurally insufficient for this product |
 
-Phase 7A2 should prototype deterministic project-owned inventory reconciliation and compare it with a pinned scanner on the same final package. No production generator is selected until PyInstaller extraction, runtime coverage, deterministic serialization, offline validation, and maintenance evidence are demonstrated.
+Phases 7A2 and 7B selected and integrated the deterministic project-owned SPDX generator for synthetic CI evidence. No production SBOM has been generated or reconciled against final PyInstaller, Python, runtime, portable-package, and release-artifact inventories.
 
 ## Provenance and Attestation Design
 
-The planned provider is GitHub artifact attestations using `actions/attest`. At evidence retrieval, the current candidate was release `v4.2.0`, major `v4`, resolved to immutable commit `f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6`.
+The selected provider is GitHub artifact attestations using `actions/attest`. Official-source revalidation for Phase 7C selected stable release `v4.2.0`, major `v4`, at immutable commit `f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6`.
 
-The exact `action.yml` at that commit accepts mutually exclusive subject path, digest, or checksum inputs, supports JSON SPDX or CycloneDX through `sbom-path`, supports custom predicates, defaults registry push to false, and runs on Node 24. The exact `README.md` at the same commit documents `artifact-metadata: write` for artifact storage-record creation and explains the OIDC and attestation permissions. The action file itself does not declare workflow permissions. GitHub's official implementation guidance supplies repository-context permission evidence, so permission design must be reviewed separately from action input design.
+The exact `action.yml` at that commit accepts mutually exclusive subject path, digest, or checksum inputs, supports JSON SPDX or CycloneDX through `sbom-path`, supports custom predicates, defaults registry push to false, and runs on Node 24. Its `create-storage-record` input defaults true but requires registry push. Current CI uses file artifacts, does not push to a registry, and explicitly sets `create-storage-record: false`, so `artifact-metadata: write` is not granted. Mutable release tags remain rejected as workflow identities.
 
 Future release subjects are the final standalone EXE, portable ZIP, legal ZIP, SPDX JSON, `SHA256SUMS.txt`, and `RELEASE_MANIFEST.json`. Source-kit archives are excluded from mandatory current subjects while source-kit assembly remains blocked. A later authorization may add them after final bytes exist.
 
-Public verification must identify `sangbuidinh/s9h-YoutubeDownloader`, verify the expected subject bytes, and distinguish production release attestations from synthetic CI evidence. GitHub CLI verification is required in both an online consumer path and a tested offline-bundle path before readiness can change.
+Current CI attests only the verified `v0.0.0-ci` bundle described in `docs/release-attestations.md`. Public verification identifies `sangbuidinh/s9h-YoutubeDownloader`, verifies exact subject bytes and signer workflow, and distinguishes native provenance from SPDX 2.3 SBOM attestations. Both online and generated-bundle offline commands passed same-repository remote CI. All production readiness remains false.
 
 ## Workflow Permission Boundary
 
-No workflow permission changes are made in Phase 7A1. A future isolated attestation job for file artifacts must review this job-level least-privilege plan:
+The current-CI `release-bundle-handoff` job uses this reviewed job-level permission set:
 
 - `contents: read` for repository context;
 - `id-token: write` for OIDC identity;
 - `attestations: write` for artifact attestation storage;
-- `artifact-metadata: write` for artifact metadata and storage-record behavior documented by the immutable candidate README;
-- no `packages: write` unless a separately authorized OCI registry subject requires it.
+- no `artifact-metadata: write` because storage-record creation and registry push are disabled;
+- no `contents: write`, `packages: write`, `actions: write`, `deployments: write`, or `security-events: write`.
 
-None of these permissions is integrated in Phase 7A1. Their exact least-privilege applicability must be revalidated during Phase 7C. Any future grants must be job-scoped, must not be granted globally, and must not be merged into the publishing job without separate review. The current build job has `contents: read`; the publish job has `contents: write`. The future design should isolate final-byte attestation from release publication and preserve the existing independent publish gate.
+The producer remains `contents: read` only, and there is no workflow-global write permission. Main pushes and same-repository pull requests run the attestation steps. Fork pull requests run ordinary validation and secure handoff verification, then explicitly skip attestation because write and OIDC permissions are unavailable. This synthetic permission integration does not authorize equivalent production workflow permissions.
 
 ## Final-Byte Ordering
 
@@ -169,7 +169,7 @@ No byte-changing operation may follow checksum, manifest, or attestation finaliz
 
 ## Verification Strategy
 
-Phase 7A1 verification is offline and policy-only. The verifier enforces file hygiene, strict canonical JSON, duplicate-key rejection, exact schemas, fixed identities, false readiness and claims, non-empty blockers, exact signing/SBOM/provenance boundaries, final-byte ordering, existing gate invariants, and rejection of secret, certificate, key, or local-profile material.
+Phase 7C local verification remains non-signing and non-attesting. The verifier enforces file hygiene, strict canonical JSON, duplicate-key rejection, exact schemas, fixed identities, separate synthetic and production states, false readiness and claims, non-empty blockers, exact signing/SBOM/provenance boundaries, final-byte ordering, existing gate invariants, and rejection of secret, certificate, key, or local-profile material.
 
 Later implementation must add independent evidence gates:
 
@@ -199,7 +199,7 @@ Later implementation must add independent evidence gates:
 
 - Phase 7A2: deterministic SBOM generator selection and prototype contract.
 - Phase 7B: production SBOM generation and release-bundle integration.
-- Phase 7C: GitHub provenance and SBOM attestation integration.
+- Phase 7C: synthetic GitHub provenance and SBOM attestation integration, followed by separately authorized remote CI validation.
 - Phase 7D: Authenticode provider/custody decision and signing implementation.
 - Phase 7E: end-to-end signed release-assurance rehearsal.
 
@@ -217,7 +217,7 @@ All records below were retrieved on `2026-07-17T03:10:40Z`. Findings are paraphr
 | [Artifact attestations](https://docs.github.com/en/actions/concepts/security/artifact-attestations) | GitHub; current docs at retrieval | Explains provenance/integrity linkage, Sigstore-backed attestations, and the requirement to verify attestations before security benefit is realized. | Normative service model |
 | [Using artifact attestations to establish provenance](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations) | GitHub; current docs at retrieval | Defines job permissions, subject inputs, GitHub CLI verification, and the SPDX 2.3 predicate type. | Normative implementation guidance |
 | [Verifying attestations offline](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/verify-attestations-offline) | GitHub; current docs at retrieval | Defines downloading bundles while online and verifying them later in a disconnected environment. | Normative verification guidance |
-| [`actions/attest` release `v4.2.0`](https://github.com/actions/attest/releases/tag/v4.2.0), [immutable `action.yml`](https://github.com/actions/attest/blob/f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6/action.yml), and [immutable `README.md`](https://github.com/actions/attest/blob/f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6/README.md) | GitHub; release published `2026-07-16`, commit `f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6` | Exact candidate action inputs, outputs, runtime, defaults, subject limits, and SBOM constraints came from `action.yml`; permission purpose and artifact storage-record behavior came from the README. The action file itself does not declare job permissions. | Normative candidate action contract |
+| [`actions/attest` release `v4.2.0`](https://github.com/actions/attest/releases/tag/v4.2.0), [immutable `action.yml`](https://github.com/actions/attest/blob/f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6/action.yml), and [immutable `README.md`](https://github.com/actions/attest/blob/f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6/README.md) | GitHub; release published `2026-07-16`, commit `f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6` | Exact selected action inputs, outputs, runtime, defaults, subject limits, and SBOM constraints came from `action.yml`; permission purpose and artifact storage-record behavior came from the README. The action file itself does not declare job permissions. | Normative selected action contract |
 | [SPDX Specification 2.3.0](https://spdx.github.io/spdx-spec/v2.3/) and [conformance](https://spdx.github.io/spdx-spec/v2.3/conformance/) | SPDX Project / Linux Foundation; version 2.3.0 | Defines SPDX 2.3 and supported machine-readable JSON serialization with schema validation. | Normative format specification |
 | [SPDX document composition](https://spdx.github.io/spdx-spec/v2.3/composition-of-an-SPDX-document/) and [package information](https://spdx.github.io/spdx-spec/v2.3/package-information/) | SPDX Project / Linux Foundation; version 2.3.0 | Defines creation information, packages, files, relationships, supplier/origin, download location, checksums, and license fields including `NOASSERTION`. | Normative data-model specification |
 | [SPDX relationships](https://spdx.github.io/spdx-spec/v2.3/relationships-between-SPDX-elements/) | SPDX Project / Linux Foundation; version 2.3.0 | Defines package/file/document relationships and unknown relationship handling. | Normative data-model specification |
@@ -226,6 +226,6 @@ The exact action commit is implementation-specific evidence. Both `action.yml` a
 
 ## Current Decision
 
-The readiness baseline is complete only as a reviewed policy design. Authenticode implementation and readiness are false. SBOM implementation, generator selection, generation, validation, and readiness are false. Provenance implementation, permission integration, attestation generation, verification, and readiness are false. Combined release-assurance readiness and every assurance claim are false.
+The synthetic CI integration, immutable action pin, job-level permission design, and online/offline verification commands passed same-repository remote CI. Authenticode implementation and readiness are false. No production final signed bytes, provenance attestation, SBOM attestation, or production attestation verification exists. Combined release-assurance readiness and every assurance claim remain false.
 
-The next permitted work is independent review of this five-file checkpoint. No signing, credential provisioning, SBOM generation, attestation, workflow integration, push, release, or publishing action is authorized by this document.
+The next permitted work after Phase 7C-R2 is a separately authorized exact-head merge and post-merge main validation. No production signing, credential provisioning, production attestation, release, or publishing action is authorized by this document.

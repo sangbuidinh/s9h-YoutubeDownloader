@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "resolved_at_utc": "2026-07-23T23:48:24.2449191Z",
+  "resolved_at_utc": "2026-07-28T23:07:27.9373762Z",
   "profiles": {
     "current_ci": {
       "lifecycle": "current",
@@ -49,6 +49,17 @@
           "action_yml_blob": "8b8c65029ccad20750a29fecb438eca5a607fc57",
           "lifecycle": "current",
           "occurrence_count": 1
+        },
+        "actions/attest": {
+          "repository": "actions/attest",
+          "release_tag": "v4.2.0",
+          "workflow_comment": "v4.2.0",
+          "commit": "f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6",
+          "declared_runtime": "node24",
+          "official_repository": true,
+          "action_yml_blob": "f3d593f3020cf14b65d2789e3788d015354475e9",
+          "lifecycle": "current",
+          "occurrence_count": 2
         }
       }
     },
@@ -126,7 +137,8 @@
       "actions/checkout": 1,
       "actions/setup-python": 1,
       "actions/upload-artifact": 1,
-      "actions/download-artifact": 1
+      "actions/download-artifact": 1,
+      "actions/attest": 2
     },
     ".github/workflows/prerelease-v1.2.7-rc.1.yml": {
       "actions/checkout": 2,
