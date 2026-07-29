@@ -3,9 +3,18 @@
   "authenticode": {
     "blockers": [
       "CI signing identity not provisioned",
+      "IV versus OV operator decision",
       "RFC3161 timestamp authority not approved",
+      "approved timestamp endpoint",
+      "certificate issuance",
       "code-signing certificate provider not selected",
+      "immutable CKA package identity",
       "private-key custody model not approved",
+      "production final bytes",
+      "production signature and timestamp verification",
+      "protected credential and environment configuration",
+      "provider account and identity validation",
+      "remote synthetic signing validation",
       "signed-artifact checksum sequencing not implemented",
       "signing and verification workflow not implemented"
     ],

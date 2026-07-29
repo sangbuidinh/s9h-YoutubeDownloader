@@ -1,0 +1,153 @@
+{
+  "assessment_baseline": "45ecd30aaa95661778956b6724aaccd98bfe66c1",
+  "blockers": [
+    "IV versus OV operator decision",
+    "approved timestamp endpoint",
+    "certificate issuance",
+    "immutable CKA package identity",
+    "production final bytes",
+    "production signature and timestamp verification",
+    "protected credential and environment configuration",
+    "provider account and identity validation",
+    "remote synthetic signing validation"
+  ],
+  "certificate": {
+    "expected_publisher": null,
+    "provisioned": false,
+    "validation_class": "IV_OR_OV_OPERATOR_DECISION_PENDING",
+    "validation_class_selected": false
+  },
+  "custody": {
+    "model": "provider-managed cloud HSM",
+    "non_exportable_provider_key_required": true,
+    "private_key_export_allowed": false,
+    "repository_pfx_allowed": false,
+    "repository_private_key_allowed": false
+  },
+  "official_evidence": {
+    "authentication": {
+      "automated_mode": "Provider account authentication, OAuth TOTP secret and protected master-key file; official guidance limits automated mode to OV or EV certificates",
+      "manual_mode": "Provider account authentication plus per-signing OTP",
+      "repository_credential_storage_authorized": false
+    },
+    "certificate_discovery": {
+      "provider_behavior": "CKA loads enrolled certificates into the Windows CurrentUser Personal certificate store and identifies them by common name and serial number",
+      "repository_selection": "explicit certificate thumbprint required after provisioning",
+      "selection_on_multiple_matches": "fail closed"
+    },
+    "cka": {
+      "architecture_evidence": "Windows supported; exact architecture of the current installer is not stated by the official current-release page",
+      "cka_package_integrated": false,
+      "current_release_build": "20260062",
+      "current_release_label": "SSL-COM-eSigner-CKA_1-1-2_build_20260062",
+      "current_release_version": "1.1.2",
+      "download_page": "https://www.ssl.com/downloads/",
+      "downloadable_windows_package": "SSL.COM eSigner CKA_1.1.2_build_202600624.exe",
+      "immutable_digest": null,
+      "immutable_package_identity_established": false,
+      "install_command": "eSigner_CKA_Installer.exe /CURRENTUSER /VERYSILENT /SUPPRESSMSGBOXES /DIR=<INSTALL_DIR>",
+      "install_command_documented": true,
+      "removal_command": null,
+      "removal_command_documented": false
+    },
+    "evidence_retrieved_at_utc": "2026-07-29T03:32:00Z",
+    "integration": {
+      "interface": "Windows CNG",
+      "key_storage_provider": "KSP",
+      "supported_tools": [
+        "certutil.exe",
+        "signtool.exe"
+      ]
+    },
+    "sources": [
+      "https://www.ssl.com/downloads/",
+      "https://www.ssl.com/how-to/automate-ev-code-signing-with-signtool-or-certutil-esigner/",
+      "https://www.ssl.com/how-to/getting-started-with-your-code-signing-certificate-installation-configuration-and-your-first-signing-operation/",
+      "https://www.ssl.com/how-to/how-to-install-ssl-com-esigner-cloud-key-adapter-cka/",
+      "https://www.ssl.com/how-to/how-to-integrate-esigner-cka-with-ci-cd-tools-for-automated-code-signing/",
+      "https://www.ssl.com/products/software-integrity/signing-service/"
+    ]
+  },
+  "policy_id": "s9h-authenticode-provider-v1",
+  "provider": {
+    "account_provisioned": false,
+    "alternatives": [
+      {
+        "id": "microsoft-artifact-signing-public-trust",
+        "reason": "Current geographic eligibility is not a safe default for a Vietnam-based operator",
+        "selected": false
+      },
+      {
+        "id": "signpath-foundation",
+        "reason": "The repository project license is not selected, so open-source-program eligibility is not assumed",
+        "selected": false
+      },
+      {
+        "id": "exportable-pfx-in-repository-secrets",
+        "reason": "Key extraction and runner compromise create a materially weaker custody boundary",
+        "selected": false
+      }
+    ],
+    "id": "ssl-com-esigner",
+    "private_key_export": "forbidden",
+    "procurement_authorized": false,
+    "production_signing_authorized": false,
+    "service": "SSL.com eSigner"
+  },
+  "repository_constraints": {
+    "project_license_status": "not-selected",
+    "project_license_status_change_authorized": false
+  },
+  "scaffold": {
+    "plan_only_supported": true,
+    "signing_scaffold_implemented": true,
+    "verification_scaffold_implemented": true
+  },
+  "schema_version": 1,
+  "signing_contract": {
+    "certificate_identifier_logging": "forbidden",
+    "file_digest": "SHA256",
+    "first_party_targets": [
+      "Youtube.Downloaderbs.exe"
+    ],
+    "sequence": [
+      "validate unsigned first-party EXE structure",
+      "sign only the standalone first-party EXE",
+      "obtain an RFC 3161 timestamp",
+      "verify Authenticode under /pa",
+      "verify timestamp presence and validity",
+      "verify expected publisher identity",
+      "assemble the portable package from the byte-identical verified signed EXE",
+      "calculate checksums and downstream assurance artifacts"
+    ],
+    "third_party_targets_rejected": [
+      "yt-dlp.exe",
+      "ffmpeg.exe",
+      "ffprobe.exe",
+      "aria2c.exe",
+      "deno.exe",
+      "every other vendor-supplied executable or DLL"
+    ],
+    "timestamp_digest": "SHA256",
+    "timestamp_protocol": "RFC3161",
+    "unsigned_fallback_representation": "forbidden",
+    "verification_policy": "Default Authenticode",
+    "verification_switch": "/pa"
+  },
+  "state": {
+    "certificate_provisioned": false,
+    "certificate_validation_class_selected": false,
+    "credential_source_configured": false,
+    "custody_model_selected": true,
+    "production_signing_completed": false,
+    "provider_selected": true,
+    "remote_signing_validated": false,
+    "timestamp_authority_approved": false
+  },
+  "timestamp": {
+    "authority_approved": false,
+    "candidate_url": "http://ts.ssl.com",
+    "digest": "SHA256",
+    "protocol": "RFC3161"
+  }
+}

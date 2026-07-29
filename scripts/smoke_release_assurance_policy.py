@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
+from verify_authenticode_policy import verify_authenticode_policy
 from verify_release_assurance_policy import POLICY_PATH, PolicyError, verify_policy_file
 
 
@@ -137,6 +138,8 @@ def main() -> int:
     root = Path(__file__).resolve().parent.parent
     repository_policy, repository_raw = _load_repository_policy(root)
 
+    verify_authenticode_policy(root)
+    print("PASS positive: Phase 7D Authenticode extension")
     _run_positive("repository policy", root)
     with tempfile.TemporaryDirectory(prefix="s9h-release-assurance-positive-") as temporary:
         copied_root = Path(temporary)
@@ -209,7 +212,7 @@ def main() -> int:
     for name, category, options in cases:
         _run_negative(name, category, repository_policy, repository_raw, **options)
 
-    print(f"Release assurance policy smoke passed: 2 positive, {len(cases)} negative")
+    print(f"Release assurance policy smoke passed: 3 positive, {len(cases)} negative")
     return 0
 
 

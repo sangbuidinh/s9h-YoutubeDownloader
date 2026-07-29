@@ -183,7 +183,7 @@ CANONICAL_DOCUMENT_PATHS = (
     "docs/sbom-generator-feasibility.md",
     "legal/README.md",
 )
-EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT = 18
+EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT = 19
 
 NOTICE_HEADINGS = {
     "aria2": "### aria2 1.37.0",
