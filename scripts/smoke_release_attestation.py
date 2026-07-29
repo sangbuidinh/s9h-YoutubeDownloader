@@ -16,14 +16,16 @@ POLICY_PATH = REPO_ROOT / "legal" / "release-assurance-policy.json"
 DOC_PATH = REPO_ROOT / "docs" / "release-attestations.md"
 ATTEST_COMMIT = "f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6"
 ATTEST_BLOB = "f3d593f3020cf14b65d2789e3788d015354475e9"
+UPSTREAM_REPOSITORY = "sangbuidinh/s9h-YoutubeDownloader"
 ATTEST_CONDITION = (
-    "${{ github.event_name == 'push' || "
-    "(github.event_name == 'pull_request' && "
-    "github.event.pull_request.head.repo.full_name == github.repository) }}"
+    "${{ github.repository == '" + UPSTREAM_REPOSITORY + "' && "
+    "(github.event_name == 'push' || (github.event_name == 'pull_request' && "
+    "github.event.pull_request.head.repo.full_name == github.repository)) }}"
 )
-FORK_SKIP_CONDITION = (
-    "${{ github.event_name == 'pull_request' && "
-    "github.event.pull_request.head.repo.full_name != github.repository }}"
+NON_UPSTREAM_SKIP_CONDITION = (
+    "${{ github.repository != '" + UPSTREAM_REPOSITORY + "' || "
+    "(github.event_name == 'pull_request' && "
+    "github.event.pull_request.head.repo.full_name != github.repository) }}"
 )
 PROVENANCE_SUBJECTS = [
     "Youtube.Downloaderbs.exe",
@@ -143,7 +145,7 @@ def validate_attestation_contract(
     steps = ci._step_blocks(handoff)
     extractor = ci._named_step(steps, ci.RAW_EXTRACTION_STEP)
     semantic = ci._named_step(steps, "Verify synthetic release bundle handoff")
-    fork_skip = ci._named_step(steps, "Report fork pull request attestation skip")
+    non_upstream_skip = ci._named_step(steps, "Report non-upstream attestation skip")
     subject_validation = ci._named_step(
         steps,
         "Validate synthetic attestation subjects",
@@ -155,6 +157,7 @@ def validate_attestation_contract(
     _require(
         steps.index(extractor)
         < steps.index(semantic)
+        < steps.index(non_upstream_skip)
         < steps.index(subject_validation)
         < steps.index(provenance)
         < steps.index(sbom)
@@ -163,13 +166,16 @@ def validate_attestation_contract(
         "attestation final-byte ordering is invalid",
     )
     _require(
-        ci._scalar_value(fork_skip, "if", 8) == FORK_SKIP_CONDITION,
-        "fork pull request skip condition is invalid",
+        ci._scalar_value(non_upstream_skip, "if", 8) == NON_UPSTREAM_SKIP_CONDITION,
+        "non-upstream attestation skip condition is invalid",
     )
+    skip_text = "\n".join(non_upstream_skip)
+    for required in ("OIDC", "actions/attest", "attestation verification", "authorized upstream"):
+        _require(required in skip_text, f"non-upstream skip message is missing: {required}")
     for step in (subject_validation, provenance, sbom, online, offline):
         _require(
             ci._scalar_value(step, "if", 8) == ATTEST_CONDITION,
-            "same-repository and main-push attestation condition is invalid",
+            "upstream-only attestation condition is invalid",
         )
         _require(
             "continue-on-error" not in "\n".join(step),
@@ -349,6 +355,8 @@ def validate_attestation_contract(
         "not a production release",
         "SLSA level attainment",
         "Phase 7C-R2",
+        "fork-owned repositories",
+        "upstream repository",
     ):
         _require(required in documentation, f"attestation documentation is missing: {required}")
 
@@ -446,8 +454,13 @@ def main() -> int:
         "portable-ZIP SBOM subject",
         "online verification",
         "offline bundle verification",
-        "same-repository PR condition",
-        "main-push condition",
+        "upstream same-repository PR attestation",
+        "upstream push attestation",
+        "upstream fork PR skip",
+        "fork-owned push skip",
+        "fork-owned PR skip",
+        "fixed verifier identities",
+        "post-handoff skip ordering",
         "synthetic non-claims",
     ]
     for label in positive_labels:
@@ -526,9 +539,120 @@ def main() -> int:
             "attestation job permissions",
         ),
         (
+            "bare push condition",
+            _workflow_replace_first(
+                condition_line,
+                "        if: ${{ github.event_name == 'push' }}",
+            ),
+            "condition",
+        ),
+        (
+            "repository identity removed from one step",
+            _workflow_replace_first(
+                condition_line,
+                "        if: ${{ github.event_name == 'push' || "
+                "(github.event_name == 'pull_request' && "
+                "github.event.pull_request.head.repo.full_name == github.repository) }}",
+            ),
+            "condition",
+        ),
+        (
+            "different condition on one step",
+            _workflow_replace_first(
+                condition_line,
+                "        if: ${{ github.repository == 'sangbuidinh/s9h-YoutubeDownloader' }}",
+            ),
+            "condition",
+        ),
+        (
+            "fork push attempts provenance attestation",
+            _workflow_replace(
+                "      - name: Attest synthetic provenance\n"
+                "        id: attest-provenance\n"
+                f"{condition_line}",
+                "      - name: Attest synthetic provenance\n"
+                "        id: attest-provenance\n"
+                "        if: ${{ github.event_name == 'push' }}",
+            ),
+            "condition",
+        ),
+        (
+            "fork push attempts SBOM attestation",
+            _workflow_replace(
+                "      - name: Attest synthetic SBOM\n"
+                "        id: attest-sbom\n"
+                f"{condition_line}",
+                "      - name: Attest synthetic SBOM\n"
+                "        id: attest-sbom\n"
+                "        if: ${{ github.event_name == 'push' }}",
+            ),
+            "condition",
+        ),
+        (
+            "fork push attempts online verification",
+            _workflow_replace(
+                "      - name: Verify synthetic attestations online\n"
+                f"{condition_line}",
+                "      - name: Verify synthetic attestations online\n"
+                "        if: ${{ github.event_name == 'push' }}",
+            ),
+            "condition",
+        ),
+        (
+            "fork push attempts offline verification",
+            _workflow_replace(
+                "      - name: Verify synthetic attestation bundles offline\n"
+                f"{condition_line}",
+                "      - name: Verify synthetic attestation bundles offline\n"
+                "        if: ${{ github.event_name == 'push' }}",
+            ),
+            "condition",
+        ),
+        (
             "fork PR attempts attestation",
             _workflow_replace_first(condition_line, "        if: ${{ always() }}"),
             "condition",
+        ),
+        (
+            "dynamic verifier repository identity",
+            _workflow_replace_first(
+                '$repository = "sangbuidinh/s9h-YoutubeDownloader"',
+                "$repository = $env:GITHUB_REPOSITORY",
+            ),
+            "online verification",
+        ),
+        (
+            "dynamic verifier workflow identity",
+            _workflow_replace_first(
+                '$signerWorkflow = "sangbuidinh/s9h-YoutubeDownloader/.github/workflows/ci.yml"',
+                '$signerWorkflow = "$env:GITHUB_REPOSITORY/.github/workflows/ci.yml"',
+            ),
+            "online verification",
+        ),
+        (
+            "skip condition omits fork push",
+            _workflow_replace(
+                f"        if: {NON_UPSTREAM_SKIP_CONDITION}",
+                "        if: ${{ github.event_name == 'pull_request' && "
+                "github.event.pull_request.head.repo.full_name != github.repository }}",
+            ),
+            "skip condition",
+        ),
+        (
+            "skip before secure extraction",
+            _move_step_before(
+                "Report non-upstream attestation skip",
+                ci.RAW_EXTRACTION_STEP,
+            ),
+            "ordering",
+        ),
+        (
+            "skip before semantic verification",
+            _move_step_before(
+                "Report non-upstream attestation skip",
+                "Verify synthetic release bundle handoff",
+            ),
+            "ordering",
         ),
         (
             "attestation before secure extraction",

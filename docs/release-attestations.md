@@ -87,10 +87,13 @@ and both action invocations set `create-storage-record: false`. It does not
 grant `contents: write`, `packages: write`, `actions: write`,
 `deployments: write`, or `security-events: write`.
 
-Attestation steps run on main-branch pushes and same-repository pull requests.
-Fork pull requests still run ordinary validation and the secure handoff, then
-emit an explicit skip message. They do not request OIDC or invoke
-`actions/attest`.
+Attestation steps run only when `github.repository` is the upstream repository
+`sangbuidinh/s9h-YoutubeDownloader`: upstream pushes and same-repository pull
+requests attest, while fork pull requests skip. Pushes and pull requests in
+fork-owned repositories also skip OIDC, `actions/attest`, and attestation
+verification. Every skipped context still runs ordinary validation, secure
+extraction, and semantic handoff verification before emitting an explicit
+non-upstream skip message.
 
 ## Verification
 

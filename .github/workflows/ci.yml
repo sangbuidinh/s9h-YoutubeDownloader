@@ -1159,14 +1159,14 @@ jobs:
           }
           Write-Host "Synthetic release bundle v3 handoff verified"
 
-      - name: Report fork pull request attestation skip
-        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+      - name: Report non-upstream attestation skip
+        if: ${{ github.repository != 'sangbuidinh/s9h-YoutubeDownloader' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) }}
         shell: pwsh
         run: |
-          Write-Host "Synthetic attestation steps are skipped for fork pull requests."
+          Write-Host "OIDC, actions/attest, and attestation verification are skipped because this is not an authorized upstream context."
 
       - name: Validate synthetic attestation subjects
-        if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
+        if: ${{ github.repository == 'sangbuidinh/s9h-YoutubeDownloader' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -1275,7 +1275,7 @@ jobs:
 
       - name: Attest synthetic provenance
         id: attest-provenance
-        if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
+        if: ${{ github.repository == 'sangbuidinh/s9h-YoutubeDownloader' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
           subject-checksums: ${{ runner.temp }}/s9h-ci-attestation-${{ github.run_id }}-${{ github.run_attempt }}/provenance-subjects.sha256
@@ -1284,7 +1284,7 @@ jobs:
 
       - name: Attest synthetic SBOM
         id: attest-sbom
-        if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
+        if: ${{ github.repository == 'sangbuidinh/s9h-YoutubeDownloader' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
           subject-path: ${{ github.workspace }}/release-bundle/assets/Youtube-Downloaderbs-v0.0.0-ci.zip
@@ -1293,7 +1293,7 @@ jobs:
           show-summary: false
 
       - name: Verify synthetic attestations online
-        if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
+        if: ${{ github.repository == 'sangbuidinh/s9h-YoutubeDownloader' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1349,7 +1349,7 @@ jobs:
           Write-Host "Online synthetic provenance and SBOM attestations verified"
 
       - name: Verify synthetic attestation bundles offline
-        if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
+        if: ${{ github.repository == 'sangbuidinh/s9h-YoutubeDownloader' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
         shell: pwsh
         env:
           PROVENANCE_BUNDLE: ${{ steps.attest-provenance.outputs.bundle-path }}

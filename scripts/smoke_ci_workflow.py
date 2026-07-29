@@ -523,7 +523,7 @@ def validate_workflow(workflow: str, current_policy: dict | None = None) -> None
     download = _action_step(handoff_steps, "actions/download-artifact")
     extractor = _named_step(handoff_steps, RAW_EXTRACTION_STEP)
     verifier = _named_step(handoff_steps, "Verify synthetic release bundle handoff")
-    fork_skip = _named_step(handoff_steps, "Report fork pull request attestation skip")
+    non_upstream_skip = _named_step(handoff_steps, "Report non-upstream attestation skip")
     subject_validation = _named_step(handoff_steps, "Validate synthetic attestation subjects")
     provenance = _named_step(handoff_steps, "Attest synthetic provenance")
     sbom_attestation = _named_step(handoff_steps, "Attest synthetic SBOM")
@@ -539,7 +539,7 @@ def validate_workflow(workflow: str, current_policy: dict | None = None) -> None
             download,
             extractor,
             verifier,
-            fork_skip,
+            non_upstream_skip,
             subject_validation,
             provenance,
             sbom_attestation,
@@ -558,6 +558,34 @@ def validate_workflow(workflow: str, current_policy: dict | None = None) -> None
         attest_ref = _action_ref(attest_step, "actions/attest")
         _require_safe_action_ref("actions/attest", attest_ref)
         _require_current_action(attest_step, "actions/attest", current_policy)
+    attestation_condition = (
+        "${{ github.repository == 'sangbuidinh/s9h-YoutubeDownloader' && "
+        "(github.event_name == 'push' || (github.event_name == 'pull_request' && "
+        "github.event.pull_request.head.repo.full_name == github.repository)) }}"
+    )
+    non_upstream_skip_condition = (
+        "${{ github.repository != 'sangbuidinh/s9h-YoutubeDownloader' || "
+        "(github.event_name == 'pull_request' && "
+        "github.event.pull_request.head.repo.full_name != github.repository) }}"
+    )
+    for step in (
+        subject_validation,
+        provenance,
+        sbom_attestation,
+        online_verification,
+        offline_verification,
+    ):
+        _require(
+            _scalar_value(step, "if", 8) == attestation_condition,
+            "attestation steps must use the exact upstream-only condition",
+        )
+    _require(
+        _scalar_value(non_upstream_skip, "if", 8) == non_upstream_skip_condition,
+        "non-upstream attestation skip condition is invalid",
+    )
+    skip_text = "\n".join(non_upstream_skip)
+    for required in ("OIDC", "actions/attest", "attestation verification", "authorized upstream"):
+        _require(required in skip_text, f"non-upstream skip message is missing: {required}")
     output_text = "\n".join(output_check)
     for required in (
         "${{ needs.windows-smoke.outputs.artifact-id }}",
@@ -768,16 +796,17 @@ def validate_workflow(workflow: str, current_policy: dict | None = None) -> None
         "CI must not require persisted Git credentials",
     )
     attestation_condition = (
-        "${{ github.event_name == 'push' || "
-        "(github.event_name == 'pull_request' && "
-        "github.event.pull_request.head.repo.full_name == github.repository) }}"
+        "${{ github.repository == 'sangbuidinh/s9h-YoutubeDownloader' && "
+        "(github.event_name == 'push' || (github.event_name == 'pull_request' && "
+        "github.event.pull_request.head.repo.full_name == github.repository)) }}"
     )
-    fork_skip_condition = (
-        "${{ github.event_name == 'pull_request' && "
+    non_upstream_skip_condition = (
+        "${{ github.repository != 'sangbuidinh/s9h-YoutubeDownloader' || "
+        "(github.event_name == 'pull_request' && "
         "github.event.pull_request.head.repo.full_name != github.repository }}"
     )
     condition_scrubbed = code.replace(attestation_condition, "").replace(
-        fork_skip_condition,
+        non_upstream_skip_condition,
         "",
     )
     _forbid(

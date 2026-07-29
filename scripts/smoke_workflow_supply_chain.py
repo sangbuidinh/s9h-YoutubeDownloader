@@ -194,6 +194,17 @@ EXPECTED_WORKFLOW_ACTION_COUNTS = {
         "softprops/action-gh-release": 1,
     },
 }
+UPSTREAM_REPOSITORY = "sangbuidinh/s9h-YoutubeDownloader"
+UPSTREAM_ATTESTATION_CONDITION = (
+    "${{ github.repository == '" + UPSTREAM_REPOSITORY + "' && "
+    "(github.event_name == 'push' || (github.event_name == 'pull_request' && "
+    "github.event.pull_request.head.repo.full_name == github.repository)) }}"
+)
+NON_UPSTREAM_SKIP_CONDITION = (
+    "${{ github.repository != '" + UPSTREAM_REPOSITORY + "' || "
+    "(github.event_name == 'pull_request' && "
+    "github.event.pull_request.head.repo.full_name != github.repository) }}"
+)
 HISTORICAL_WORKFLOW_BLOBS = {
     ".github/workflows/prerelease-v1.2.7-rc.1.yml": "613c74ba98d9aa801b839d6a84b123b38aafbe2a",
     ".github/workflows/prerelease-v1.3.0-rc.1.yml": "84378adce76b25e6c50bbac138de8183c83eddcf",
@@ -254,10 +265,15 @@ def main() -> int:
         mutation_documents,
         inventory,
     )
+    upstream_gate_negative_count = _test_upstream_attestation_gate_negative_mutations(
+        mutation_documents,
+        inventory,
+    )
     _test_negative_mutations(mutation_documents, inventory)
     print(
         "workflow supply-chain smoke tests passed: "
-        f"18 R3a positive contracts, {r3a_negative_count} R3a negative mutations, "
+        f"20 R3a positive contracts, "
+        f"{r3a_negative_count + upstream_gate_negative_count} R3a negative mutations, "
         f"{owner_negative_count} current-owner negative regressions, "
         f"{canonical_positive_count} canonical-text positive regressions, "
         f"{canonical_negative_count} canonical-text negative regressions"
@@ -647,9 +663,9 @@ def _validate_action_placement(path: str, workflow: str) -> None:
         download = _action_steps(consumer_steps, "actions/download-artifact")[0]
         extractor = _named_step(consumer_steps, RAW_EXTRACTION_STEP)
         verifier = _named_step(consumer_steps, "Verify synthetic release bundle handoff")
-        fork_skip = _named_step(
+        non_upstream_skip = _named_step(
             consumer_steps,
-            "Report fork pull request attestation skip",
+            "Report non-upstream attestation skip",
         )
         subject_validation = _named_step(
             consumer_steps,
@@ -672,7 +688,7 @@ def _validate_action_placement(path: str, workflow: str) -> None:
                 download,
                 extractor,
                 verifier,
-                fork_skip,
+                non_upstream_skip,
                 subject_validation,
                 provenance,
                 sbom_attestation,
@@ -681,6 +697,21 @@ def _validate_action_placement(path: str, workflow: str) -> None:
             ],
             "CI consumer raw artifact handoff step order is invalid",
         )
+        _require(
+            _scalar_value(non_upstream_skip, "if", 8) == NON_UPSTREAM_SKIP_CONDITION,
+            "CI non-upstream attestation skip condition is invalid",
+        )
+        for step in (
+            subject_validation,
+            provenance,
+            sbom_attestation,
+            online_verification,
+            offline_verification,
+        ):
+            _require(
+                _scalar_value(step, "if", 8) == UPSTREAM_ATTESTATION_CONDITION,
+                "CI attestation steps must use the exact upstream-only condition",
+            )
         _require(
             len(_action_steps(consumer_steps, "actions/attest")) == 2,
             "CI consumer actions/attest count is invalid",
@@ -1890,6 +1921,172 @@ def _test_r3a_negative_mutations(documents: dict[str, str], inventory: dict) -> 
     return len(cases)
 
 
+def _test_upstream_attestation_gate_negative_mutations(
+    documents: dict[str, str],
+    inventory: dict,
+) -> int:
+    ci = CI_WORKFLOW
+    skip_name = "Report non-upstream attestation skip"
+    skip_header = f"      - name: {skip_name}\n"
+    skip_condition_line = f"        if: {NON_UPSTREAM_SKIP_CONDITION}"
+    attest_condition_line = f"        if: {UPSTREAM_ATTESTATION_CONDITION}"
+    old_event_condition = (
+        "${{ github.event_name == 'push' || "
+        "(github.event_name == 'pull_request' && "
+        "github.event.pull_request.head.repo.full_name == github.repository) }}"
+    )
+    cases: list[tuple[str, dict[str, str], str]] = []
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        skip_header,
+        "      - name: Report fork pull request attestation skip\n",
+    )
+    cases.append(
+        (
+            "legacy fork-only skip step name",
+            mutated,
+            f"workflow step must appear exactly once: {skip_name}",
+        )
+    )
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _remove_named_step(mutated[ci], skip_name)
+    cases.append(
+        (
+            "non-upstream skip step omitted",
+            mutated,
+            f"workflow step must appear exactly once: {skip_name}",
+        )
+    )
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        skip_header,
+        skip_header
+        + "        if: ${{ false }}\n"
+        + "        shell: pwsh\n"
+        + '        run: Write-Host "duplicate skip"\n\n'
+        + skip_header,
+    )
+    cases.append(
+        (
+            "non-upstream skip step duplicated",
+            mutated,
+            f"workflow step must appear exactly once: {skip_name}",
+        )
+    )
+
+    for label, target in (
+        (
+            "non-upstream skip before secure extraction",
+            "Download synthetic release bundle by artifact ID",
+        ),
+        (
+            "non-upstream skip before semantic verification",
+            RAW_EXTRACTION_STEP,
+        ),
+        (
+            "non-upstream skip after attestation-specific step",
+            "Validate synthetic attestation subjects",
+        ),
+    ):
+        mutated = copy.deepcopy(documents)
+        mutated[ci] = _move_named_step_after(mutated[ci], skip_name, target)
+        cases.append(
+            (
+                label,
+                mutated,
+                "CI consumer raw artifact handoff step order is invalid",
+            )
+        )
+
+    for label, replacement in (
+        (
+            "non-upstream skip omits fork-owned push",
+            "${{ github.event_name == 'pull_request' && "
+            "github.event.pull_request.head.repo.full_name != github.repository }}",
+        ),
+        (
+            "non-upstream skip omits upstream fork PR",
+            "${{ github.repository != 'sangbuidinh/s9h-YoutubeDownloader' }}",
+        ),
+        (
+            "non-upstream skip condition made unconditional",
+            "${{ always() }}",
+        ),
+    ):
+        mutated = copy.deepcopy(documents)
+        mutated[ci] = _replace_once(
+            mutated[ci],
+            skip_condition_line,
+            f"        if: {replacement}",
+        )
+        cases.append(
+            (
+                label,
+                mutated,
+                "CI non-upstream attestation skip condition is invalid",
+            )
+        )
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "      - name: Validate synthetic attestation subjects\n"
+        + attest_condition_line,
+        "      - name: Validate synthetic attestation subjects\n"
+        + f"        if: {old_event_condition}",
+    )
+    cases.append(
+        (
+            "subject validation omits upstream repository identity",
+            mutated,
+            "CI attestation steps must use the exact upstream-only condition",
+        )
+    )
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "      - name: Attest synthetic provenance\n"
+        "        id: attest-provenance\n"
+        + attest_condition_line,
+        "      - name: Attest synthetic provenance\n"
+        "        id: attest-provenance\n"
+        "        if: ${{ github.event_name == 'push' }}",
+    )
+    cases.append(
+        (
+            "fork-owned push attempts provenance attestation",
+            mutated,
+            "CI attestation steps must use the exact upstream-only condition",
+        )
+    )
+
+    mutated = copy.deepcopy(documents)
+    mutated[ci] = _replace_once(
+        mutated[ci],
+        "      - name: Verify synthetic attestation bundles offline\n"
+        + attest_condition_line,
+        "      - name: Verify synthetic attestation bundles offline\n"
+        "        if: ${{ github.repository == 'other/repository' }}",
+    )
+    cases.append(
+        (
+            "offline verification uses a different repository gate",
+            mutated,
+            "CI attestation steps must use the exact upstream-only condition",
+        )
+    )
+
+    for label, mutated_documents, expected in cases:
+        _expect_failure_message(label, mutated_documents, inventory, expected)
+    return len(cases)
+
+
 def _test_negative_mutations(documents: dict[str, str], inventory: dict) -> None:
     ci = CI_WORKFLOW
     release = ".github/workflows/release-v1.3.1.yml"
@@ -2361,6 +2558,23 @@ def _expect_failure(label: str, documents: dict[str, str], inventory: dict) -> N
     try:
         validate_supply_chain(documents, inventory)
     except SupplyChainContractError:
+        return
+    raise SupplyChainContractError(f"negative mutation was accepted: {label}")
+
+
+def _expect_failure_message(
+    label: str,
+    documents: dict[str, str],
+    inventory: dict,
+    expected: str,
+) -> None:
+    try:
+        validate_supply_chain(documents, inventory)
+    except SupplyChainContractError as exc:
+        _require(
+            expected.casefold() in str(exc).casefold(),
+            f"{label} raised unexpected diagnostic: {exc}",
+        )
         return
     raise SupplyChainContractError(f"negative mutation was accepted: {label}")
 
