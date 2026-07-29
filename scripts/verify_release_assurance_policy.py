@@ -162,7 +162,7 @@ PRIVATE_KEY_PEM_HEADER_RE = re.compile(
 )
 ATTEST_ACTION_COMMIT = "f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6"
 SYNTHETIC_CI_INTEGRATION = {
-    "ci_integration_validated_remotely": False,
+    "ci_integration_validated_remotely": True,
     "immutable_action_pin_integrated": True,
     "integration_implemented": True,
     "job_level_permission_design_implemented": True,
@@ -585,7 +585,6 @@ def _validate_provenance(value: Any) -> None:
             "no production provenance attestation exists",
             "no production SBOM attestation exists",
             "production attestation verification has not occurred",
-            "synthetic attestation integration has not passed remote CI",
         },
     )
 
@@ -618,7 +617,6 @@ def _validate_release_integration(value: Any) -> None:
             "production SBOM has not been generated or reconciled against final immutable application bytes",
             "final checksum and manifest synchronization is not integrated with assurance artifacts",
             "production provenance and SBOM attestation verification has not occurred",
-            "synthetic attestation integration has not passed remote CI",
         },
     )
 

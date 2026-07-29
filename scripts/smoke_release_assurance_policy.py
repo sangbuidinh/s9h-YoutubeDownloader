@@ -180,7 +180,7 @@ def main() -> int:
         ("synthetic job permission design removed", "synthetic-integration", {"mutation": _set(("provenance", "synthetic_ci_integration", "job_level_permission_design_implemented"), False)}),
         ("synthetic online verification removed", "synthetic-integration", {"mutation": _set(("provenance", "synthetic_ci_integration", "online_verification_implemented"), False)}),
         ("synthetic offline verification removed", "synthetic-integration", {"mutation": _set(("provenance", "synthetic_ci_integration", "offline_bundle_verification_implemented"), False)}),
-        ("remote CI validation claimed early", "synthetic-integration", {"mutation": _set(("provenance", "synthetic_ci_integration", "ci_integration_validated_remotely"), True)}),
+        ("remote CI validation removed", "synthetic-integration", {"mutation": _set(("provenance", "synthetic_ci_integration", "ci_integration_validated_remotely"), False)}),
         ("production workflow permissions integrated", "workflow-permissions", {"mutation": _set(("provenance", "workflow_permission_review", "integrated_for_production"), True)}),
         ("synthetic workflow permissions removed", "workflow-permissions", {"mutation": _set(("provenance", "workflow_permission_review", "integrated_for_synthetic_ci"), False)}),
         ("artifact metadata permission required", "workflow-permissions", {"mutation": _set(("provenance", "workflow_permission_review", "artifact_metadata_write_required"), True)}),

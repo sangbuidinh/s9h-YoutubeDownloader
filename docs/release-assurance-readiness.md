@@ -20,7 +20,7 @@ The machine-readable owner is `legal/release-assurance-policy.json`. Its readine
 
 ## Non-Claims
 
-Phase 7C does not claim that a production executable is signed, timestamped, or signature-verified. It does not claim that a production SBOM or production provenance attestation exists. The synthetic CI integration has not passed remote CI at this local checkpoint.
+Phase 7C does not claim that a production executable is signed, timestamped, or signature-verified. It does not claim that a production SBOM or production provenance attestation exists. The synthetic CI integration passed same-repository remote CI, but that result is not production attestation evidence.
 
 An eventual attestation would link subject bytes to build identity and provenance evidence. It would not certify security, absence of vulnerabilities, legal compliance, complete source correspondence, reproducibility, or release readiness. Existing `legal_compliance_certified`, `source_availability_certified`, `source_assets_created`, `source_kits_ready`, `assembly_authorized`, `release_gate_reconsideration_allowed`, `release_ready`, and `publishing_allowed` states remain false.
 
@@ -123,7 +123,7 @@ The exact `action.yml` at that commit accepts mutually exclusive subject path, d
 
 Future release subjects are the final standalone EXE, portable ZIP, legal ZIP, SPDX JSON, `SHA256SUMS.txt`, and `RELEASE_MANIFEST.json`. Source-kit archives are excluded from mandatory current subjects while source-kit assembly remains blocked. A later authorization may add them after final bytes exist.
 
-Current CI attests only the verified `v0.0.0-ci` bundle described in `docs/release-attestations.md`. Public verification identifies `sangbuidinh/s9h-YoutubeDownloader`, verifies exact subject bytes and signer workflow, and distinguishes native provenance from SPDX 2.3 SBOM attestations. Both online and generated-bundle offline commands are implemented, but remote validation and all production readiness remain false.
+Current CI attests only the verified `v0.0.0-ci` bundle described in `docs/release-attestations.md`. Public verification identifies `sangbuidinh/s9h-YoutubeDownloader`, verifies exact subject bytes and signer workflow, and distinguishes native provenance from SPDX 2.3 SBOM attestations. Both online and generated-bundle offline commands passed same-repository remote CI. All production readiness remains false.
 
 ## Workflow Permission Boundary
 
@@ -226,6 +226,6 @@ The exact action commit is implementation-specific evidence. Both `action.yml` a
 
 ## Current Decision
 
-The synthetic CI integration, immutable action pin, job-level permission design, and online/offline verification commands are implemented locally. They have not passed remote CI. Authenticode implementation and readiness are false. No production final signed bytes, provenance attestation, SBOM attestation, or production attestation verification exists. Combined release-assurance readiness and every assurance claim remain false.
+The synthetic CI integration, immutable action pin, job-level permission design, and online/offline verification commands passed same-repository remote CI. Authenticode implementation and readiness are false. No production final signed bytes, provenance attestation, SBOM attestation, or production attestation verification exists. Combined release-assurance readiness and every assurance claim remain false.
 
-The next permitted work is Phase 7C-R2: reviewed push, draft pull request, real synthetic CI attestation run, technical review, and pull-request body reconciliation. No production signing, credential provisioning, production attestation, release, or publishing action is authorized by this document.
+The next permitted work after Phase 7C-R2 is a separately authorized exact-head merge and post-merge main validation. No production signing, credential provisioning, production attestation, release, or publishing action is authorized by this document.

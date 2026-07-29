@@ -134,7 +134,8 @@ compliance, complete source correspondence, or publishing authorization.
 
 ## Phase 7C Remote Validation
 
-Phase 7C-R2 remains separately authorized work:
+Phase 7C-R2 validated the synthetic integration in a same-repository pull
+request:
 
 1. push the reviewed local commit without force;
 2. create a draft pull request;
@@ -144,6 +145,7 @@ Phase 7C-R2 remains separately authorized work:
 6. reconcile CI evidence and the pull request body without making production
    claims.
 
-Until that remote run passes, `ci_integration_validated_remotely`,
-production provenance readiness, production SBOM attestation, and combined
-release-assurance readiness remain false.
+The remote run passed on its first attempt, so
+`ci_integration_validated_remotely` is true. This records synthetic CI
+evidence only. Production provenance readiness, production SBOM attestation,
+and combined release-assurance readiness remain false.

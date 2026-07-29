@@ -34,7 +34,7 @@ PROVENANCE_SUBJECTS = [
     "RELEASE_MANIFEST.json",
 ]
 SYNTHETIC_STATE = {
-    "ci_integration_validated_remotely": False,
+    "ci_integration_validated_remotely": True,
     "immutable_action_pin_integrated": True,
     "integration_implemented": True,
     "job_level_permission_design_implemented": True,

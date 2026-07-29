@@ -69,8 +69,7 @@
       "no production SBOM attestation exists",
       "no production final signed bytes exist",
       "no production provenance attestation exists",
-      "production attestation verification has not occurred",
-      "synthetic attestation integration has not passed remote CI"
+      "production attestation verification has not occurred"
     ],
     "candidate_action_commit": "f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6",
     "candidate_major_release": "v4",
@@ -93,7 +92,7 @@
     ],
     "synthetic_ci_attestations_are_release_attestations": false,
     "synthetic_ci_integration": {
-      "ci_integration_validated_remotely": false,
+      "ci_integration_validated_remotely": true,
       "immutable_action_pin_integrated": true,
       "integration_implemented": true,
       "job_level_permission_design_implemented": true,
@@ -124,8 +123,7 @@
       "Authenticode signing and verification are not integrated",
       "final checksum and manifest synchronization is not integrated with assurance artifacts",
       "production SBOM has not been generated or reconciled against final immutable application bytes",
-      "production provenance and SBOM attestation verification has not occurred",
-      "synthetic attestation integration has not passed remote CI"
+      "production provenance and SBOM attestation verification has not occurred"
     ],
     "existing_gate_invariants": {
       "assembly_authorized": false,
