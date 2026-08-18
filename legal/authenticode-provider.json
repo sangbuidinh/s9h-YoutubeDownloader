@@ -1,21 +1,34 @@
 {
   "assessment_baseline": "45ecd30aaa95661778956b6724aaccd98bfe66c1",
   "blockers": [
-    "IV versus OV operator decision",
-    "approved timestamp endpoint",
+    "certificate class decision",
     "certificate issuance",
     "immutable CKA package identity",
     "production final bytes",
     "production signature and timestamp verification",
+    "production signing workflow integration",
     "protected credential and environment configuration",
+    "protected remote signing environment",
     "provider account and identity validation",
-    "remote synthetic signing validation"
+    "remote synthetic signing validation",
+    "timestamp authority approval"
   ],
   "certificate": {
+    "automated_certificate_classes": [
+      "OV",
+      "EV"
+    ],
+    "certificate_class_selected": false,
     "expected_publisher": null,
-    "provisioned": false,
-    "validation_class": "IV_OR_OV_OPERATOR_DECISION_PENDING",
-    "validation_class_selected": false
+    "expected_thumbprint": null,
+    "operator_entity_type": "UNRESOLVED",
+    "preferred_class": null,
+    "product_advertised_certificate_classes": [
+      "IV",
+      "OV",
+      "EV"
+    ],
+    "provider_confirmation_required_for_iv_automation": true
   },
   "custody": {
     "model": "provider-managed cloud HSM",
@@ -50,7 +63,7 @@
       "removal_command": null,
       "removal_command_documented": false
     },
-    "evidence_retrieved_at_utc": "2026-07-29T03:32:00Z",
+    "evidence_retrieved_at_utc": "2026-08-18T15:19:42Z",
     "integration": {
       "interface": "Windows CNG",
       "key_storage_provider": "KSP",
@@ -70,7 +83,6 @@
   },
   "policy_id": "s9h-authenticode-provider-v1",
   "provider": {
-    "account_provisioned": false,
     "alternatives": [
       {
         "id": "microsoft-artifact-signing-public-trust",
@@ -91,17 +103,11 @@
     "id": "ssl-com-esigner",
     "private_key_export": "forbidden",
     "procurement_authorized": false,
-    "production_signing_authorized": false,
     "service": "SSL.com eSigner"
   },
   "repository_constraints": {
     "project_license_status": "not-selected",
     "project_license_status_change_authorized": false
-  },
-  "scaffold": {
-    "plan_only_supported": true,
-    "signing_scaffold_implemented": true,
-    "verification_scaffold_implemented": true
   },
   "schema_version": 1,
   "signing_contract": {
@@ -109,6 +115,48 @@
     "file_digest": "SHA256",
     "first_party_targets": [
       "Youtube.Downloaderbs.exe"
+    ],
+    "plan_only_supported": true,
+    "purpose_gates": {
+      "production": {
+        "required_provider_state": [
+          "account_provisioned",
+          "certificate_provisioned",
+          "credential_source_configured",
+          "production_signing_authorized",
+          "remote_signing_validated",
+          "synthetic_signing_authorized",
+          "timestamp_authority_approved"
+        ],
+        "required_release_gates": [
+          "assembly_authorized",
+          "legal_compliance_certified",
+          "release_gate_reconsideration_allowed",
+          "source_assets_created",
+          "source_availability_certified",
+          "source_kits_ready"
+        ]
+      },
+      "synthetic": {
+        "not_required_flags": [
+          "provider.procurement_authorized",
+          "release.publishing_allowed",
+          "release.release_ready",
+          "state.production_signing_authorized",
+          "state.remote_signing_validated"
+        ],
+        "required_provider_state": [
+          "account_provisioned",
+          "certificate_provisioned",
+          "credential_source_configured",
+          "synthetic_signing_authorized",
+          "timestamp_authority_approved"
+        ]
+      }
+    },
+    "real_signing_purposes": [
+      "synthetic",
+      "production"
     ],
     "sequence": [
       "validate unsigned first-party EXE structure",
@@ -135,14 +183,20 @@
     "verification_switch": "/pa"
   },
   "state": {
+    "account_provisioned": false,
     "certificate_provisioned": false,
-    "certificate_validation_class_selected": false,
     "credential_source_configured": false,
     "custody_model_selected": true,
+    "production_signing_authorized": false,
     "production_signing_completed": false,
     "provider_selected": true,
+    "publishing_allowed": false,
+    "release_ready": false,
     "remote_signing_validated": false,
-    "timestamp_authority_approved": false
+    "signing_scaffold_implemented": true,
+    "synthetic_signing_authorized": false,
+    "timestamp_authority_approved": false,
+    "verification_scaffold_implemented": true
   },
   "timestamp": {
     "authority_approved": false,

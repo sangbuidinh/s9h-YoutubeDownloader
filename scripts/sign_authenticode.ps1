@@ -16,6 +16,10 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$TimestampUrl,
 
+    [ValidateSet("synthetic", "production")]
+    [string]$SigningPurpose,
+
+    [string]$ReleaseAssurancePolicyPath,
     [string]$ExpectedPublisher,
     [string]$CertificateThumbprint,
     [string]$SignToolPath = "signtool.exe",
@@ -180,6 +184,8 @@ function Read-ProviderConfig {
         $Config.custody.repository_private_key_allowed -ne $false -or
         $Config.signing_contract.first_party_targets.Count -ne 1 -or
         $Config.signing_contract.first_party_targets[0] -ne $FirstPartyName -or
+        $Config.signing_contract.plan_only_supported -ne $true -or
+        ($Config.signing_contract.real_signing_purposes -join ",") -cne "synthetic,production" -or
         $Config.signing_contract.file_digest -ne "SHA256" -or
         $Config.signing_contract.timestamp_protocol -ne "RFC3161" -or
         $Config.signing_contract.timestamp_digest -ne "SHA256" -or
@@ -187,6 +193,39 @@ function Read-ProviderConfig {
         throw "Provider configuration does not satisfy the signing contract"
     }
     return $Config
+}
+
+function Read-ReleaseAssurancePolicy {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Production signing requires an explicit release-assurance policy"
+    }
+    $Raw = [IO.File]::ReadAllText([IO.Path]::GetFullPath($Path), [Text.UTF8Encoding]::new($false))
+    if ($Raw -match "`r" -or $Raw -match "-----BEGIN .*PRIVATE KEY-----") {
+        throw "Release-assurance policy failed hygiene validation"
+    }
+    $Policy = $Raw | ConvertFrom-Json
+    if ($Policy.policy_id -ne "s9h-release-assurance-v1" -or
+        $Policy.product -ne "Youtube Downloaderbs" -or
+        $Policy.schema_version -ne 2) {
+        throw "Production release-assurance policy identity is invalid"
+    }
+    return $Policy
+}
+
+function Normalize-CertificateThumbprint {
+    param(
+        [Parameter(Mandatory = $true)][string]$Value
+    )
+
+    $Normalized = ($Value -replace "\s", "").ToUpperInvariant()
+    if ($Normalized -notmatch "^[0-9A-F]{40}$") {
+        throw "The provisioned certificate selector is invalid"
+    }
+    return $Normalized
 }
 
 function Resolve-SignTool {
@@ -231,28 +270,61 @@ if ($PlanOnly) {
     exit 0
 }
 
-if ($Config.provider.account_provisioned -ne $true -or
-    $Config.provider.procurement_authorized -ne $true -or
-    $Config.provider.production_signing_authorized -ne $true -or
-    $Config.certificate.provisioned -ne $true -or
-    $Config.certificate.validation_class_selected -ne $true -or
+if ([string]::IsNullOrWhiteSpace($SigningPurpose)) {
+    throw "A real signing purpose must be explicitly selected"
+}
+
+if ($Config.state.account_provisioned -ne $true -or
+    $Config.state.certificate_provisioned -ne $true -or
     $Config.state.credential_source_configured -ne $true -or
+    $Config.state.synthetic_signing_authorized -ne $true -or
     $Config.state.timestamp_authority_approved -ne $true -or
-    $Config.state.remote_signing_validated -ne $true) {
-    throw "Authenticode provisioning and readiness gates are not satisfied"
+    $Config.timestamp.authority_approved -ne $true) {
+    throw "Synthetic signing prerequisites are not satisfied"
 }
 if ([string]::IsNullOrWhiteSpace($ExpectedPublisher) -or
     $ExpectedPublisher -cne $Config.certificate.expected_publisher) {
     throw "Expected publisher is required and must match the provisioned policy"
 }
 if ([string]::IsNullOrWhiteSpace($CertificateThumbprint) -or
-    $CertificateThumbprint -notmatch "^[0-9A-Fa-f]{40}$") {
+    [string]::IsNullOrWhiteSpace($Config.certificate.expected_thumbprint)) {
     throw "An explicit provisioned certificate selector is required"
+}
+$NormalizedThumbprint = Normalize-CertificateThumbprint -Value $CertificateThumbprint
+$ExpectedThumbprint = Normalize-CertificateThumbprint -Value $Config.certificate.expected_thumbprint
+if ($NormalizedThumbprint -cne $ExpectedThumbprint) {
+    throw "The selected certificate does not match the provisioned policy"
+}
+
+if ($SigningPurpose -ceq "production") {
+    if ($Config.state.production_signing_authorized -ne $true) {
+        throw "Production signing authorization is not satisfied"
+    }
+    if ($Config.state.remote_signing_validated -ne $true) {
+        throw "Remote synthetic signing validation is not satisfied"
+    }
+    if ([string]::IsNullOrWhiteSpace($ReleaseAssurancePolicyPath)) {
+        throw "Production signing requires an explicit release-assurance policy"
+    }
+    $ReleasePolicy = Read-ReleaseAssurancePolicy -Path $ReleaseAssurancePolicyPath
+    $RequiredProductionGates = @(
+        "assembly_authorized",
+        "legal_compliance_certified",
+        "release_gate_reconsideration_allowed",
+        "source_assets_created",
+        "source_availability_certified",
+        "source_kits_ready"
+    )
+    foreach ($Gate in $RequiredProductionGates) {
+        if ($ReleasePolicy.release_integration.existing_gate_invariants.$Gate -ne $true) {
+            throw "An independent production release gate is not satisfied"
+        }
+    }
 }
 
 $ResolvedSignTool = Resolve-SignTool -Path $SignToolPath
 $SignToolPath = $ResolvedSignTool
-$SignArguments = @("sign", "/fd", "SHA256", "/tr", $TimestampUrl, "/td", "SHA256", "/sha1", $CertificateThumbprint, $Authorized.TargetPath)
+$SignArguments = @("sign", "/fd", "SHA256", "/tr", $TimestampUrl, "/td", "SHA256", "/sha1", $NormalizedThumbprint, $Authorized.TargetPath)
 & $SignToolPath @SignArguments | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw "Authenticode signing failed"
@@ -266,7 +338,8 @@ if (-not (Test-Path -LiteralPath $VerifyScript -PathType Leaf)) {
     -Target $Authorized.TargetPath `
     -ReleaseRoot $Authorized.RootPath `
     -SignToolPath $SignToolPath `
-    -ExpectedPublisher $ExpectedPublisher
+    -ExpectedPublisher $ExpectedPublisher `
+    -CertificateThumbprint $NormalizedThumbprint
 if ($LASTEXITCODE -ne 0) {
     throw "Authenticode verification failed after signing"
 }

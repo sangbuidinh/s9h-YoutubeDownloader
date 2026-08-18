@@ -49,6 +49,17 @@ def _add(path: tuple[str, ...], key: str, value: Any) -> Mutation:
     return mutate
 
 
+def _insert_sorted(path: tuple[str, ...], value: str) -> Mutation:
+    def mutate(policy: dict[str, Any]) -> None:
+        target: Any = policy
+        for part in path:
+            target = target[part]
+        target.append(value)
+        target.sort()
+
+    return mutate
+
+
 def _delete_sequence_item(value: str) -> Mutation:
     def mutate(policy: dict[str, Any]) -> None:
         policy["signing_contract"]["sequence"].remove(value)
@@ -157,35 +168,170 @@ def _powershell_command() -> str:
     raise AssertionError("PowerShell is unavailable")
 
 
-def _invoke_plan(
+def _invoke_sign(
     powershell: str,
     repository_root: Path,
     release_root: Path,
     target: Path,
     *,
+    sign_script: Path | None = None,
+    provider_config: Path | None = None,
+    signing_purpose: str | None = None,
+    release_policy: Path | None = None,
+    expected_publisher: str | None = None,
+    certificate_thumbprint: str | None = None,
+    signtool: Path | None = None,
     plan_only: bool = True,
 ) -> subprocess.CompletedProcess[str]:
+    script = sign_script or repository_root / SIGN_SCRIPT_PATH
+    config = provider_config or repository_root / PROVIDER_POLICY_PATH
     command = [
         powershell,
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        str(repository_root / SIGN_SCRIPT_PATH),
+        str(script),
         "-Target",
         str(target),
         "-ReleaseRoot",
         str(release_root),
         "-ProviderConfigPath",
-        str(repository_root / PROVIDER_POLICY_PATH),
+        str(config),
         "-TimestampUrl",
         "http://ts.ssl.com",
     ]
     if plan_only:
         command.append("-PlanOnly")
+    if signing_purpose is not None:
+        command.extend(["-SigningPurpose", signing_purpose])
+    if release_policy is not None:
+        command.extend(["-ReleaseAssurancePolicyPath", str(release_policy)])
+    if expected_publisher is not None:
+        command.extend(["-ExpectedPublisher", expected_publisher])
+    if certificate_thumbprint is not None:
+        command.extend(["-CertificateThumbprint", certificate_thumbprint])
+    if signtool is not None:
+        command.extend(["-SignToolPath", str(signtool)])
     return subprocess.run(
         command,
         cwd=repository_root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        env={**os.environ, "NO_COLOR": "1"},
+    )
+
+
+def _write_fake_signtool(path: Path) -> None:
+    path.write_text(
+        "@echo off\n"
+        "echo Successfully verified\n"
+        "echo Timestamp Verified by:\n"
+        "echo RFC3161 SHA256\n"
+        "echo Example Publisher LLC\n"
+        "exit /b 0\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+def _write_signing_fixture_scripts(repository_root: Path, root: Path) -> tuple[Path, Path]:
+    scripts = root / "scripts"
+    scripts.mkdir()
+    sign_script = scripts / SIGN_SCRIPT_PATH.name
+    sign_script.write_bytes((repository_root / SIGN_SCRIPT_PATH).read_bytes())
+    verify_script = scripts / VERIFY_SCRIPT_PATH.name
+    verify_script.write_text(
+        "param(\n"
+        "    [string]$Target,\n"
+        "    [string]$ReleaseRoot,\n"
+        "    [string]$SignToolPath,\n"
+        "    [string]$ExpectedPublisher,\n"
+        "    [string]$CertificateThumbprint\n"
+        ")\n"
+        "exit 0\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    signtool = root / "signtool.cmd"
+    _write_fake_signtool(signtool)
+    return sign_script, signtool
+
+
+def _provisioned_synthetic_policy(repository_root: Path, destination: Path) -> dict[str, Any]:
+    provider = _load_json(repository_root, PROVIDER_POLICY_PATH)
+    for key in (
+        "account_provisioned",
+        "certificate_provisioned",
+        "credential_source_configured",
+        "synthetic_signing_authorized",
+        "timestamp_authority_approved",
+    ):
+        provider["state"][key] = True
+    provider["timestamp"]["authority_approved"] = True
+    provider["certificate"]["expected_publisher"] = "Example Publisher LLC"
+    provider["certificate"]["expected_thumbprint"] = "A1" * 20
+    destination.write_bytes(_canonical_bytes(provider))
+    return provider
+
+
+def _write_verification_harness(
+    path: Path,
+    verify_script: Path,
+    target: Path,
+    release_root: Path,
+    signtool: Path,
+) -> None:
+    def quote(value: Path) -> str:
+        return str(value).replace("'", "''")
+
+    actual_thumbprint = " ".join(["A1"] * 20)
+    path.write_text(
+        "param([string]$ExpectedPublisher, [string]$CertificateThumbprint)\n"
+        "$ErrorActionPreference = 'Stop'\n"
+        f"$Certificate = [PSCustomObject]@{{ Thumbprint = '{actual_thumbprint}' }}\n"
+        "$Certificate | Add-Member -MemberType ScriptMethod -Name GetNameInfo -Value {\n"
+        "    param($NameType, $ForIssuer)\n"
+        "    return 'Example Publisher LLC'\n"
+        "}\n"
+        "$global:FixtureSignature = [PSCustomObject]@{\n"
+        "    Status = [System.Management.Automation.SignatureStatus]::Valid\n"
+        "    SignerCertificate = $Certificate\n"
+        "    TimeStamperCertificate = [PSCustomObject]@{}\n"
+        "}\n"
+        "function Get-AuthenticodeSignature { param([string]$LiteralPath) return $global:FixtureSignature }\n"
+        "function Get-FileHash { param([string]$LiteralPath, [string]$Algorithm) "
+        "return [PSCustomObject]@{ Hash = ('00' * 32) } }\n"
+        f"& '{quote(verify_script)}' -Target '{quote(target)}' -ReleaseRoot '{quote(release_root)}' "
+        f"-SignToolPath '{quote(signtool)}' -ExpectedPublisher $ExpectedPublisher "
+        "-CertificateThumbprint $CertificateThumbprint\n"
+        "exit $LASTEXITCODE\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+def _invoke_verification_harness(
+    powershell: str,
+    harness: Path,
+    expected_publisher: str,
+    certificate_thumbprint: str,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(harness),
+            "-ExpectedPublisher",
+            expected_publisher,
+            "-CertificateThumbprint",
+            certificate_thumbprint,
+        ],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -204,8 +350,8 @@ def _run_wrapper_fixtures(repository_root: Path) -> int:
         target = release_root / "Youtube.Downloaderbs.exe"
         _write_unsigned_pe(target)
 
-        first = _invoke_plan(powershell, repository_root, release_root, target)
-        second = _invoke_plan(powershell, repository_root, release_root, target)
+        first = _invoke_sign(powershell, repository_root, release_root, target)
+        second = _invoke_sign(powershell, repository_root, release_root, target)
         if first.returncode != 0 or second.returncode != 0:
             raise AssertionError(f"PlanOnly failed: {first.stderr or second.stderr}")
         if first.stdout != second.stdout:
@@ -234,22 +380,147 @@ def _run_wrapper_fixtures(repository_root: Path) -> int:
         print("PASS wrapper fixture: deterministic sanitized PlanOnly")
         fixtures += 1
 
-        real_attempt = _invoke_plan(
+        real_attempt = _invoke_sign(
+            powershell,
+            repository_root,
+            release_root,
+            target,
+            signing_purpose="synthetic",
+            plan_only=False,
+        )
+        if real_attempt.returncode == 0 or "Synthetic signing prerequisites" not in real_attempt.stderr:
+            raise AssertionError("real signing did not fail closed on R1 readiness")
+        print("PASS wrapper fixture: real signing blocked before SignTool")
+        fixtures += 1
+
+        missing_purpose = _invoke_sign(
             powershell,
             repository_root,
             release_root,
             target,
             plan_only=False,
         )
-        if real_attempt.returncode == 0 or "readiness gates are not satisfied" not in real_attempt.stderr:
-            raise AssertionError("real signing did not fail closed on R1 readiness")
-        print("PASS wrapper fixture: real signing blocked before SignTool")
+        if missing_purpose.returncode == 0 or "real signing purpose" not in missing_purpose.stderr:
+            raise AssertionError("real signing accepted an implicit purpose")
+        print("PASS wrapper fixture: real signing requires explicit purpose")
+        fixtures += 1
+
+        signing_root = temporary_root / "synthetic-fixture"
+        signing_root.mkdir()
+        fixture_release = signing_root / "release"
+        fixture_release.mkdir()
+        fixture_target = fixture_release / "Youtube.Downloaderbs.exe"
+        _write_unsigned_pe(fixture_target)
+        sign_script, fake_signtool = _write_signing_fixture_scripts(repository_root, signing_root)
+        provider_path = signing_root / "provider.json"
+        provider = _provisioned_synthetic_policy(repository_root, provider_path)
+        normalized_input = " ".join(["a1"] * 20)
+        synthetic = _invoke_sign(
+            powershell,
+            repository_root,
+            fixture_release,
+            fixture_target,
+            sign_script=sign_script,
+            provider_config=provider_path,
+            signing_purpose="synthetic",
+            expected_publisher="Example Publisher LLC",
+            certificate_thumbprint=normalized_input,
+            signtool=fake_signtool,
+            plan_only=False,
+        )
+        if synthetic.returncode != 0:
+            raise AssertionError(f"synthetic signing fixture failed: {synthetic.stderr}")
+        if provider["state"]["production_signing_authorized"] or provider["state"]["remote_signing_validated"]:
+            raise AssertionError("synthetic signing fixture enabled a production-only gate")
+        print("PASS wrapper fixture: synthetic mode excludes production authorization and prior remote validation")
+        fixtures += 1
+
+        provider["state"]["production_signing_authorized"] = True
+        provider["state"]["remote_signing_validated"] = False
+        provider_path.write_bytes(_canonical_bytes(provider))
+        missing_remote = _invoke_sign(
+            powershell,
+            repository_root,
+            fixture_release,
+            fixture_target,
+            sign_script=sign_script,
+            provider_config=provider_path,
+            signing_purpose="production",
+            expected_publisher="Example Publisher LLC",
+            certificate_thumbprint=normalized_input,
+            signtool=fake_signtool,
+            plan_only=False,
+        )
+        if missing_remote.returncode == 0 or "Remote synthetic signing validation" not in missing_remote.stderr:
+            raise AssertionError("production mode did not require prior remote validation")
+        print("PASS wrapper fixture: production mode requires remote validation")
+        fixtures += 1
+
+        provider["state"]["production_signing_authorized"] = False
+        provider["state"]["remote_signing_validated"] = True
+        provider_path.write_bytes(_canonical_bytes(provider))
+        missing_authorization = _invoke_sign(
+            powershell,
+            repository_root,
+            fixture_release,
+            fixture_target,
+            sign_script=sign_script,
+            provider_config=provider_path,
+            signing_purpose="production",
+            expected_publisher="Example Publisher LLC",
+            certificate_thumbprint=normalized_input,
+            signtool=fake_signtool,
+            plan_only=False,
+        )
+        if missing_authorization.returncode == 0 or "Production signing authorization" not in missing_authorization.stderr:
+            raise AssertionError("production mode did not require production authorization")
+        print("PASS wrapper fixture: production mode requires production authorization")
+        fixtures += 1
+
+        provider["state"]["production_signing_authorized"] = True
+        provider["state"]["remote_signing_validated"] = True
+        provider_path.write_bytes(_canonical_bytes(provider))
+        missing_release_policy = _invoke_sign(
+            powershell,
+            repository_root,
+            fixture_release,
+            fixture_target,
+            sign_script=sign_script,
+            provider_config=provider_path,
+            signing_purpose="production",
+            expected_publisher="Example Publisher LLC",
+            certificate_thumbprint=normalized_input,
+            signtool=fake_signtool,
+            plan_only=False,
+        )
+        if missing_release_policy.returncode == 0 or "explicit release-assurance policy" not in missing_release_policy.stderr:
+            raise AssertionError("production mode accepted a missing release-assurance policy")
+        print("PASS wrapper fixture: production mode requires explicit release policy")
+        fixtures += 1
+
+        blocked_release_gate = _invoke_sign(
+            powershell,
+            repository_root,
+            fixture_release,
+            fixture_target,
+            sign_script=sign_script,
+            provider_config=provider_path,
+            signing_purpose="production",
+            release_policy=repository_root / RELEASE_POLICY_PATH,
+            expected_publisher="Example Publisher LLC",
+            certificate_thumbprint=normalized_input,
+            signtool=fake_signtool,
+            plan_only=False,
+        )
+        if blocked_release_gate.returncode == 0 or "independent production release gate" not in blocked_release_gate.stderr:
+            raise AssertionError("production mode accepted incomplete independent release gates")
+        print("PASS wrapper fixture: production mode requires independent release gates")
         fixtures += 1
 
         for name in ("yt-dlp.exe", "arbitrary.exe"):
             rejected = release_root / name
             _write_unsigned_pe(rejected)
-            result = _invoke_plan(powershell, repository_root, release_root, rejected)
+            result = _invoke_sign(powershell, repository_root, release_root, rejected)
             if result.returncode == 0:
                 raise AssertionError(f"unauthorized target passed PlanOnly: {name}")
             print(f"PASS wrapper fixture: rejected {name}")
@@ -257,10 +528,62 @@ def _run_wrapper_fixtures(repository_root: Path) -> int:
 
         outside = temporary_root / "Youtube.Downloaderbs.exe"
         _write_unsigned_pe(outside)
-        outside_result = _invoke_plan(powershell, repository_root, release_root, outside)
+        outside_result = _invoke_sign(powershell, repository_root, release_root, outside)
         if outside_result.returncode == 0:
             raise AssertionError("outside-root target passed PlanOnly")
         print("PASS wrapper fixture: rejected outside-root target")
+        fixtures += 1
+
+        verify_root = temporary_root / "verification-fixture"
+        verify_root.mkdir()
+        verify_release = verify_root / "release"
+        verify_release.mkdir()
+        verify_target = verify_release / "Youtube.Downloaderbs.exe"
+        _write_unsigned_pe(verify_target)
+        verify_signtool = verify_root / "signtool.cmd"
+        _write_fake_signtool(verify_signtool)
+        harness = verify_root / "verify-harness.ps1"
+        _write_verification_harness(
+            harness,
+            repository_root / VERIFY_SCRIPT_PATH,
+            verify_target,
+            verify_release,
+            verify_signtool,
+        )
+        expected_thumbprint = " ".join(["a1"] * 20)
+        verified = _invoke_verification_harness(
+            powershell,
+            harness,
+            "Example Publisher LLC",
+            expected_thumbprint,
+        )
+        if verified.returncode != 0:
+            raise AssertionError(f"exact identity verification fixture failed: {verified.stderr}")
+        if "a1a1a1" in (verified.stdout + verified.stderr).casefold() or "thumbprint" in verified.stdout.casefold():
+            raise AssertionError("verification output exposed the certificate selector")
+        print("PASS wrapper fixture: exact signer thumbprint and publisher identity")
+        fixtures += 1
+
+        mismatched_thumbprint = _invoke_verification_harness(
+            powershell,
+            harness,
+            "Example Publisher LLC",
+            "B2" * 20,
+        )
+        if mismatched_thumbprint.returncode == 0 or "expected identity" not in mismatched_thumbprint.stderr:
+            raise AssertionError("mismatched signer thumbprint was accepted")
+        print("PASS wrapper fixture: rejected mismatched signer thumbprint")
+        fixtures += 1
+
+        substring_publisher = _invoke_verification_harness(
+            powershell,
+            harness,
+            "Example Publisher",
+            expected_thumbprint,
+        )
+        if substring_publisher.returncode == 0 or "exactly match" not in substring_publisher.stderr:
+            raise AssertionError("publisher substring-only match was accepted")
+        print("PASS wrapper fixture: rejected publisher substring-only match")
         fixtures += 1
 
     return fixtures
@@ -417,12 +740,12 @@ def main() -> int:
         (
             "provider account provisioned",
             "readiness",
-            {"provider_mutation": _set(("provider", "account_provisioned"), True)},
+            {"provider_mutation": _set(("state", "account_provisioned"), True)},
         ),
         (
             "certificate provisioned",
             "readiness",
-            {"provider_mutation": _set(("certificate", "provisioned"), True)},
+            {"provider_mutation": _set(("state", "certificate_provisioned"), True)},
         ),
         (
             "credential source configured",
@@ -435,14 +758,99 @@ def main() -> int:
             {"provider_mutation": _set(("timestamp", "authority_approved"), True)},
         ),
         (
-            "remote signing validated",
+            "remote validation claimed before a successful signing result",
             "readiness",
             {"provider_mutation": _set(("state", "remote_signing_validated"), True)},
+        ),
+        (
+            "synthetic signing authorized",
+            "readiness",
+            {"provider_mutation": _set(("state", "synthetic_signing_authorized"), True)},
+        ),
+        (
+            "production signing authorized",
+            "readiness",
+            {"provider_mutation": _set(("state", "production_signing_authorized"), True)},
         ),
         (
             "production signing completed",
             "readiness",
             {"provider_mutation": _set(("state", "production_signing_completed"), True)},
+        ),
+        (
+            "provider selection removed",
+            "readiness",
+            {"provider_mutation": _set(("state", "provider_selected"), False)},
+        ),
+        (
+            "custody selection removed",
+            "readiness",
+            {"provider_mutation": _set(("state", "custody_model_selected"), False)},
+        ),
+        (
+            "signing scaffold removed",
+            "readiness",
+            {"provider_mutation": _set(("state", "signing_scaffold_implemented"), False)},
+        ),
+        (
+            "verification scaffold removed",
+            "readiness",
+            {"provider_mutation": _set(("state", "verification_scaffold_implemented"), False)},
+        ),
+        (
+            "release readiness enabled",
+            "readiness",
+            {"provider_mutation": _set(("state", "release_ready"), True)},
+        ),
+        (
+            "publishing enabled",
+            "readiness",
+            {"provider_mutation": _set(("state", "publishing_allowed"), True)},
+        ),
+        (
+            "IV treated as preferred automation class",
+            "certificate-class",
+            {"provider_mutation": _set(("certificate", "preferred_class"), "IV")},
+        ),
+        (
+            "IV treated as confirmed automated class",
+            "certificate-class",
+            {
+                "provider_mutation": _set(
+                    ("certificate", "automated_certificate_classes"),
+                    ["IV", "OV", "EV"],
+                )
+            },
+        ),
+        (
+            "stale provider-not-selected blocker",
+            "stale-blocker",
+            {
+                "provider_mutation": _insert_sorted(
+                    ("blockers",),
+                    "code-signing certificate provider not selected",
+                )
+            },
+        ),
+        (
+            "stale custody-not-selected blocker",
+            "stale-blocker",
+            {
+                "release_mutation": _insert_sorted(
+                    ("authenticode", "blockers"),
+                    "private-key custody model not approved",
+                )
+            },
+        ),
+        (
+            "stale scaffold-not-implemented blocker",
+            "stale-blocker",
+            {
+                "provider_mutation": _insert_sorted(
+                    ("blockers",),
+                    "signing and verification scaffold not implemented",
+                )
+            },
         ),
         (
             "project license status changed",
@@ -476,6 +884,30 @@ def main() -> int:
             },
         ),
         (
+            "synthetic mode requires production authorization",
+            "signing-purpose",
+            {
+                "script_path": SIGN_SCRIPT_PATH,
+                "script_mutation": _replace(
+                    b"if ($Config.state.account_provisioned -ne $true -or",
+                    b"if ($Config.state.production_signing_authorized -ne $true -or\n"
+                    b"    $Config.state.account_provisioned -ne $true -or",
+                ),
+            },
+        ),
+        (
+            "synthetic mode requires prior remote validation",
+            "signing-purpose",
+            {
+                "script_path": SIGN_SCRIPT_PATH,
+                "script_mutation": _replace(
+                    b"if ($Config.state.account_provisioned -ne $true -or",
+                    b"if ($Config.state.remote_signing_validated -ne $true -or\n"
+                    b"    $Config.state.account_provisioned -ne $true -or",
+                ),
+            },
+        ),
+        (
             "verification script missing /pa",
             "verification-script",
             {
@@ -494,6 +926,28 @@ def main() -> int:
                 "script_mutation": _replace(
                     b"Timestamp Verified by",
                     b"Timestamp evidence",
+                ),
+            },
+        ),
+        (
+            "verification thumbprint control omitted",
+            "verification-script",
+            {
+                "script_path": VERIFY_SCRIPT_PATH,
+                "script_mutation": _replace(
+                    b"SignerCertificate.Thumbprint",
+                    b"SignerCertificate.SerialNumber",
+                ),
+            },
+        ),
+        (
+            "publisher changed to substring-only match",
+            "publisher",
+            {
+                "script_path": VERIFY_SCRIPT_PATH,
+                "script_mutation": _replace(
+                    b"if (-not [string]::Equals($SignerPublisher, $ExpectedPublisher, [StringComparison]::Ordinal)) {",
+                    b"if ($SignerPublisher.IndexOf($ExpectedPublisher, [StringComparison]::OrdinalIgnoreCase) -lt 0) {",
                 ),
             },
         ),

@@ -2,7 +2,7 @@
 
 ## Scope
 
-Phase 7D-R1 selects a technical provider and custody model and adds fail-closed local command scaffolding. It does not purchase or provision a certificate, create credentials, install provider software, sign a file, modify a workflow, build the application, or authorize a release.
+Phase 7D-R1-F1 preserves the selected provider and custody model, separates synthetic and production signing gates, and hardens signer identity verification. It does not purchase or provision a certificate, create credentials, install provider software, sign a file, modify a workflow, build the application, or authorize a release.
 
 The machine-readable provider contract is `legal/authenticode-provider.json`. Production and release claims remain owned by `legal/release-assurance-policy.json` and remain false.
 
@@ -18,7 +18,9 @@ The selected technical provider is SSL.com eSigner:
 - account provisioned: false;
 - procurement authorized: false;
 - production signing authorized: false;
-- certificate class: `IV_OR_OV_OPERATOR_DECISION_PENDING`.
+- certificate class selected: false;
+- operator entity type: `UNRESOLVED`;
+- preferred class: unset.
 
 SSL.com states that eSigner for Code stores private keys in an SSL.com-managed FIPS 140-2 Level 3 cloud HSM and that private keys never leave that HSM. eSigner CKA exposes the service through Windows CNG/KSP so standard Windows tools such as SignTool can use the cloud-held key.
 
@@ -36,7 +38,7 @@ No project-license file or status is changed by this decision.
 
 ## Official Provider Revalidation
 
-Only official SSL.com sources were used on `2026-07-29`.
+Only official SSL.com sources were used for R1 and revalidated for R1-F1 on `2026-08-18`.
 
 The official download page identifies the current release as:
 
@@ -69,7 +71,9 @@ Official installation guidance describes two modes:
 - manual mode uses provider account authentication and a per-signing OTP;
 - automated mode uses protected provider authentication material and a master-key file and is documented for OV or EV certificates.
 
-This creates a material IV-versus-OV decision. IV remains a candidate certificate class, but it must not be assumed to support unattended CI through the documented CKA automated mode. R1 stores no account name, password, OTP, TOTP material, master key, certificate identifier, or other credential.
+Current official SSL.com material is not specific enough to select a certificate class for unattended use. General eSigner product material advertises IV, OV, and EV code-signing certificates with eSigner, while the CKA installation and CI/CD guidance identify OV or EV for automated mode. The machine-readable policy therefore records `automated_certificate_classes=["OV","EV"]`, leaves `preferred_class=null`, and requires provider confirmation before IV automation could be accepted.
+
+R1-F1 stores no account name, password, OTP, TOTP material, master key, certificate identifier, or other credential. It does not select IV, OV, or EV.
 
 CKA loads enrolled certificates into the Windows Current User Personal certificate store and identifies them by common name and serial number. The provider examples select the first code-signing certificate. This project instead requires an explicit thumbprint after provisioning and fails closed when selection is absent or ambiguous. The thumbprint is a selector, not a signing digest; `/fd SHA256` remains mandatory.
 
@@ -114,13 +118,19 @@ The canonical SignTool contract is:
 signtool.exe sign /fd SHA256 /tr <approved-rfc3161-url> /td SHA256 /sha1 <certificate-selector> Youtube.Downloaderbs.exe
 ```
 
-The certificate selector is required only after provisioning and must never be logged. Signing fails before invoking SignTool while any provider, certificate, credential, timestamp, remote-validation, or production authorization state is false.
+The certificate selector is required only after provisioning and must never be logged. Real signing requires an explicit purpose with exactly two accepted values: `synthetic` or `production`. `PlanOnly` remains non-signing and does not require a real signing purpose.
+
+Synthetic signing requires provider account provisioning, certificate provisioning, configured credentials, timestamp approval, explicit synthetic authorization, exact expected publisher identity, and exact expected certificate thumbprint. It deliberately does not require procurement authorization, production signing authorization, prior remote validation, release readiness, or publishing authorization.
+
+Production signing requires every synthetic prerequisite, explicit production purpose, production signing authorization, prior successful remote synthetic validation, and all independent production release gates identified in the provider contract. Production signing remains blocked in this checkpoint.
 
 `scripts/sign_authenticode.ps1`:
 
 - accepts one target;
 - validates the canonical target and unsigned PE structure;
 - reads an explicit provider configuration;
+- accepts only `synthetic` or `production` as real signing purposes;
+- reads the release-assurance policy only for production signing;
 - has no password, OTP, token, PFX, or private-key parameter;
 - never downloads or installs provider software;
 - provides a deterministic `-PlanOnly` mode;
@@ -155,12 +165,16 @@ It requires:
 - successful verification text;
 - an RFC 3161 timestamp;
 - SHA-256 evidence;
-- the expected publisher in SignTool and PowerShell Authenticode inspection;
+- the expected publisher in SignTool as supporting evidence;
+- an exact expected publisher display identity from the signer certificate;
+- an exact normalized signer-certificate thumbprint match;
 - a valid PowerShell Authenticode result;
 - a timestamp certificate;
 - a SHA-256 hash recorded only after verification.
 
 Missing, invalid, untrusted, untimestamped, unexpected, or otherwise unverifiable signatures stop the process. Downstream packaging is allowed only for the byte-identical signed EXE matching the recorded post-verification SHA-256.
+
+Thumbprints are normalized for hexadecimal case and whitespace before exact comparison. Neither the signing wrapper nor the verification result prints the configured or observed thumbprint. Publisher substring matching is not accepted as the primary identity control.
 
 ## Final-Byte Ordering
 
@@ -179,13 +193,15 @@ No byte-changing operation may affect the EXE after signature verification. A ch
 
 ## Non-Claims
 
-R1 does not claim:
+R1-F1 does not claim:
 
 - certificate-class selection;
 - provider or certificate provisioning;
 - configured credentials;
 - approved timestamp authority;
 - remote signing validation;
+- synthetic signing authorization;
+- production signing authorization;
 - a signed, timestamped, or verified production EXE;
 - a production SBOM or provenance attestation;
 - release-assurance readiness;
@@ -193,13 +209,15 @@ R1 does not claim:
 
 ## Remaining Blockers
 
-- IV versus OV operator decision;
+- certificate class decision;
 - provider account and identity validation;
 - certificate issuance;
 - protected credential and environment configuration;
-- approved timestamp endpoint;
+- protected remote signing environment;
+- timestamp authority approval;
 - immutable CKA package identity;
 - remote synthetic signing validation;
+- production signing workflow integration;
 - production final bytes;
 - production signature and timestamp verification.
 

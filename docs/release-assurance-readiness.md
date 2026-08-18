@@ -2,7 +2,7 @@
 
 ## Scope
 
-Phase 7D-R1 selects the SSL.com eSigner technical provider and a provider-managed cloud-HSM custody model and adds fail-closed local Authenticode signing and verification scaffolding. It does not purchase or provision a certificate, create or store credentials, install provider software, sign a file, generate a production attestation, modify a workflow, or authorize publishing.
+Phase 7D-R1-F1 preserves the SSL.com eSigner provider and provider-managed cloud-HSM custody selection, separates synthetic from production signing gates, and requires exact signer-certificate identity verification. It does not purchase or provision a certificate, create or store credentials, install provider software, sign a file, generate a production attestation, modify a workflow, or authorize publishing.
 
 The provider-specific machine-readable owner is `legal/authenticode-provider.json`. Combined release states remain owned by `legal/release-assurance-policy.json`. Their readiness fields and claims are fail-closed. Existing legal, source-availability, source-kit, release, and publishing gates remain independent and unchanged.
 
@@ -15,12 +15,12 @@ The provider-specific machine-readable owner is `legal/authenticode-provider.jso
 - Planning target: a future signed first-party executable, deterministic SPDX 2.3 JSON SBOM, and final-byte GitHub attestations.
 - Implemented state: deterministic synthetic SBOM and release-bundle controls, synthetic attestation integration, and local fail-closed Authenticode command scaffolding.
 - Verified state: provider/custody, policy, target, command, ordering, secret-hygiene, workflow, subject, permission, and verification contracts can be checked locally without signing, downloading CKA, invoking `actions/attest`, or requesting OIDC.
-- Blocked state: certificate class, provider provisioning, CKA package integration, real Authenticode signing, production SBOM, provenance, and combined release assurance are not ready.
+- Blocked state: certificate class, provider provisioning, protected remote environment, CKA package integration, synthetic validation, production workflow integration, real Authenticode signing, production SBOM, provenance, and combined release assurance are not ready.
 - Future authorization: each implementation stage and any publishing action require separate approval.
 
 ## Non-Claims
 
-Phase 7D-R1 does not claim that a production executable is signed, timestamped, or signature-verified. It does not claim that a production SBOM or production provenance attestation exists. The Phase 7C synthetic CI integration passed same-repository remote CI, but that result is not production attestation evidence. Plan-only Authenticode output is a sanitized command contract, not a signature.
+Phase 7D-R1-F1 does not claim that synthetic or production Authenticode signing has occurred. It does not claim that a production executable is signed, timestamped, or signature-verified, or that a production SBOM or provenance attestation exists. The Phase 7C synthetic attestation CI result is not Authenticode signing evidence. Plan-only Authenticode output is a sanitized command contract, not a signature.
 
 An eventual attestation would link subject bytes to build identity and provenance evidence. It would not certify security, absence of vulnerabilities, legal compliance, complete source correspondence, reproducibility, or release readiness. Existing `legal_compliance_certified`, `source_availability_certified`, `source_assets_created`, `source_kits_ready`, `assembly_authorized`, `release_gate_reconsideration_allowed`, `release_ready`, and `publishing_allowed` states remain false.
 
@@ -47,7 +47,7 @@ Only `Youtube.Downloaderbs.exe` is a first-party signing candidate. A future sig
 
 Signature verification is a separate mandatory operation. The planning contract requires the Windows Default Authenticode verification policy, represented by SignTool `verify /pa`, plus explicit timestamp verification. A successful signing command alone is not release evidence.
 
-The selected technical provider is SSL.com eSigner with a provider-managed cloud HSM and a non-exportable provider key. The certificate class remains `IV_OR_OV_OPERATOR_DECISION_PENDING`; no account, certificate, expected publisher, certificate thumbprint, credential source, or timestamp authority is provisioned or approved. The official SSL.com timestamp URL is recorded only as a candidate.
+The selected technical provider is SSL.com eSigner with a provider-managed cloud HSM and a non-exportable provider key. No certificate class is selected. General product material advertises IV, OV, and EV with eSigner, while CKA automated-mode guidance identifies OV or EV. The operator entity type remains unresolved, IV automation requires provider confirmation, and no account, certificate, expected publisher, certificate thumbprint, credential source, or timestamp authority is provisioned or approved.
 
 ## Authenticode Credential Boundary
 
@@ -167,7 +167,7 @@ No byte-changing operation may follow checksum, manifest, or attestation finaliz
 
 ## Verification Strategy
 
-Phase 7D-R1 local verification remains non-signing and non-attesting. The Authenticode verifier enforces file hygiene, strict canonical JSON, duplicate-key rejection, exact provider and custody identities, CKA non-integration, false provisioning/readiness/production states, exact targets and vendor exclusions, signing and verification switches, final-byte ordering, project-license invariants, and rejection of secret, certificate, key, or local-profile material. The existing release-assurance verifier continues to enforce combined non-claims and all Phase 7B/7C controls.
+Phase 7D-R1-F1 local verification remains non-signing and non-attesting. The Authenticode verifier enforces file hygiene, strict canonical JSON, duplicate-key rejection, exact provider/custody/scaffold states, separate synthetic and production purpose gates, CKA non-integration, false provisioning/readiness/production states, exact certificate thumbprint and publisher controls, final-byte ordering, project-license invariants, and rejection of secret, key, or local-profile material. The release-assurance smoke retains the complete Phase 7B/7C negative matrix through a compatibility projection while the strict Phase 7D verifier owns corrected Authenticode semantics.
 
 Later implementation must add independent evidence gates:
 
@@ -199,6 +199,7 @@ Later implementation must add independent evidence gates:
 - Phase 7B: production SBOM generation and release-bundle integration.
 - Phase 7C: synthetic GitHub provenance and SBOM attestation integration, followed by separately authorized remote CI validation.
 - Phase 7D-R1: SSL.com eSigner provider/custody selection and fail-closed local signing/verification scaffold.
+- Phase 7D-R1-F1: separate synthetic/production signing gates, reconcile policy, and require exact signer identity.
 - Phase 7D-R2: certificate-class decision, provider provisioning, and real synthetic signing CI, only after separate authorization.
 - Phase 7E: end-to-end signed release-assurance rehearsal.
 
@@ -206,7 +207,7 @@ Each stage requires separate review. Actual publishing remains separately author
 
 ## Official Evidence
 
-Phase 7A2/7C records below were retrieved on `2026-07-17T03:10:40Z`. SSL.com records were revalidated on `2026-07-29`. Findings are paraphrased; no external document is copied into the repository.
+Phase 7A2/7C records below were retrieved on `2026-07-17T03:10:40Z`. SSL.com records were revalidated on `2026-08-18`. Findings are paraphrased; no external document is copied into the repository.
 
 | Source | Owner and revision | Purpose and finding | Weight |
 | --- | --- | --- | --- |
@@ -229,6 +230,6 @@ The exact action commit is implementation-specific evidence. Both `action.yml` a
 
 ## Current Decision
 
-The SSL.com eSigner provider and provider-managed cloud-HSM custody model are selected. Signing and verification scaffolds are implemented locally, but Authenticode production implementation and readiness remain false. The current CKA installer has no accepted immutable digest, so `cka_package_integrated=false`. Certificate class, account, certificate, credential source, expected publisher, timestamp authority, and remote signing validation remain unresolved.
+The SSL.com eSigner provider and provider-managed cloud-HSM custody model are selected. Signing and verification scaffolds are implemented locally. Synthetic signing no longer depends on production authorization or prior remote validation, while production signing requires both plus independent release gates. Authenticode production implementation and readiness remain false. The current CKA installer has no accepted immutable digest, so `cka_package_integrated=false`. Certificate class, account, certificate, credential source, expected publisher, expected thumbprint, timestamp authority, protected remote environment, and remote signing validation remain unresolved.
 
 No production final signed bytes, provenance attestation, SBOM attestation, or production attestation verification exists. Combined release-assurance readiness and every assurance claim remain false. The next checkpoint is a separately authorized Phase 7D-R2 certificate-class and provider-provisioning decision; no purchase, credential provisioning, production signing, release, or publishing action is authorized by this document.

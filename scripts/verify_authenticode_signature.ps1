@@ -12,6 +12,10 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$ExpectedPublisher,
 
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$CertificateThumbprint,
+
     [string]$SignToolPath = "signtool.exe"
 )
 
@@ -109,6 +113,18 @@ function Resolve-SignTool {
     return $Command.Source
 }
 
+function Normalize-CertificateThumbprint {
+    param(
+        [Parameter(Mandatory = $true)][string]$Value
+    )
+
+    $Normalized = ($Value -replace "\s", "").ToUpperInvariant()
+    if ($Normalized -notmatch "^[0-9A-F]{40}$") {
+        throw "Expected certificate identity is invalid"
+    }
+    return $Normalized
+}
+
 $Authorized = Assert-AuthorizedTarget -TargetPath $Target -AuthorizedRoot $ReleaseRoot
 $SignToolPath = Resolve-SignTool -Path $SignToolPath
 $VerifyArguments = @("verify", "/pa", "/all", "/v", "/tw", $Authorized.TargetPath)
@@ -139,12 +155,20 @@ $Signature = Get-AuthenticodeSignature -LiteralPath $Authorized.TargetPath
 if ($Signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
     throw "PowerShell Authenticode verification did not return Valid"
 }
-if ($null -eq $Signature.SignerCertificate -or
-    $Signature.SignerCertificate.Subject.IndexOf(
-        $ExpectedPublisher,
-        [StringComparison]::OrdinalIgnoreCase
-    ) -lt 0) {
-    throw "Authenticode signer identity does not match the expected publisher"
+if ($null -eq $Signature.SignerCertificate) {
+    throw "Authenticode signer certificate is missing"
+}
+$ExpectedThumbprint = Normalize-CertificateThumbprint -Value $CertificateThumbprint
+$ActualThumbprint = Normalize-CertificateThumbprint -Value $Signature.SignerCertificate.Thumbprint
+if ($ActualThumbprint -cne $ExpectedThumbprint) {
+    throw "Authenticode signer certificate does not match the expected identity"
+}
+$SignerPublisher = $Signature.SignerCertificate.GetNameInfo(
+    [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
+    $false
+)
+if (-not [string]::Equals($SignerPublisher, $ExpectedPublisher, [StringComparison]::Ordinal)) {
+    throw "Authenticode signer publisher does not exactly match the expected identity"
 }
 if ($null -eq $Signature.TimeStamperCertificate) {
     throw "Authenticode timestamp certificate is missing"

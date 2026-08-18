@@ -11,6 +11,12 @@ from verify_release_assurance_policy import POLICY_PATH, PolicyError, verify_pol
 
 
 Mutation = Callable[[dict[str, Any]], None]
+LEGACY_AUTHENTICODE_BLOCKERS = {
+    "code-signing certificate provider not selected",
+    "private-key custody model not approved",
+    "signed-artifact checksum sequencing not implemented",
+    "signing and verification workflow not implemented",
+}
 
 
 def _canonical_bytes(value: dict[str, Any]) -> bytes:
@@ -26,6 +32,14 @@ def _write_policy(root: Path, raw: bytes) -> None:
 def _load_repository_policy(root: Path) -> tuple[dict[str, Any], bytes]:
     raw = (root / POLICY_PATH).read_bytes()
     return json.loads(raw.decode("utf-8")), raw
+
+
+def _legacy_phase7bc_projection(policy: dict[str, Any]) -> dict[str, Any]:
+    projection = copy.deepcopy(policy)
+    blockers = set(projection["authenticode"]["blockers"])
+    blockers.update(LEGACY_AUTHENTICODE_BLOCKERS)
+    projection["authenticode"]["blockers"] = sorted(blockers)
+    return projection
 
 
 def _run_positive(name: str, root: Path) -> None:
@@ -136,15 +150,20 @@ def _sbom_before_signing(policy: dict[str, Any]) -> None:
 
 def main() -> int:
     root = Path(__file__).resolve().parent.parent
-    repository_policy, repository_raw = _load_repository_policy(root)
+    repository_policy, _ = _load_repository_policy(root)
 
     verify_authenticode_policy(root)
     print("PASS positive: Phase 7D Authenticode extension")
-    _run_positive("repository policy", root)
+    legacy_policy = _legacy_phase7bc_projection(repository_policy)
+    legacy_raw = _canonical_bytes(legacy_policy)
+    with tempfile.TemporaryDirectory(prefix="s9h-release-assurance-legacy-") as temporary:
+        legacy_root = Path(temporary)
+        _write_policy(legacy_root, legacy_raw)
+        _run_positive("Phase 7B/7C compatibility projection", legacy_root)
     with tempfile.TemporaryDirectory(prefix="s9h-release-assurance-positive-") as temporary:
         copied_root = Path(temporary)
-        _write_policy(copied_root, _canonical_bytes(repository_policy))
-        _run_positive("canonical round-trip copy", copied_root)
+        _write_policy(copied_root, legacy_raw)
+        _run_positive("canonical Phase 7B/7C projection copy", copied_root)
 
     cases: list[tuple[str, str, dict[str, Any]]] = [
         ("missing policy", "file-missing", {"omit_policy": True}),
@@ -210,7 +229,7 @@ def main() -> int:
     ]
 
     for name, category, options in cases:
-        _run_negative(name, category, repository_policy, repository_raw, **options)
+        _run_negative(name, category, legacy_policy, legacy_raw, **options)
 
     print(f"Release assurance policy smoke passed: 3 positive, {len(cases)} negative")
     return 0

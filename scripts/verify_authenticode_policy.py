@@ -35,16 +35,34 @@ SIGNING_SEQUENCE = [
     "calculate checksums and downstream assurance artifacts",
 ]
 BLOCKERS = [
-    "IV versus OV operator decision",
-    "approved timestamp endpoint",
+    "certificate class decision",
     "certificate issuance",
     "immutable CKA package identity",
     "production final bytes",
     "production signature and timestamp verification",
+    "production signing workflow integration",
     "protected credential and environment configuration",
+    "protected remote signing environment",
     "provider account and identity validation",
     "remote synthetic signing validation",
+    "timestamp authority approval",
 ]
+RELEASE_BLOCKERS = sorted(
+    BLOCKERS
+    + [
+        "CI signing identity not provisioned",
+        "RFC3161 timestamp authority not approved",
+    ]
+)
+STALE_BLOCKERS = {
+    "code-signing certificate provider not selected",
+    "private-key custody model not approved",
+    "signed-artifact checksum sequencing not implemented",
+    "signing and verification scaffold not implemented",
+    "signing and verification workflow not implemented",
+    "signing scaffold not implemented",
+    "verification scaffold not implemented",
+}
 FALSE_CLAIMS = {
     "authenticode_signed",
     "provenance_attested",
@@ -57,20 +75,59 @@ FALSE_GATES = {
     "assembly_authorized",
     "legal_compliance_certified",
     "publishing_allowed",
+    "release_gate_reconsideration_allowed",
     "release_ready",
+    "source_assets_created",
     "source_availability_certified",
     "source_kits_ready",
 }
 PROVIDER_STATE = {
+    "account_provisioned": False,
     "certificate_provisioned": False,
-    "certificate_validation_class_selected": False,
     "credential_source_configured": False,
     "custody_model_selected": True,
+    "production_signing_authorized": False,
     "provider_selected": True,
     "production_signing_completed": False,
+    "publishing_allowed": False,
+    "release_ready": False,
     "remote_signing_validated": False,
+    "signing_scaffold_implemented": True,
+    "synthetic_signing_authorized": False,
     "timestamp_authority_approved": False,
+    "verification_scaffold_implemented": True,
 }
+SYNTHETIC_REQUIRED_STATE = [
+    "account_provisioned",
+    "certificate_provisioned",
+    "credential_source_configured",
+    "synthetic_signing_authorized",
+    "timestamp_authority_approved",
+]
+SYNTHETIC_NOT_REQUIRED = [
+    "provider.procurement_authorized",
+    "release.publishing_allowed",
+    "release.release_ready",
+    "state.production_signing_authorized",
+    "state.remote_signing_validated",
+]
+PRODUCTION_REQUIRED_STATE = [
+    "account_provisioned",
+    "certificate_provisioned",
+    "credential_source_configured",
+    "production_signing_authorized",
+    "remote_signing_validated",
+    "synthetic_signing_authorized",
+    "timestamp_authority_approved",
+]
+PRODUCTION_RELEASE_GATES = [
+    "assembly_authorized",
+    "legal_compliance_certified",
+    "release_gate_reconsideration_allowed",
+    "source_assets_created",
+    "source_availability_certified",
+    "source_kits_ready",
+]
 PRIVATE_KEY_HEADER_RE = re.compile(
     r"-----BEGIN(?: [A-Z0-9-]+)* PRIVATE KEY-----",
     re.IGNORECASE,
@@ -192,7 +249,6 @@ def _validate_provider_policy(policy: dict[str, Any]) -> None:
         "policy_id",
         "provider",
         "repository_constraints",
-        "scaffold",
         "schema_version",
         "signing_contract",
         "state",
@@ -209,18 +265,18 @@ def _validate_provider_policy(policy: dict[str, Any]) -> None:
         "fixed-value",
         "provider policy ID",
     )
+    if isinstance(policy["blockers"], list) and STALE_BLOCKERS.intersection(policy["blockers"]):
+        _fail("stale-blocker", "provider policy contains a stale Authenticode blocker")
     if policy["blockers"] != BLOCKERS:
         _fail("blockers", "required Authenticode blockers changed")
 
     provider = _object(
         policy["provider"],
         {
-            "account_provisioned",
             "alternatives",
             "id",
             "private_key_export",
             "procurement_authorized",
-            "production_signing_authorized",
             "service",
         },
         "provider",
@@ -228,8 +284,7 @@ def _validate_provider_policy(policy: dict[str, Any]) -> None:
     _string(provider["id"], "ssl-com-esigner", "provider", "provider ID")
     _string(provider["service"], "SSL.com eSigner", "provider", "provider service")
     _string(provider["private_key_export"], "forbidden", "custody", "private-key export policy")
-    for key in ("account_provisioned", "procurement_authorized", "production_signing_authorized"):
-        _bool(provider[key], False, "readiness", f"provider {key}")
+    _bool(provider["procurement_authorized"], False, "readiness", "provider procurement_authorized")
     alternatives = provider["alternatives"]
     if not isinstance(alternatives, list) or [item.get("id") for item in alternatives] != [
         "microsoft-artifact-signing-public-trust",
@@ -265,31 +320,43 @@ def _validate_provider_policy(policy: dict[str, Any]) -> None:
 
     certificate = _object(
         policy["certificate"],
-        {"expected_publisher", "provisioned", "validation_class", "validation_class_selected"},
+        {
+            "automated_certificate_classes",
+            "certificate_class_selected",
+            "expected_publisher",
+            "expected_thumbprint",
+            "operator_entity_type",
+            "preferred_class",
+            "product_advertised_certificate_classes",
+            "provider_confirmation_required_for_iv_automation",
+        },
         "certificate",
     )
-    _string(
-        certificate["validation_class"],
-        "IV_OR_OV_OPERATOR_DECISION_PENDING",
+    _bool(certificate["certificate_class_selected"], False, "certificate-class", "certificate class selected")
+    _bool(
+        certificate["provider_confirmation_required_for_iv_automation"],
+        True,
         "certificate-class",
-        "certificate validation class",
+        "IV automation provider confirmation",
     )
-    _bool(certificate["validation_class_selected"], False, "certificate-class", "validation class selected")
-    _bool(certificate["provisioned"], False, "readiness", "certificate provisioned")
-    if certificate["expected_publisher"] is not None:
-        _fail("publisher", "expected publisher must remain unset before provisioning")
+    if certificate["automated_certificate_classes"] != ["OV", "EV"]:
+        _fail("certificate-class", "automated certificate classes must remain OV and EV")
+    if certificate["product_advertised_certificate_classes"] != ["IV", "OV", "EV"]:
+        _fail("certificate-class", "product-advertised certificate classes changed")
+    _string(
+        certificate["operator_entity_type"],
+        "UNRESOLVED",
+        "certificate-class",
+        "operator entity type",
+    )
+    if certificate["preferred_class"] is not None:
+        _fail("certificate-class", "preferred certificate class must remain unset")
+    if certificate["expected_publisher"] is not None or certificate["expected_thumbprint"] is not None:
+        _fail("publisher", "certificate identity must remain unset before provisioning")
 
     state = _object(policy["state"], set(PROVIDER_STATE), "provider state")
     for key, expected in PROVIDER_STATE.items():
         _bool(state[key], expected, "readiness", f"provider state {key}")
-
-    scaffold = _object(
-        policy["scaffold"],
-        {"plan_only_supported", "signing_scaffold_implemented", "verification_scaffold_implemented"},
-        "scaffold",
-    )
-    for key in scaffold:
-        _bool(scaffold[key], True, "scaffold", f"scaffold {key}")
 
     timestamp = _object(
         policy["timestamp"],
@@ -307,6 +374,9 @@ def _validate_provider_policy(policy: dict[str, Any]) -> None:
             "certificate_identifier_logging",
             "file_digest",
             "first_party_targets",
+            "plan_only_supported",
+            "purpose_gates",
+            "real_signing_purposes",
             "sequence",
             "third_party_targets_rejected",
             "timestamp_digest",
@@ -334,12 +404,34 @@ def _validate_provider_policy(policy: dict[str, Any]) -> None:
         "verification policy",
     )
     _string(contract["verification_switch"], "/pa", "verification-contract", "verification switch")
+    _bool(contract["plan_only_supported"], True, "signing-purpose", "PlanOnly support")
     if contract["first_party_targets"] != [FIRST_PARTY_TARGET]:
         _fail("target", "first-party signing target changed")
     if contract["third_party_targets_rejected"] != VENDOR_TARGETS:
         _fail("target", "vendor target exclusions changed")
     if contract["sequence"] != SIGNING_SEQUENCE:
         _fail("ordering", "signing and final-byte sequence changed")
+    if contract["real_signing_purposes"] != ["synthetic", "production"]:
+        _fail("signing-purpose", "real signing purposes must be synthetic and production")
+    purpose_gates = _object(contract["purpose_gates"], {"production", "synthetic"}, "purpose gates")
+    synthetic = _object(
+        purpose_gates["synthetic"],
+        {"not_required_flags", "required_provider_state"},
+        "synthetic purpose gates",
+    )
+    production = _object(
+        purpose_gates["production"],
+        {"required_provider_state", "required_release_gates"},
+        "production purpose gates",
+    )
+    if synthetic["required_provider_state"] != SYNTHETIC_REQUIRED_STATE:
+        _fail("signing-purpose", "synthetic signing prerequisites changed")
+    if synthetic["not_required_flags"] != SYNTHETIC_NOT_REQUIRED:
+        _fail("signing-purpose", "synthetic signing exclusions changed")
+    if production["required_provider_state"] != PRODUCTION_REQUIRED_STATE:
+        _fail("signing-purpose", "production signing prerequisites changed")
+    if production["required_release_gates"] != PRODUCTION_RELEASE_GATES:
+        _fail("signing-purpose", "production release gates changed")
 
     constraints = _object(
         policy["repository_constraints"],
@@ -371,7 +463,7 @@ def _validate_provider_policy(policy: dict[str, Any]) -> None:
         },
         "official evidence",
     )
-    if not re.fullmatch(r"2026-07-29T\d{2}:\d{2}:\d{2}Z", evidence["evidence_retrieved_at_utc"]):
+    if not re.fullmatch(r"2026-08-18T\d{2}:\d{2}:\d{2}Z", evidence["evidence_retrieved_at_utc"]):
         _fail("provider-evidence", "official evidence retrieval time is invalid")
     sources = evidence["sources"]
     if not isinstance(sources, list) or sources != sorted(sources) or not sources:
@@ -488,6 +580,12 @@ def _validate_release_policy(policy: dict[str, Any]) -> None:
         _fail("timestamp", "release policy timestamp contract changed")
     for key in ("certificate_provisioned", "credential_source_selected", "implementation_status", "readiness"):
         _bool(auth.get(key), False, "readiness", f"release policy authenticode {key}")
+    _bool(
+        auth.get("signing_key_custody_approved"),
+        False,
+        "readiness",
+        "release policy provisioned signing-key custody approval",
+    )
     boundary = auth.get("third_party_resigning")
     if not isinstance(boundary, dict) or boundary.get("allowed") is not False:
         _fail("target", "release policy third-party signing boundary changed")
@@ -500,20 +598,11 @@ def _validate_release_policy(policy: dict[str, Any]) -> None:
         "any other vendor-supplied binary",
     }:
         _fail("target", "release policy vendor exclusions changed")
-    required_blockers = {
-        "IV versus OV operator decision",
-        "approved timestamp endpoint",
-        "certificate issuance",
-        "immutable CKA package identity",
-        "production final bytes",
-        "production signature and timestamp verification",
-        "protected credential and environment configuration",
-        "provider account and identity validation",
-        "remote synthetic signing validation",
-    }
     blockers = auth.get("blockers")
-    if not isinstance(blockers, list) or blockers != sorted(blockers) or not required_blockers.issubset(blockers):
-        _fail("blockers", "release policy Authenticode blockers are incomplete")
+    if isinstance(blockers, list) and STALE_BLOCKERS.intersection(blockers):
+        _fail("stale-blocker", "release policy contains a stale Authenticode blocker")
+    if blockers != RELEASE_BLOCKERS:
+        _fail("blockers", "release policy Authenticode blockers changed")
     for key in FALSE_CLAIMS:
         _bool(claims.get(key), False, "nonclaims", f"release claim {key}")
     readiness = integration.get("readiness")
@@ -571,15 +660,24 @@ def _validate_scripts(root: Path) -> None:
         sign,
         [
             "[switch]$PlanOnly",
+            '[ValidateSet("synthetic", "production")]',
             "Assert-AuthorizedTarget",
             "Assert-UnsignedPeStructure",
             "Youtube.Downloaderbs.exe",
             '"sign", "/fd", "SHA256", "/tr", $TimestampUrl, "/td", "SHA256", "/sha1"',
+            "A real signing purpose must be explicitly selected",
+            'if ($SigningPurpose -ceq "production")',
+            "Synthetic signing prerequisites are not satisfied",
+            "synthetic_signing_authorized",
             "timestamp_authority_approved",
-            "$Config.certificate.provisioned",
+            "$Config.state.certificate_provisioned",
             "credential_source_configured",
             "production_signing_authorized",
+            "remote_signing_validated",
+            "Read-ReleaseAssurancePolicy",
+            "Normalize-CertificateThumbprint",
             "verify_authenticode_signature.ps1",
+            "-CertificateThumbprint $NormalizedThumbprint",
             "& $SignToolPath @SignArguments",
         ],
         "signing-script",
@@ -596,6 +694,11 @@ def _validate_scripts(root: Path) -> None:
             "RFC3161",
             "SHA256",
             "ExpectedPublisher",
+            "CertificateThumbprint",
+            "SignerCertificate.Thumbprint",
+            "Normalize-CertificateThumbprint",
+            "GetNameInfo",
+            "[StringComparison]::Ordinal",
             "Get-FileHash",
         ],
         "verification-script",
@@ -605,6 +708,26 @@ def _validate_scripts(root: Path) -> None:
         _fail("ordering", "unsigned PE validation must precede signing")
     if sign.index("& $SignToolPath @SignArguments") > sign.index("verify_authenticode_signature.ps1"):
         _fail("ordering", "verification must follow signing")
+    if sign.index("if ($PlanOnly)") > sign.index("A real signing purpose must be explicitly selected"):
+        _fail("signing-purpose", "PlanOnly must bypass real signing-purpose gates")
+    production_branch = sign.index('if ($SigningPurpose -ceq "production")')
+    for marker in ("$Config.state.production_signing_authorized", "$Config.state.remote_signing_validated"):
+        if sign.index(marker) < production_branch:
+            _fail("signing-purpose", "production-only state leaked into synthetic signing gates")
+    if sign.index("$ReleasePolicy = Read-ReleaseAssurancePolicy") < production_branch:
+        _fail("signing-purpose", "release-assurance gates must be production-only")
+    for marker in PRODUCTION_RELEASE_GATES:
+        if f'"{marker}"' not in sign:
+            _fail("signing-purpose", f"production release gate is missing: {marker}")
+    if "procurement_authorized" in sign:
+        _fail("signing-purpose", "procurement authorization must not gate signing execution")
+    for marker in ("release_ready", "publishing_allowed"):
+        if marker in sign:
+            _fail("signing-purpose", f"derived release state must not gate signing execution: {marker}")
+    if "SignerCertificate.Subject.IndexOf" in verify:
+        _fail("publisher", "publisher substring matching must not be the primary identity control")
+    if "$SignerPublisher.IndexOf" in verify:
+        _fail("publisher", "publisher display identity must use exact comparison")
 
 
 def verify_authenticode_policy(root: Path) -> None:
