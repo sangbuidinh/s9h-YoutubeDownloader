@@ -14,8 +14,11 @@ from verify_authenticode_policy import (
     COMPONENTS_PATH,
     PROVIDER_POLICY_PATH,
     RELEASE_POLICY_PATH,
+    SANDBOX_WORKFLOW_PATH,
     SIGN_SCRIPT_PATH,
+    INSTALLER_VERIFY_SCRIPT_PATH,
     VERIFY_SCRIPT_PATH,
+    WINDOWS_CHECKOUT_PROJECTION_PATHS,
     PolicyError,
     verify_authenticode_policy,
 )
@@ -96,7 +99,9 @@ def _copy_fixture_root(repository_root: Path, destination: Path) -> None:
         RELEASE_POLICY_PATH,
         COMPONENTS_PATH,
         SIGN_SCRIPT_PATH,
+        INSTALLER_VERIFY_SCRIPT_PATH,
         VERIFY_SCRIPT_PATH,
+        SANDBOX_WORKFLOW_PATH,
     ):
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -106,6 +111,149 @@ def _copy_fixture_root(repository_root: Path, destination: Path) -> None:
 def _run_positive(name: str, root: Path) -> None:
     verify_authenticode_policy(root)
     print(f"PASS positive: {name}")
+
+
+def _run_git(root: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        ["git", "-C", str(root), *arguments],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            f"git {' '.join(arguments)} failed for EOL regression: {result.stderr.strip()}"
+        )
+    return result
+
+
+def _initialize_git_fixture(root: Path) -> None:
+    _run_git(root, "init", "--quiet")
+    _run_git(root, "config", "core.autocrlf", "false")
+    _run_git(root, "add", "--all")
+    _run_git(
+        root,
+        "-c",
+        "user.name=Phase 7D EOL Regression",
+        "-c",
+        "user.email=phase-7d-eol@example.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "EOL regression fixture",
+    )
+
+
+def _read_git_blob(root: Path, relative: Path) -> bytes:
+    result = subprocess.run(
+        ["git", "-C", str(root), "cat-file", "blob", f"HEAD:{relative.as_posix()}"],
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise AssertionError(f"could not read committed fixture blob: {relative.as_posix()}")
+    return result.stdout
+
+
+def _expect_eol_rejection(name: str, root: Path, required_text: str | None = None) -> None:
+    try:
+        verify_authenticode_policy(root)
+    except PolicyError as exc:
+        if exc.category != "script-hygiene":
+            raise AssertionError(
+                f"{name}: expected script-hygiene, got {exc.category}: {exc}"
+            ) from exc
+        if required_text is not None and required_text not in str(exc):
+            raise AssertionError(f"{name}: unexpected rejection text: {exc}") from exc
+    else:
+        raise AssertionError(f"{name}: invalid worktree representation unexpectedly passed")
+    print(f"PASS negative: {name} [script-hygiene]")
+
+
+def _run_checkout_eol_regressions(repository_root: Path) -> int:
+    projection_paths = (
+        SIGN_SCRIPT_PATH,
+        VERIFY_SCRIPT_PATH,
+        INSTALLER_VERIFY_SCRIPT_PATH,
+        SANDBOX_WORKFLOW_PATH,
+    )
+    if frozenset(projection_paths) != WINDOWS_CHECKOUT_PROJECTION_PATHS:
+        raise AssertionError("Windows checkout projection path ownership changed")
+
+    with tempfile.TemporaryDirectory(prefix="s9h-authenticode-policy-eol-") as temporary:
+        root = Path(temporary)
+        _copy_fixture_root(repository_root, root)
+        _initialize_git_fixture(root)
+        canonical = {relative: (root / relative).read_bytes() for relative in projection_paths}
+        for relative, raw in canonical.items():
+            if raw.startswith(b"\xef\xbb\xbf") or b"\r" in raw:
+                raise AssertionError(f"{relative.as_posix()} committed fixture is not LF-only")
+            if raw != _read_git_blob(root, relative):
+                raise AssertionError(f"{relative.as_posix()} LF worktree differs from its Git blob")
+        _run_positive("exact LF worktree equals committed blobs", root)
+
+        powershell_paths = (
+            SIGN_SCRIPT_PATH,
+            VERIFY_SCRIPT_PATH,
+            INSTALLER_VERIFY_SCRIPT_PATH,
+        )
+        for relative in powershell_paths:
+            (root / relative).write_bytes(canonical[relative].replace(b"\n", b"\r\n"))
+        _run_positive("proven PowerShell CRLF checkout projections", root)
+
+        workflow_path = root / SANDBOX_WORKFLOW_PATH
+        workflow_lf = canonical[SANDBOX_WORKFLOW_PATH]
+        workflow_crlf = workflow_lf.replace(b"\n", b"\r\n")
+        workflow_path.write_bytes(workflow_crlf)
+        _run_positive("proven sandbox workflow CRLF checkout projection", root)
+
+        sign_path = root / SIGN_SCRIPT_PATH
+        arbitrary_sign = sign_path.read_bytes().replace(
+            b"Set-StrictMode -Version Latest\r\n",
+            b"Set-StrictMode -Version 1\r\n",
+            1,
+        )
+        if arbitrary_sign == sign_path.read_bytes():
+            raise AssertionError("could not create arbitrary PowerShell CRLF regression fixture")
+        sign_path.write_bytes(arbitrary_sign)
+        _expect_eol_rejection("arbitrary PowerShell CRLF content", root, "full CRLF projection")
+        sign_path.write_bytes(canonical[SIGN_SCRIPT_PATH].replace(b"\n", b"\r\n"))
+
+        workflow_cases = (
+            ("arbitrary workflow CRLF content", b"not the sandbox workflow\r\n"),
+            (
+                "one-byte workflow mutation followed by CRLF conversion",
+                workflow_lf.replace(b"timeout-minutes: 30", b"timeout-minutes: 31", 1).replace(
+                    b"\n", b"\r\n"
+                ),
+            ),
+            ("mixed workflow LF and CRLF", workflow_lf.replace(b"\n", b"\r\n", 1)),
+            ("workflow lone CR", workflow_lf.replace(b"\n", b"\r", 1)),
+            ("workflow UTF-8 BOM", b"\xef\xbb\xbf" + workflow_crlf),
+            (
+                "valid but uncommitted workflow YAML",
+                (b"# valid YAML but not the committed blob\n" + workflow_lf).replace(
+                    b"\n", b"\r\n"
+                ),
+            ),
+        )
+        for name, invalid in workflow_cases:
+            if invalid == workflow_crlf:
+                raise AssertionError(f"{name}: fixture did not differ from the valid projection")
+            workflow_path.write_bytes(invalid)
+            _expect_eol_rejection(name, root, "full CRLF projection")
+
+    with tempfile.TemporaryDirectory(prefix="s9h-authenticode-policy-eol-no-git-") as temporary:
+        root = Path(temporary)
+        _copy_fixture_root(repository_root, root)
+        workflow_path = root / SANDBOX_WORKFLOW_PATH
+        workflow_path.write_bytes(workflow_path.read_bytes().replace(b"\n", b"\r\n"))
+        _expect_eol_rejection(
+            "workflow authoritative Git blob unavailable",
+            root,
+            "could not be proven against Git HEAD",
+        )
+    return 8
 
 
 def _run_negative(
@@ -135,6 +283,7 @@ def _run_negative(
         if script_path is not None and script_mutation is not None:
             path = root / script_path
             path.write_bytes(script_mutation(path.read_bytes()))
+        _initialize_git_fixture(root)
         try:
             verify_authenticode_policy(root)
         except PolicyError as exc:
@@ -597,7 +746,9 @@ def main() -> int:
         _copy_fixture_root(root, copied_root)
         provider = _load_json(copied_root, PROVIDER_POLICY_PATH)
         (copied_root / PROVIDER_POLICY_PATH).write_bytes(_canonical_bytes(provider))
+        _initialize_git_fixture(copied_root)
         _run_positive("canonical round-trip fixture", copied_root)
+    eol_negative_count = _run_checkout_eol_regressions(root)
 
     cases: list[tuple[str, str, dict[str, Any]]] = [
         (
@@ -616,9 +767,99 @@ def main() -> int:
             {"provider_mutation": _set(("official_evidence", "cka", "current_release_label"), "main")},
         ),
         (
-            "installer integrated without immutable digest",
+            "installer integration removed",
             "provider-package",
-            {"provider_mutation": _set(("official_evidence", "cka", "cka_package_integrated"), True)},
+            {"provider_mutation": _set(("official_evidence", "cka", "cka_package_integrated"), False)},
+        ),
+        (
+            "immutable installer identity removed",
+            "provider-package",
+            {
+                "provider_mutation": _set(
+                    ("official_evidence", "cka", "immutable_package_identity_established"),
+                    False,
+                )
+            },
+        ),
+        (
+            "pinned installer digest changed",
+            "provider-package",
+            {
+                "provider_mutation": _set(
+                    ("official_evidence", "cka", "package_identity", "sha256"),
+                    "0" * 64,
+                )
+            },
+        ),
+        (
+            "pinned installer byte size changed",
+            "provider-package",
+            {
+                "provider_mutation": _set(
+                    ("official_evidence", "cka", "package_identity", "byte_size"),
+                    1,
+                )
+            },
+        ),
+        (
+            "pinned installer signer changed",
+            "provider-package",
+            {
+                "provider_mutation": _set(
+                    ("official_evidence", "cka", "package_identity", "signer_simple_name"),
+                    "Other Publisher",
+                )
+            },
+        ),
+        (
+            "pinned installer thumbprint changed",
+            "provider-package",
+            {
+                "provider_mutation": _set(
+                    ("official_evidence", "cka", "package_identity", "signer_thumbprint"),
+                    "0" * 40,
+                )
+            },
+        ),
+        (
+            "filename discrepancy hidden",
+            "provider-package",
+            {
+                "provider_mutation": _set(
+                    (
+                        "official_evidence",
+                        "cka",
+                        "package_identity",
+                        "publisher_filename_discrepancy_documented",
+                    ),
+                    False,
+                )
+            },
+        ),
+        (
+            "sandbox account changed to production",
+            "sandbox",
+            {"provider_mutation": _set(("sandbox", "account_type"), "production")},
+        ),
+        (
+            "sandbox automation accepts IV",
+            "certificate-class",
+            {
+                "provider_mutation": _set(
+                    ("sandbox", "automated_certificate_classes"),
+                    ["IV", "OV", "EV"],
+                )
+            },
+        ),
+        (
+            "sandbox workflow live validation claimed",
+            "readiness",
+            {
+                "provider_mutation": _set(
+                    ("sandbox", "workflow_live_validation_completed"),
+                    True,
+                )
+            },
         ),
         (
             "vendor binary target",
@@ -798,6 +1039,11 @@ def main() -> int:
             {"provider_mutation": _set(("state", "verification_scaffold_implemented"), False)},
         ),
         (
+            "sandbox workflow implementation removed",
+            "readiness",
+            {"provider_mutation": _set(("state", "sandbox_workflow_implemented"), False)},
+        ),
+        (
             "release readiness enabled",
             "readiness",
             {"provider_mutation": _set(("state", "release_ready"), True)},
@@ -959,6 +1205,26 @@ def main() -> int:
                 "script_mutation": lambda raw: raw + b'Invoke-WebRequest \"https://example.invalid\"\n',
             },
         ),
+        (
+            "installer verifier attempts network access",
+            "installer-verifier",
+            {
+                "script_path": INSTALLER_VERIFY_SCRIPT_PATH,
+                "script_mutation": lambda raw: raw + b'Invoke-WebRequest "https://example.invalid"\n',
+            },
+        ),
+        (
+            "sandbox installer executes before verification",
+            "ordering",
+            {
+                "script_path": SANDBOX_WORKFLOW_PATH,
+                "script_mutation": lambda raw: raw.replace(
+                    b"& .\\scripts\\verify_esigner_cka_installer.ps1",
+                    b"# verifier delayed\n          & $env:CKA_INSTALLER_PATH /? | Out-Null\n          & .\\scripts\\verify_esigner_cka_installer.ps1",
+                    1,
+                ),
+            },
+        ),
     ]
 
     for name, category, options in cases:
@@ -967,7 +1233,7 @@ def main() -> int:
     fixture_count = _run_wrapper_fixtures(root)
     print(
         "Authenticode policy smoke passed: "
-        f"2 policy positive, {len(cases)} policy/script negative, "
+        f"5 policy positive, {len(cases) + eol_negative_count} policy/script negative, "
         f"{fixture_count} wrapper fixtures"
     )
     return 0

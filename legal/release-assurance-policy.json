@@ -6,7 +6,6 @@
       "RFC3161 timestamp authority not approved",
       "certificate class decision",
       "certificate issuance",
-      "immutable CKA package identity",
       "production final bytes",
       "production signature and timestamp verification",
       "production signing workflow integration",

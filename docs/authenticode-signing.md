@@ -2,7 +2,7 @@
 
 ## Scope
 
-Phase 7D-R1-F1 preserves the selected provider and custody model, separates synthetic and production signing gates, and hardens signer identity verification. It does not purchase or provision a certificate, create credentials, install provider software, sign a file, modify a workflow, build the application, or authorize a release.
+Phase 7D-R2-F1 integrates an exact SSL.com eSigner CKA installer identity gate and a protected, manual-only synthetic Authenticode workflow scaffold. It preserves the selected provider and custody model, keeps synthetic and production signing gates separate, and retains exact signer-certificate identity verification. It does not purchase or provision a certificate, create credentials, install provider software locally, sign a local or production file, dispatch the protected workflow, or authorize a release.
 
 The machine-readable provider contract is `legal/authenticode-provider.json`. Production and release claims remain owned by `legal/release-assurance-policy.json` and remain false.
 
@@ -38,23 +38,31 @@ No project-license file or status is changed by this decision.
 
 ## Official Provider Revalidation
 
-Only official SSL.com sources were used for R1 and revalidated for R1-F1 on `2026-08-18`.
+Only official SSL.com sources were used for the provider evidence, and the exact linked installer bytes were revalidated for R2-F1 on `2026-08-18`.
 
 The official download page identifies the current release as:
 
 - version: `1.1.2`;
 - release label: `SSL-COM-eSigner-CKA_1-1-2_build_20260062`;
-- observed Windows package name: `SSL.COM eSigner CKA_1.1.2_build_202600624.exe`.
+- official linked display filename: `SSL.COM eSigner CKA_1.1.2_build_202600624.exe`.
 
-The package link did not provide an official SHA-256 or another independently verifiable immutable package identity. The release label and observed package filename also use different build suffixes. The official current-release page does not state the installer architecture, and a current official removal command was not established.
+The official label ends in build `20260062`, while the linked display filename contains `202600624`. That filename discrepancy is preserved explicitly and is not normalized away. The repository calculated the SHA-256 from the exact official linked bytes after revalidating their Windows Authenticode identity. The digest is not represented as an SSL.com-published checksum.
 
-Therefore:
+The accepted package identity is:
 
-- `cka_package_integrated=false`;
-- no CKA download is accepted by the repository;
-- no CKA installer is downloaded or installed;
-- no install or removal command is executed;
-- immutable installer identity remains a blocker.
+- size: `16103264` bytes;
+- SHA-256: `3f088403139505ddfb0ed3b56b72893f92c865f98b382753a1e1c695a5cece35`;
+- PE architecture: `x86`;
+- ProductVersion and FileVersion: `1.1.2`;
+- ProductName: `SSL.COM eSigner Cloud Key Adapter`;
+- Authenticode status: `Valid`;
+- signer SimpleName: `SSL Corp`;
+- signer serial: `03987FF7E46C81A6B4343A575FA0F8F3`;
+- signer thumbprint: `B40BDE1B8DBA07DEC2D1E7EDFADD9B1BC51F922D`;
+- signer issuer: `SSL.com EV Code Signing Intermediate CA RSA R3`;
+- timestamp certificate: present.
+
+`scripts/verify_esigner_cka_installer.ps1` verifies the allowed-root and reparse-point boundary, exact filename, byte size, SHA-256, PE architecture, Authenticode status, signer identity, version metadata, product name, and timestamp-certificate presence before the workflow can execute the installer. The verifier performs no download and does not execute the installer. `cka_package_integrated=true` means this exact identity gate and its protected workflow integration are implemented; it does not mean an account, certificate, credential, timestamp authority, or production signing path is provisioned or approved.
 
 The official CI guidance documents a silent installer form:
 
@@ -62,7 +70,7 @@ The official CI guidance documents a silent installer form:
 eSigner_CKA_Installer.exe /CURRENTUSER /VERYSILENT /SUPPRESSMSGBOXES /DIR=<INSTALL_DIR>
 ```
 
-That command is evidence only. It is not approved for execution without a versioned package and verified immutable digest.
+The protected workflow may execute the verified installer only after the exact identity gate passes, only with `/CURRENTUSER`, only under the runner temporary root, and only for an authorized synthetic sandbox run. No local installer execution occurred in this phase.
 
 ## Authentication And Non-Interactive Constraints
 
@@ -73,9 +81,19 @@ Official installation guidance describes two modes:
 
 Current official SSL.com material is not specific enough to select a certificate class for unattended use. General eSigner product material advertises IV, OV, and EV code-signing certificates with eSigner, while the CKA installation and CI/CD guidance identify OV or EV for automated mode. The machine-readable policy therefore records `automated_certificate_classes=["OV","EV"]`, leaves `preferred_class=null`, and requires provider confirmation before IV automation could be accepted.
 
-R1-F1 stores no account name, password, OTP, TOTP material, master key, certificate identifier, or other credential. It does not select IV, OV, or EV.
+R2-F1 stores no account name, password, OTP, TOTP material, master key, certificate identifier, or other credential. It does not select IV, OV, or EV for production. The scaffold references only protected environment secrets `ESIGNER_SANDBOX_USERNAME`, `ESIGNER_SANDBOX_PASSWORD`, and `ESIGNER_SANDBOX_TOTP_SECRET`, plus explicit protected variables for synthetic authorization, certificate class, expected publisher, and expected thumbprint. Missing values fail closed; public demo credentials are not a fallback.
 
 CKA loads enrolled certificates into the Windows Current User Personal certificate store and identifies them by common name and serial number. The provider examples select the first code-signing certificate. This project instead requires an explicit thumbprint after provisioning and fails closed when selection is absent or ambiguous. The thumbprint is a selector, not a signing digest; `/fd SHA256` remains mandatory.
+
+## Protected Synthetic Sandbox Workflow
+
+`.github/workflows/authenticode-sandbox.yml` is actionless, manual-only, and bound to the protected `authenticode-sandbox` environment. It requests only `contents: read`, accepts only `workflow_dispatch` on upstream `main`, validates the exact GitHub-supplied commit, and performs an actionless detached checkout of that commit. It has no release, artifact-upload, push, attestation, or other publishing path.
+
+The workflow requires explicit `ESIGNER_SANDBOX_SIGNING_AUTHORIZED=true`, accepts only an OV or EV sandbox certificate for automated mode, and selects exactly one Current User code-signing certificate by exact normalized thumbprint, exact publisher SimpleName, and private-key presence. It builds the deterministic subject twice and requires identical unsigned hashes before copying exactly one unsigned `Youtube.Downloaderbs.exe` into the signing root. The subject identifies itself as `synthetic / v0.0.0-ci / non-production`.
+
+Only a runtime copy of the provider policy is enabled for the authorized synthetic operation. Production authorization, remote-validation state, release readiness, and publishing remain false. After signing, the workflow requires a changed digest, exact signed SHA-256 reconciliation, exact publisher identity, Default Authenticode `/pa` verification, and an RFC 3161 SHA-256 timestamp. The summary contains sanitized evidence and no credential or certificate identifier. An `always()` cleanup unloads CKA, invokes the unique controlled-root uninstaller when present, and removes the contained runner-temporary state.
+
+No protected workflow dispatch has occurred. No installer was executed by this implementation work, no signing occurred, and no protected environment, account, certificate, secret, or variable provisioning is claimed.
 
 ## Timestamp Candidate
 
@@ -193,7 +211,7 @@ No byte-changing operation may affect the EXE after signature verification. A ch
 
 ## Non-Claims
 
-R1-F1 does not claim:
+R2-F1 does not claim:
 
 - certificate-class selection;
 - provider or certificate provisioning;
@@ -207,6 +225,8 @@ R1-F1 does not claim:
 - release-assurance readiness;
 - release or publishing authorization.
 
+No production file is signed, timestamped, or signature-verified by this phase. The implemented workflow scaffold and exact installer identity gate are static controls, not live signing evidence.
+
 ## Remaining Blockers
 
 - certificate class decision;
@@ -215,7 +235,6 @@ R1-F1 does not claim:
 - protected credential and environment configuration;
 - protected remote signing environment;
 - timestamp authority approval;
-- immutable CKA package identity;
 - remote synthetic signing validation;
 - production signing workflow integration;
 - production final bytes;

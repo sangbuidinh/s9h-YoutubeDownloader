@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,16 @@ RELEASE_POLICY_PATH = Path("legal/release-assurance-policy.json")
 COMPONENTS_PATH = Path("legal/components.json")
 SIGN_SCRIPT_PATH = Path("scripts/sign_authenticode.ps1")
 VERIFY_SCRIPT_PATH = Path("scripts/verify_authenticode_signature.ps1")
+INSTALLER_VERIFY_SCRIPT_PATH = Path("scripts/verify_esigner_cka_installer.ps1")
+SANDBOX_WORKFLOW_PATH = Path(".github/workflows/authenticode-sandbox.yml")
+WINDOWS_CHECKOUT_PROJECTION_PATHS = frozenset(
+    {
+        SIGN_SCRIPT_PATH,
+        VERIFY_SCRIPT_PATH,
+        INSTALLER_VERIFY_SCRIPT_PATH,
+        SANDBOX_WORKFLOW_PATH,
+    }
+)
 
 BASELINE_COMMIT = "45ecd30aaa95661778956b6724aaccd98bfe66c1"
 FIRST_PARTY_TARGET = "Youtube.Downloaderbs.exe"
@@ -37,7 +48,6 @@ SIGNING_SEQUENCE = [
 BLOCKERS = [
     "certificate class decision",
     "certificate issuance",
-    "immutable CKA package identity",
     "production final bytes",
     "production signature and timestamp verification",
     "production signing workflow integration",
@@ -92,6 +102,7 @@ PROVIDER_STATE = {
     "publishing_allowed": False,
     "release_ready": False,
     "remote_signing_validated": False,
+    "sandbox_workflow_implemented": True,
     "signing_scaffold_implemented": True,
     "synthetic_signing_authorized": False,
     "timestamp_authority_approved": False,
@@ -249,6 +260,7 @@ def _validate_provider_policy(policy: dict[str, Any]) -> None:
         "policy_id",
         "provider",
         "repository_constraints",
+        "sandbox",
         "schema_version",
         "signing_contract",
         "state",
@@ -451,6 +463,51 @@ def _validate_provider_policy(policy: dict[str, Any]) -> None:
         "project license status change authorization",
     )
 
+    sandbox = _object(
+        policy["sandbox"],
+        {
+            "account_type",
+            "automated_certificate_classes",
+            "certificate_class_selected_for_production",
+            "certificate_secret_required_by_current_cli",
+            "environment",
+            "expected_secret_names",
+            "expected_variable_names",
+            "production_certificate_provisioned",
+            "workflow_live_validation_completed",
+        },
+        "sandbox",
+    )
+    _string(sandbox["account_type"], "sandbox", "sandbox", "sandbox account type")
+    _string(
+        sandbox["environment"],
+        "authenticode-sandbox",
+        "sandbox",
+        "sandbox environment",
+    )
+    if sandbox["automated_certificate_classes"] != ["OV", "EV"]:
+        _fail("certificate-class", "sandbox automated classes must remain OV and EV")
+    if sandbox["expected_secret_names"] != [
+        "ESIGNER_SANDBOX_PASSWORD",
+        "ESIGNER_SANDBOX_TOTP_SECRET",
+        "ESIGNER_SANDBOX_USERNAME",
+    ]:
+        _fail("sandbox-secrets", "sandbox secret-name contract changed")
+    if sandbox["expected_variable_names"] != [
+        "ESIGNER_SANDBOX_CERTIFICATE_CLASS",
+        "ESIGNER_SANDBOX_EXPECTED_PUBLISHER",
+        "ESIGNER_SANDBOX_EXPECTED_THUMBPRINT",
+        "ESIGNER_SANDBOX_SIGNING_AUTHORIZED",
+    ]:
+        _fail("sandbox-secrets", "sandbox variable-name contract changed")
+    for key in (
+        "certificate_class_selected_for_production",
+        "certificate_secret_required_by_current_cli",
+        "production_certificate_provisioned",
+        "workflow_live_validation_completed",
+    ):
+        _bool(sandbox[key], False, "readiness", f"sandbox {key}")
+
     evidence = _object(
         policy["official_evidence"],
         {
@@ -485,6 +542,7 @@ def _validate_provider_policy(policy: dict[str, Any]) -> None:
             "immutable_package_identity_established",
             "install_command",
             "install_command_documented",
+            "package_identity",
             "removal_command",
             "removal_command_documented",
         },
@@ -504,15 +562,102 @@ def _validate_provider_policy(policy: dict[str, Any]) -> None:
         "provider-package",
         "CKA Windows package",
     )
-    for key in ("cka_package_integrated", "immutable_package_identity_established", "removal_command_documented"):
-        _bool(cka[key], False, "provider-package", f"CKA {key}")
+    for key in ("cka_package_integrated", "immutable_package_identity_established"):
+        _bool(cka[key], True, "provider-package", f"CKA {key}")
+    _bool(cka["removal_command_documented"], False, "provider-package", "CKA removal command documented")
     _bool(cka["install_command_documented"], True, "provider-package", "CKA install command documented")
-    if cka["immutable_digest"] is not None or cka["removal_command"] is not None:
-        _fail("provider-package", "unverified CKA digest or removal command must remain unset")
-    if not cka["architecture_evidence"].endswith("not stated by the official current-release page"):
-        _fail("provider-package", "CKA architecture uncertainty changed")
+    _string(
+        cka["immutable_digest"],
+        "3f088403139505ddfb0ed3b56b72893f92c865f98b382753a1e1c695a5cece35",
+        "provider-package",
+        "CKA immutable digest",
+    )
+    _string(
+        cka["architecture_evidence"],
+        "x86 PE machine identity verified from the exact repository-pinned official linked bytes",
+        "provider-package",
+        "CKA architecture evidence",
+    )
+    _string(
+        cka["removal_command"],
+        "Discover exactly one unins*.exe under the controlled installation root and invoke /VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
+        "provider-package",
+        "CKA removal behavior",
+    )
     if "VERYSILENT" not in cka["install_command"] or "<INSTALL_DIR>" not in cka["install_command"]:
         _fail("provider-package", "CKA documented install command changed")
+
+    identity = _object(
+        cka["package_identity"],
+        {
+            "architecture",
+            "authenticode_status_required",
+            "byte_size",
+            "digest_provenance",
+            "file_version",
+            "filename_matches_release_label_exactly",
+            "official_resource_url",
+            "product_name",
+            "product_version",
+            "provider",
+            "publisher_filename_discrepancy_documented",
+            "release_page_label",
+            "resource_display_filename",
+            "resource_namespace",
+            "sha256",
+            "signer_issuer",
+            "signer_serial",
+            "signer_simple_name",
+            "signer_thumbprint",
+            "timestamp_certificate_required",
+        },
+        "CKA package identity",
+    )
+    expected_identity = {
+        "architecture": "x86",
+        "authenticode_status_required": "Valid",
+        "byte_size": 16103264,
+        "file_version": "1.1.2",
+        "official_resource_url": "https://app.esigner.com/documents/7d2c9a7f-99fe-4053-bb1e-07e485a739cf/final",
+        "product_name": "SSL.COM eSigner Cloud Key Adapter",
+        "product_version": "1.1.2",
+        "provider": "SSL.com",
+        "release_page_label": "SSL-COM-eSigner-CKA_1-1-2_build_20260062",
+        "resource_display_filename": "SSL.COM eSigner CKA_1.1.2_build_202600624.exe",
+        "resource_namespace": "SSL-COM-eSigner-CKA_1-1-2_build_20260062",
+        "sha256": "3f088403139505ddfb0ed3b56b72893f92c865f98b382753a1e1c695a5cece35",
+        "signer_issuer": "CN=SSL.com EV Code Signing Intermediate CA RSA R3, O=SSL Corp, L=Houston, S=Texas, C=US",
+        "signer_serial": "03987FF7E46C81A6B4343A575FA0F8F3",
+        "signer_simple_name": "SSL Corp",
+        "signer_thumbprint": "B40BDE1B8DBA07DEC2D1E7EDFADD9B1BC51F922D",
+    }
+    for key, expected in expected_identity.items():
+        if identity[key] != expected or type(identity[key]) is not type(expected):
+            _fail("provider-package", f"CKA package identity changed: {key}")
+    _bool(
+        identity["filename_matches_release_label_exactly"],
+        False,
+        "provider-package",
+        "CKA filename exact-match state",
+    )
+    _bool(
+        identity["publisher_filename_discrepancy_documented"],
+        True,
+        "provider-package",
+        "CKA filename discrepancy state",
+    )
+    _bool(
+        identity["timestamp_certificate_required"],
+        True,
+        "provider-package",
+        "CKA timestamp requirement",
+    )
+    _string(
+        identity["digest_provenance"],
+        "Repository-calculated SHA-256 of the exact official SSL.com linked bytes after Authenticode validation; not represented as an SSL.com-published checksum",
+        "provider-package",
+        "CKA digest provenance",
+    )
 
     integration = _object(
         evidence["integration"],
@@ -623,20 +768,73 @@ def _validate_project_license(components: dict[str, Any], provider: dict[str, An
         _fail("project-license", "provider policy project license status does not match legal inventory")
 
 
+def _decode_lf_script(raw: bytes, relative: Path, *, source: str) -> str:
+    if raw.startswith(b"\xef\xbb\xbf") or b"\r" in raw:
+        _fail(
+            "script-hygiene",
+            f"{relative.as_posix()} {source} must be UTF-8 without BOM and LF-only",
+        )
+    if not raw.endswith(b"\n") or raw.endswith(b"\n\n"):
+        _fail(
+            "script-hygiene",
+            f"{relative.as_posix()} {source} must have exactly one final newline",
+        )
+    try:
+        return raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        _fail("script-hygiene", f"{relative.as_posix()} {source} is not UTF-8")
+        raise AssertionError from exc
+
+
+def _read_committed_script_blob(root: Path, relative: Path) -> bytes:
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "cat-file",
+                "blob",
+                f"HEAD:{relative.as_posix()}",
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError as exc:
+        _fail(
+            "script-hygiene",
+            f"{relative.as_posix()} worktree representation could not be proven against Git HEAD",
+        )
+        raise AssertionError from exc
+    if result.returncode != 0:
+        _fail(
+            "script-hygiene",
+            f"{relative.as_posix()} worktree representation could not be proven against Git HEAD",
+        )
+    committed = result.stdout
+    _decode_lf_script(committed, relative, source="committed Git blob")
+    return committed
+
+
 def _read_script(root: Path, relative: Path) -> str:
     path = root / relative
     if not path.is_file():
         _fail("script-missing", f"{relative.as_posix()} is missing")
     raw = path.read_bytes()
-    if raw.startswith(b"\xef\xbb\xbf") or b"\r" in raw:
-        _fail("script-hygiene", f"{relative.as_posix()} must be UTF-8 without BOM and LF-only")
-    if not raw.endswith(b"\n") or raw.endswith(b"\n\n"):
-        _fail("script-hygiene", f"{relative.as_posix()} must have exactly one final newline")
-    try:
-        return raw.decode("utf-8", errors="strict")
-    except UnicodeDecodeError as exc:
-        _fail("script-hygiene", f"{relative.as_posix()} is not UTF-8")
-        raise AssertionError from exc
+    if relative not in WINDOWS_CHECKOUT_PROJECTION_PATHS:
+        return _decode_lf_script(raw, relative, source="worktree file")
+    committed = _read_committed_script_blob(root, relative)
+    committed_text = committed.decode("utf-8", errors="strict")
+    if raw == committed:
+        return committed_text
+    if raw == committed.replace(b"\n", b"\r\n"):
+        return committed_text
+    _fail(
+        "script-hygiene",
+        f"{relative.as_posix()} worktree bytes are not an exact LF or full CRLF projection of the committed Git blob",
+    )
+    raise AssertionError
 
 
 def _require_source(source: str, markers: list[str], category: str, label: str) -> None:
@@ -648,6 +846,8 @@ def _require_source(source: str, markers: list[str], category: str, label: str) 
 def _validate_scripts(root: Path) -> None:
     sign = _read_script(root, SIGN_SCRIPT_PATH)
     verify = _read_script(root, VERIFY_SCRIPT_PATH)
+    installer_verify = _read_script(root, INSTALLER_VERIFY_SCRIPT_PATH)
+    sandbox_workflow = _read_script(root, SANDBOX_WORKFLOW_PATH)
     for label, source in (("signing script", sign), ("verification script", verify)):
         if re.search(r"(?i)\b(?:Invoke-WebRequest|Start-BitsTransfer|curl|wget|msiexec|Expand-Archive)\b", source):
             _fail("download-install", f"{label} must not download or install software")
@@ -704,6 +904,61 @@ def _validate_scripts(root: Path) -> None:
         "verification-script",
         "verification script",
     )
+    _require_source(
+        installer_verify,
+        [
+            "Assert-InstallerPath",
+            "Get-PeArchitecture",
+            "Get-FileHash",
+            "Get-AuthenticodeSignature",
+            "SignerCertificate",
+            "TimeStamperCertificate",
+            "signer_serial",
+            "signer_thumbprint",
+            "signer_issuer",
+            "FileVersion",
+            "ProductVersion",
+            "ProductName",
+            "ReparsePoint",
+            "StartsWith($RootPrefix, [StringComparison]::OrdinalIgnoreCase)",
+        ],
+        "installer-verifier",
+        "CKA installer verifier",
+    )
+    if re.search(r"(?i)\b(?:Invoke-WebRequest|Invoke-RestMethod|Start-BitsTransfer|curl|wget)\b", installer_verify):
+        _fail("installer-verifier", "CKA installer verifier must remain network-free")
+    _require_source(
+        sandbox_workflow,
+        [
+            "workflow_dispatch:",
+            "environment: authenticode-sandbox",
+            "contents: read",
+            "refs/heads/main",
+            "Verify exact CKA installer identity before execution",
+            "verify_esigner_cka_installer.ps1",
+            "Install verified CKA in controlled location",
+            "-mode sandbox",
+            "-SigningPurpose synthetic",
+            "SANDBOX_EXPECTED_THUMBPRINT",
+            "SANDBOX_EXPECTED_PUBLISHER",
+            "HasPrivateKey",
+            "Unsigned SHA-256",
+            "Signed SHA-256",
+            "if: always()",
+            "unload",
+            "Remove-Item -LiteralPath $SandboxRoot -Recurse -Force",
+        ],
+        "sandbox-workflow",
+        "Authenticode sandbox workflow",
+    )
+    verify_call = "& .\\scripts\\verify_esigner_cka_installer.ps1"
+    installer_call = "& $env:CKA_INSTALLER_PATH"
+    if sandbox_workflow.index(verify_call) > sandbox_workflow.index(installer_call):
+        _fail("ordering", "CKA installer verification must precede installer execution")
+    if "uses:" in sandbox_workflow:
+        _fail("sandbox-workflow", "Authenticode sandbox workflow must remain actionless")
+    if re.search(r"(?m)^\s{2}(?:push|pull_request|pull_request_target|schedule|workflow_run|repository_dispatch):", sandbox_workflow):
+        _fail("sandbox-workflow", "Authenticode sandbox workflow must remain manual-only")
     if sign.index("Assert-UnsignedPeStructure") > sign.index("& $SignToolPath @SignArguments"):
         _fail("ordering", "unsigned PE validation must precede signing")
     if sign.index("& $SignToolPath @SignArguments") > sign.index("verify_authenticode_signature.ps1"):

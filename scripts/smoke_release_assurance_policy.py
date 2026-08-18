@@ -13,6 +13,7 @@ from verify_release_assurance_policy import POLICY_PATH, PolicyError, verify_pol
 Mutation = Callable[[dict[str, Any]], None]
 LEGACY_AUTHENTICODE_BLOCKERS = {
     "code-signing certificate provider not selected",
+    "immutable CKA package identity",
     "private-key custody model not approved",
     "signed-artifact checksum sequencing not implemented",
     "signing and verification workflow not implemented",

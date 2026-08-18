@@ -1,0 +1,452 @@
+name: Authenticode Sandbox Validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox-signing:
+    name: Protected synthetic Authenticode signing
+    environment: authenticode-sandbox
+    permissions:
+      contents: read
+    runs-on: windows-2022
+    timeout-minutes: 30
+
+    steps:
+      - name: Check execution boundary and checkout exact source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          if ($env:GITHUB_EVENT_NAME -cne "workflow_dispatch") {
+              throw "Authenticode sandbox signing is manual-only"
+          }
+          if ($env:GITHUB_REF -cne "refs/heads/main") {
+              throw "Authenticode sandbox signing must run from main"
+          }
+          if ($env:GITHUB_REPOSITORY -cne "sangbuidinh/s9h-YoutubeDownloader") {
+              throw "Authenticode sandbox signing must run in the upstream repository"
+          }
+          if ($env:GITHUB_SHA -cnotmatch "^[0-9a-f]{40}$") {
+              throw "GitHub supplied an invalid source commit"
+          }
+
+          git init .
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not initialize the exact-source checkout"
+          }
+          git remote add origin https://github.com/sangbuidinh/s9h-YoutubeDownloader.git
+          git -c protocol.version=2 fetch --no-tags --depth=1 origin $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not fetch the exact workflow source"
+          }
+          git checkout --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not check out the exact workflow source"
+          }
+          $CheckedOut = (git rev-parse HEAD).Trim()
+          if ($CheckedOut -cne $env:GITHUB_SHA) {
+              throw "Checked-out source differs from the workflow commit"
+          }
+
+      - name: Validate protected sandbox authorization
+        shell: pwsh
+        env:
+          SANDBOX_AUTHORIZED: ${{ vars.ESIGNER_SANDBOX_SIGNING_AUTHORIZED }}
+          EXPECTED_CERTIFICATE_CLASS: ${{ vars.ESIGNER_SANDBOX_CERTIFICATE_CLASS }}
+          EXPECTED_PUBLISHER: ${{ vars.ESIGNER_SANDBOX_EXPECTED_PUBLISHER }}
+          EXPECTED_THUMBPRINT: ${{ vars.ESIGNER_SANDBOX_EXPECTED_THUMBPRINT }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          if ($env:SANDBOX_AUTHORIZED -cne "true") {
+              throw "Protected synthetic signing authorization is not enabled"
+          }
+          if ($env:EXPECTED_CERTIFICATE_CLASS -notin @("OV", "EV")) {
+              throw "Sandbox automated signing requires an OV or EV test certificate"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:EXPECTED_PUBLISHER)) {
+              throw "Expected sandbox publisher is not configured"
+          }
+          $NormalizedThumbprint = ($env:EXPECTED_THUMBPRINT -replace "\s", "").ToUpperInvariant()
+          if ($NormalizedThumbprint -cnotmatch "^[0-9A-F]{40}$") {
+              throw "Expected sandbox certificate thumbprint is invalid"
+          }
+
+          "SANDBOX_CERTIFICATE_CLASS=$($env:EXPECTED_CERTIFICATE_CLASS)" |
+              Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SANDBOX_EXPECTED_PUBLISHER=$($env:EXPECTED_PUBLISHER)" |
+              Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SANDBOX_EXPECTED_THUMBPRINT=$NormalizedThumbprint" |
+              Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Create isolated runner state
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+              throw "Runner temporary root is unavailable"
+          }
+          $SandboxRoot = Join-Path $env:RUNNER_TEMP "s9h-authenticode-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $DownloadRoot = Join-Path $SandboxRoot "download"
+          $InstallRoot = Join-Path $SandboxRoot "cka"
+          $SigningRoot = Join-Path $SandboxRoot "synthetic-signing"
+          $BuildRoot = Join-Path $SandboxRoot "synthetic-build"
+          $MasterKey = Join-Path $SandboxRoot "master.key"
+          $RuntimePolicy = Join-Path $SandboxRoot "runtime-provider.json"
+          foreach ($Directory in @($SandboxRoot, $DownloadRoot, $InstallRoot, $SigningRoot, $BuildRoot)) {
+              New-Item -ItemType Directory -Force -Path $Directory | Out-Null
+          }
+          & icacls.exe $SandboxRoot /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F" | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not restrict the isolated sandbox directory"
+          }
+          @(
+              "AUTHENTICODE_SANDBOX_ROOT=$SandboxRoot"
+              "CKA_DOWNLOAD_ROOT=$DownloadRoot"
+              "CKA_INSTALL_ROOT=$InstallRoot"
+              "SYNTHETIC_SIGNING_ROOT=$SigningRoot"
+              "SYNTHETIC_BUILD_ROOT=$BuildRoot"
+              "CKA_MASTER_KEY_PATH=$MasterKey"
+              "RUNTIME_PROVIDER_POLICY=$RuntimePolicy"
+          ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Download exact pinned CKA installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          $Policy = Get-Content -LiteralPath "legal/authenticode-provider.json" -Raw | ConvertFrom-Json
+          $Identity = $Policy.official_evidence.cka.package_identity
+          $Installer = Join-Path $env:CKA_DOWNLOAD_ROOT $Identity.resource_display_filename
+          Invoke-WebRequest -Uri $Identity.official_resource_url -OutFile $Installer
+          if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) {
+              throw "Pinned CKA installer download did not produce a file"
+          }
+          "CKA_INSTALLER_PATH=$Installer" |
+              Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Verify exact CKA installer identity before execution
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          $Result = & .\scripts\verify_esigner_cka_installer.ps1 `
+              -InstallerPath $env:CKA_INSTALLER_PATH `
+              -AllowedRoot $env:CKA_DOWNLOAD_ROOT `
+              -ProviderPolicyPath "legal/authenticode-provider.json"
+          if ($LASTEXITCODE -ne 0) {
+              throw "Pinned CKA installer identity verification failed"
+          }
+          $Verified = $Result | ConvertFrom-Json
+          if ($Verified.authenticode_status -cne "Valid" -or
+              $Verified.architecture -cne "x86" -or
+              $Verified.timestamp_certificate_present -ne $true) {
+              throw "Pinned CKA installer verification result is incomplete"
+          }
+          Write-Host "Pinned CKA installer identity verified"
+
+      - name: Install verified CKA in controlled location
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          & $env:CKA_INSTALLER_PATH `
+              /CURRENTUSER `
+              /VERYSILENT `
+              /SUPPRESSMSGBOXES `
+              /NORESTART `
+              "/DIR=$env:CKA_INSTALL_ROOT" | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+              throw "Verified CKA installer failed"
+          }
+          $Tools = @(
+              Get-ChildItem -LiteralPath $env:CKA_INSTALL_ROOT -Recurse -File -Filter "eSignerCKATool.exe"
+          )
+          if ($Tools.Count -ne 1) {
+              throw "Controlled CKA installation did not produce exactly one administration tool"
+          }
+          "ESIGNER_CKA_TOOL=$($Tools[0].FullName)" |
+              Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Configure CKA for Sandbox automated signing
+        shell: pwsh
+        env:
+          CKA_USERNAME: ${{ secrets.ESIGNER_SANDBOX_USERNAME }}
+          CKA_PASSWORD: ${{ secrets.ESIGNER_SANDBOX_PASSWORD }}
+          CKA_TOTP_SECRET: ${{ secrets.ESIGNER_SANDBOX_TOTP_SECRET }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          foreach ($Value in @($env:CKA_USERNAME, $env:CKA_PASSWORD, $env:CKA_TOTP_SECRET)) {
+              if ([string]::IsNullOrWhiteSpace($Value)) {
+                  throw "A required protected sandbox credential is unavailable"
+              }
+          }
+          & $env:ESIGNER_CKA_TOOL config `
+              -mode sandbox `
+              -user $env:CKA_USERNAME `
+              -pass $env:CKA_PASSWORD `
+              -totp $env:CKA_TOTP_SECRET `
+              -key $env:CKA_MASTER_KEY_PATH `
+              -r *> $null
+          if ($LASTEXITCODE -ne 0) {
+              throw "Sandbox automated CKA configuration failed"
+          }
+          if (-not (Test-Path -LiteralPath $env:CKA_MASTER_KEY_PATH -PathType Leaf)) {
+              throw "Sandbox automated CKA configuration did not create an ephemeral master key"
+          }
+
+      - name: Load and select the exact sandbox certificate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          & $env:ESIGNER_CKA_TOOL unload *> $null
+          & $env:ESIGNER_CKA_TOOL load *> $null
+          if ($LASTEXITCODE -ne 0) {
+              throw "Sandbox CKA certificate loading failed"
+          }
+          $Matches = @(
+              Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
+                  Where-Object {
+                      $ActualThumbprint = ($_.Thumbprint -replace "\s", "").ToUpperInvariant()
+                      $ActualPublisher = $_.GetNameInfo(
+                          [Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
+                          $false
+                      )
+                      $ActualThumbprint -ceq $env:SANDBOX_EXPECTED_THUMBPRINT -and
+                          $ActualPublisher -ceq $env:SANDBOX_EXPECTED_PUBLISHER -and
+                          $_.HasPrivateKey
+                  }
+          )
+          if ($Matches.Count -ne 1) {
+              throw "Expected sandbox signing certificate selection is not unique"
+          }
+
+      - name: Prepare deterministic synthetic signing subject
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          $Project = Join-Path $env:SYNTHETIC_BUILD_ROOT "SyntheticSubject.csproj"
+          $Source = Join-Path $env:SYNTHETIC_BUILD_ROOT "Program.cs"
+          $OutputOne = Join-Path $env:SYNTHETIC_BUILD_ROOT "out-one"
+          $OutputTwo = Join-Path $env:SYNTHETIC_BUILD_ROOT "out-two"
+          @'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net8.0</TargetFramework>
+              <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+              <SelfContained>false</SelfContained>
+              <UseAppHost>true</UseAppHost>
+              <AssemblyName>Youtube.Downloaderbs</AssemblyName>
+              <Version>0.0.0-ci</Version>
+              <FileVersion>0.0.0.0</FileVersion>
+              <Product>Youtube Downloaderbs synthetic signing fixture</Product>
+              <Deterministic>true</Deterministic>
+              <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+              <DebugType>none</DebugType>
+              <DebugSymbols>false</DebugSymbols>
+              <PathMap>$(MSBuildProjectDirectory)=/_/synthetic</PathMap>
+            </PropertyGroup>
+          </Project>
+          '@ | Set-Content -LiteralPath $Project -Encoding utf8
+          @'
+          using System;
+
+          internal static class Program
+          {
+              private static int Main()
+              {
+                  Console.WriteLine("synthetic / v0.0.0-ci / non-production");
+                  return 0;
+              }
+          }
+          '@ | Set-Content -LiteralPath $Source -Encoding utf8
+          dotnet publish $Project -c Release -r win-x64 --self-contained false --output $OutputOne
+          if ($LASTEXITCODE -ne 0) {
+              throw "First deterministic synthetic build failed"
+          }
+          dotnet publish $Project -c Release -r win-x64 --self-contained false --no-restore --output $OutputTwo
+          if ($LASTEXITCODE -ne 0) {
+              throw "Second deterministic synthetic build failed"
+          }
+          $FirstExe = Join-Path $OutputOne "Youtube.Downloaderbs.exe"
+          $SecondExe = Join-Path $OutputTwo "Youtube.Downloaderbs.exe"
+          $FirstHash = (Get-FileHash -LiteralPath $FirstExe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $SecondHash = (Get-FileHash -LiteralPath $SecondExe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($FirstHash -cne $SecondHash) {
+              throw "Synthetic executable build is not deterministic"
+          }
+          $Target = Join-Path $env:SYNTHETIC_SIGNING_ROOT "Youtube.Downloaderbs.exe"
+          Copy-Item -LiteralPath $FirstExe -Destination $Target
+          $Targets = @(Get-ChildItem -LiteralPath $env:SYNTHETIC_SIGNING_ROOT -File -Filter "*.exe")
+          if ($Targets.Count -ne 1 -or $Targets[0].Name -cne "Youtube.Downloaderbs.exe") {
+              throw "Synthetic signing root contains an unauthorized executable"
+          }
+          if ((Get-AuthenticodeSignature -LiteralPath $Target).Status -ne
+              [Management.Automation.SignatureStatus]::NotSigned) {
+              throw "Synthetic signing subject is not unsigned"
+          }
+          "SYNTHETIC_SIGNING_TARGET=$Target" |
+              Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Discover deterministic x64 SignTool
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          $SdkRoot = Join-Path ([Environment]::GetFolderPath("ProgramFilesX86")) "Windows Kits\10"
+          $Candidates = @(
+              Get-ChildItem -LiteralPath $SdkRoot -Recurse -File -Filter "signtool.exe" |
+                  Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
+                  ForEach-Object {
+                      $VersionText = $_.VersionInfo.FileVersion -replace "[^0-9.].*$", ""
+                      [PSCustomObject]@{
+                          Architecture = "x64"
+                          Path = $_.FullName
+                          Version = [version]$VersionText
+                      }
+                  } |
+                  Sort-Object @{Expression = { $_.Version }; Descending = $true}, @{Expression = { $_.Path }; Descending = $false}
+          )
+          if ($Candidates.Count -eq 0) {
+              throw "A compatible x64 Microsoft SignTool was not found"
+          }
+          $Selected = $Candidates[0]
+          "SYNTHETIC_SIGNTOOL=$($Selected.Path)" |
+              Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "SignTool selected: Windows Kits/10 x64, version $($Selected.Version)"
+
+      - name: Sign and verify the synthetic subject
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          $UnsignedHash = (Get-FileHash -LiteralPath $env:SYNTHETIC_SIGNING_TARGET -Algorithm SHA256).Hash.ToLowerInvariant()
+          $Policy = Get-Content -LiteralPath "legal/authenticode-provider.json" -Raw | ConvertFrom-Json
+          $Policy.certificate.expected_publisher = $env:SANDBOX_EXPECTED_PUBLISHER
+          $Policy.certificate.expected_thumbprint = $env:SANDBOX_EXPECTED_THUMBPRINT
+          $Policy.state.account_provisioned = $true
+          $Policy.state.certificate_provisioned = $true
+          $Policy.state.credential_source_configured = $true
+          $Policy.state.synthetic_signing_authorized = $true
+          $Policy.state.timestamp_authority_approved = $true
+          $Policy.timestamp.authority_approved = $true
+          $RuntimeJson = ($Policy | ConvertTo-Json -Depth 30).Replace("`r`n", "`n")
+          [IO.File]::WriteAllText(
+              $env:RUNTIME_PROVIDER_POLICY,
+              $RuntimeJson + "`n",
+              [Text.UTF8Encoding]::new($false)
+          )
+          $VerificationOutput = @(
+              & .\scripts\sign_authenticode.ps1 `
+                  -Target $env:SYNTHETIC_SIGNING_TARGET `
+                  -ReleaseRoot $env:SYNTHETIC_SIGNING_ROOT `
+                  -ProviderConfigPath $env:RUNTIME_PROVIDER_POLICY `
+                  -TimestampUrl "http://ts.ssl.com" `
+                  -SigningPurpose synthetic `
+                  -ExpectedPublisher $env:SANDBOX_EXPECTED_PUBLISHER `
+                  -CertificateThumbprint $env:SANDBOX_EXPECTED_THUMBPRINT `
+                  -SignToolPath $env:SYNTHETIC_SIGNTOOL
+          )
+          if ($LASTEXITCODE -ne 0) {
+              throw "Synthetic Authenticode signing or verification failed"
+          }
+          $Verification = $VerificationOutput[-1] | ConvertFrom-Json
+          $SignedHash = (Get-FileHash -LiteralPath $env:SYNTHETIC_SIGNING_TARGET -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($SignedHash -ceq $UnsignedHash) {
+              throw "Synthetic signed digest did not differ from the unsigned digest"
+          }
+          if ($Verification.target -cne "Youtube.Downloaderbs.exe" -or
+              $Verification.sha256 -cne $SignedHash -or
+              $Verification.verification_policy -cne "Default Authenticode /pa" -or
+              $Verification.timestamp_protocol -cne "RFC3161" -or
+              $Verification.timestamp_digest -cne "SHA256" -or
+              $Verification.timestamp_verified -ne $true -or
+              $Verification.publisher -cne $env:SANDBOX_EXPECTED_PUBLISHER -or
+              $Verification.downstream_packaging_allowed_for_recorded_hash -ne $true) {
+              throw "Synthetic Authenticode verification evidence is inconsistent"
+          }
+          @(
+              "## Synthetic Authenticode sandbox validation"
+              ""
+              "- Subject: synthetic / v0.0.0-ci / non-production"
+              "- Unsigned SHA-256: ``$UnsignedHash``"
+              "- Signed SHA-256: ``$SignedHash``"
+              "- Publisher identity: exact match"
+              "- Certificate thumbprint: exact match"
+              "- Authenticode policy: Default /pa"
+              "- Timestamp: RFC3161 SHA256 verified"
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          Write-Host "Synthetic Authenticode signing and sanitized verification passed"
+
+      - name: Remove sandbox provider and signing state
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          Set-StrictMode -Version Latest
+
+          $CleanupFailures = [Collections.Generic.List[string]]::new()
+          $CkaInstalled = -not [string]::IsNullOrWhiteSpace($env:ESIGNER_CKA_TOOL) -and
+              (Test-Path -LiteralPath $env:ESIGNER_CKA_TOOL -PathType Leaf)
+          if ($CkaInstalled) {
+              & $env:ESIGNER_CKA_TOOL unload *> $null
+              if ($LASTEXITCODE -ne 0) {
+                  $CleanupFailures.Add("CKA unload failed")
+              }
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:CKA_INSTALL_ROOT) -and
+              (Test-Path -LiteralPath $env:CKA_INSTALL_ROOT -PathType Container)) {
+              $Uninstallers = @(
+                  Get-ChildItem -LiteralPath $env:CKA_INSTALL_ROOT -File -Filter "unins*.exe"
+              )
+              if ($CkaInstalled -and $Uninstallers.Count -ne 1) {
+                  $CleanupFailures.Add("Installed CKA uninstaller selection was not unique")
+              }
+              elseif ($Uninstallers.Count -eq 1) {
+                  & $Uninstallers[0].FullName /VERYSILENT /SUPPRESSMSGBOXES /NORESTART | Out-Null
+                  if ($LASTEXITCODE -ne 0) {
+                      $CleanupFailures.Add("CKA uninstaller failed")
+                  }
+              }
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:AUTHENTICODE_SANDBOX_ROOT) -and
+              (Test-Path -LiteralPath $env:AUTHENTICODE_SANDBOX_ROOT)) {
+              $RunnerRoot = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd("\", "/")
+              $SandboxRoot = [IO.Path]::GetFullPath($env:AUTHENTICODE_SANDBOX_ROOT)
+              if (-not $SandboxRoot.StartsWith(
+                  $RunnerRoot + [IO.Path]::DirectorySeparatorChar,
+                  [StringComparison]::OrdinalIgnoreCase
+              )) {
+                  throw "Sandbox cleanup target escaped the runner temporary root"
+              }
+              try {
+                  Remove-Item -LiteralPath $SandboxRoot -Recurse -Force -ErrorAction Stop
+              }
+              catch {
+                  $CleanupFailures.Add("Runner-temporary sandbox removal failed")
+              }
+          }
+          if ($CleanupFailures.Count -ne 0) {
+              throw "Sandbox cleanup incomplete: $($CleanupFailures -join '; ')"
+          }
+          Write-Host "Sandbox CKA, master-key, configuration, subject and temporary state removed"

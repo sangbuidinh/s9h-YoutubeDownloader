@@ -3,7 +3,6 @@
   "blockers": [
     "certificate class decision",
     "certificate issuance",
-    "immutable CKA package identity",
     "production final bytes",
     "production signature and timestamp verification",
     "production signing workflow integration",
@@ -49,21 +48,43 @@
       "selection_on_multiple_matches": "fail closed"
     },
     "cka": {
-      "architecture_evidence": "Windows supported; exact architecture of the current installer is not stated by the official current-release page",
-      "cka_package_integrated": false,
+      "architecture_evidence": "x86 PE machine identity verified from the exact repository-pinned official linked bytes",
+      "cka_package_integrated": true,
       "current_release_build": "20260062",
       "current_release_label": "SSL-COM-eSigner-CKA_1-1-2_build_20260062",
       "current_release_version": "1.1.2",
       "download_page": "https://www.ssl.com/downloads/",
       "downloadable_windows_package": "SSL.COM eSigner CKA_1.1.2_build_202600624.exe",
-      "immutable_digest": null,
-      "immutable_package_identity_established": false,
+      "immutable_digest": "3f088403139505ddfb0ed3b56b72893f92c865f98b382753a1e1c695a5cece35",
+      "immutable_package_identity_established": true,
       "install_command": "eSigner_CKA_Installer.exe /CURRENTUSER /VERYSILENT /SUPPRESSMSGBOXES /DIR=<INSTALL_DIR>",
       "install_command_documented": true,
-      "removal_command": null,
+      "package_identity": {
+        "architecture": "x86",
+        "authenticode_status_required": "Valid",
+        "byte_size": 16103264,
+        "digest_provenance": "Repository-calculated SHA-256 of the exact official SSL.com linked bytes after Authenticode validation; not represented as an SSL.com-published checksum",
+        "file_version": "1.1.2",
+        "filename_matches_release_label_exactly": false,
+        "official_resource_url": "https://app.esigner.com/documents/7d2c9a7f-99fe-4053-bb1e-07e485a739cf/final",
+        "product_name": "SSL.COM eSigner Cloud Key Adapter",
+        "product_version": "1.1.2",
+        "provider": "SSL.com",
+        "publisher_filename_discrepancy_documented": true,
+        "release_page_label": "SSL-COM-eSigner-CKA_1-1-2_build_20260062",
+        "resource_display_filename": "SSL.COM eSigner CKA_1.1.2_build_202600624.exe",
+        "resource_namespace": "SSL-COM-eSigner-CKA_1-1-2_build_20260062",
+        "sha256": "3f088403139505ddfb0ed3b56b72893f92c865f98b382753a1e1c695a5cece35",
+        "signer_issuer": "CN=SSL.com EV Code Signing Intermediate CA RSA R3, O=SSL Corp, L=Houston, S=Texas, C=US",
+        "signer_serial": "03987FF7E46C81A6B4343A575FA0F8F3",
+        "signer_simple_name": "SSL Corp",
+        "signer_thumbprint": "B40BDE1B8DBA07DEC2D1E7EDFADD9B1BC51F922D",
+        "timestamp_certificate_required": true
+      },
+      "removal_command": "Discover exactly one unins*.exe under the controlled installation root and invoke /VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
       "removal_command_documented": false
     },
-    "evidence_retrieved_at_utc": "2026-08-18T15:19:42Z",
+    "evidence_retrieved_at_utc": "2026-08-18T16:15:00Z",
     "integration": {
       "interface": "Windows CNG",
       "key_storage_provider": "KSP",
@@ -108,6 +129,29 @@
   "repository_constraints": {
     "project_license_status": "not-selected",
     "project_license_status_change_authorized": false
+  },
+  "sandbox": {
+    "account_type": "sandbox",
+    "automated_certificate_classes": [
+      "OV",
+      "EV"
+    ],
+    "certificate_class_selected_for_production": false,
+    "certificate_secret_required_by_current_cli": false,
+    "environment": "authenticode-sandbox",
+    "expected_secret_names": [
+      "ESIGNER_SANDBOX_PASSWORD",
+      "ESIGNER_SANDBOX_TOTP_SECRET",
+      "ESIGNER_SANDBOX_USERNAME"
+    ],
+    "expected_variable_names": [
+      "ESIGNER_SANDBOX_CERTIFICATE_CLASS",
+      "ESIGNER_SANDBOX_EXPECTED_PUBLISHER",
+      "ESIGNER_SANDBOX_EXPECTED_THUMBPRINT",
+      "ESIGNER_SANDBOX_SIGNING_AUTHORIZED"
+    ],
+    "production_certificate_provisioned": false,
+    "workflow_live_validation_completed": false
   },
   "schema_version": 1,
   "signing_contract": {
@@ -193,6 +237,7 @@
     "publishing_allowed": false,
     "release_ready": false,
     "remote_signing_validated": false,
+    "sandbox_workflow_implemented": true,
     "signing_scaffold_implemented": true,
     "synthetic_signing_authorized": false,
     "timestamp_authority_approved": false,
