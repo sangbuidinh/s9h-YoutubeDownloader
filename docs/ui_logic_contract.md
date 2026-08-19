@@ -5,9 +5,19 @@ This report maps the real production UI contract from the current codebase. The 
 Sources inspected:
 
 - `ui/main_window.py`
-- `core/downloader.py`, limited to `DownloadOptions`, `DownloadController`, cookie-source constants, `validate_download_environment()`, `effective_cookies_path()`, and where `--cookies` is added to yt-dlp commands
+- `core/download_contracts.py`, for stable options, decisions, errors, and engine/cookie identifiers
+- `core/download_service.py`, for the UI-facing validation, controller, and batch-operation facade
+- `core/downloader.py`, limited to the facade implementation, `effective_cookies_path()`, and where `--cookies` is added to yt-dlp commands
 - `core/app_settings.py`, limited to protected API-key persistence, cookie source, manual cookie path, and bridge cookie path settings
 - `core/download_modes.py`
+
+## Download Application Boundary
+
+- `ui/main_window.py` obtains download contracts and operations from `core.download_service`; it does not import the downloader implementation directly.
+- `core/download_contracts.py` is the source of truth for stable download data contracts, enums, lightweight exceptions, cookie-source identifiers, engine identifiers, and yt-dlp stage identifiers.
+- `core/download_service.py` is the narrow application facade for the existing batch validators, `DownloadController`, and `download_items()`.
+- `core/downloader.py` remains the implementation/orchestration module and temporarily re-exports moved public symbols for existing scripts and tests.
+- This dependency boundary does not change download behavior, Tkinter ownership, worker/event ordering, state persistence, tool discovery, or release/security behavior.
 
 ## Startup Window Sizing
 

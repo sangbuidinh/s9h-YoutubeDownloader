@@ -10,7 +10,7 @@ from pathlib import Path
 from tkinter import filedialog, font, ttk
 
 from core.download_modes import DOWNLOAD_MODES, MODE_VIDEO_THUMB
-from core.downloader import (
+from core.download_service import (
     BatchDecision,
     COOKIE_SOURCE_BRIDGE,
     COOKIE_SOURCE_FILE,

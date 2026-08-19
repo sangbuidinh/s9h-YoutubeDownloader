@@ -12,9 +12,28 @@ import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from enum import Enum
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
+from core.download_contracts import (
+    BatchDecision,
+    COOKIE_SOURCE_BRIDGE,
+    COOKIE_SOURCE_FILE,
+    DEFAULT_DOWNLOAD_ENGINE,
+    DOWNLOAD_ENGINE_ARIA2_FAST,
+    DOWNLOAD_ENGINE_STABLE,
+    DownloadCancelled,
+    DownloadError,
+    DownloadOptions,
+    FFmpegFailureKind,
+    SkipCurrentVideo,
+    SystemicBlockContext,
+    YTDLP_PART_UNKNOWN,
+    YTDLP_STAGE_DOWNLOAD,
+    YTDLP_STAGE_EXTRACT,
+    YTDLP_STAGE_POSTPROCESS,
+    YTDLP_STAGE_UNKNOWN,
+    YtdlpFailureKind,
+)
 from core.download_modes import (
     MODE_VIDEO_AUDIO_THUMB,
     MODE_VIDEO_THUMB,
@@ -81,11 +100,6 @@ FFMPEG_PROGRESS_QUEUE_POLL_SECONDS = 0.1
 FFMPEG_PROGRESS_SPEED_UNKNOWN = "--"
 YTDLP_OUTPUT_TAIL_LIMIT = 200
 YTDLP_FATAL_LINE_LIMIT = 12
-YTDLP_STAGE_EXTRACT = "extract"
-YTDLP_STAGE_DOWNLOAD = "download"
-YTDLP_STAGE_POSTPROCESS = "postprocess"
-YTDLP_STAGE_UNKNOWN = "unknown"
-YTDLP_PART_UNKNOWN = "unknown"
 COOKIE_MEDIA_RETRY_TARGET_SECONDS = (2, 5, 10, 30)
 COOKIE_MEDIA_SHORT_PROBE_SECONDS = 2
 COOKIE_MEDIA_PROBE_INTERVAL_VIDEOS = 10
@@ -99,12 +113,7 @@ _ARIA2_HTTP_RESPONSE_EXIT_PATTERN = re.compile(
 OUTPUT_PATH_TOO_LONG_MESSAGE = (
     "Output path too long. Please choose a shorter save folder or shorten filename limit."
 )
-COOKIE_SOURCE_FILE = "file"
-COOKIE_SOURCE_BRIDGE = "bridge"
 YTDLP_COOKIES_OPTION = "--cookies"
-DOWNLOAD_ENGINE_STABLE = "stable"
-DOWNLOAD_ENGINE_ARIA2_FAST = "aria2_fast"
-DEFAULT_DOWNLOAD_ENGINE = DOWNLOAD_ENGINE_STABLE
 ARIA2_FAST_DOWNLOADER_ARGS = "aria2c:-x 16 -s 16 -j 16 -k 1M"
 # aria2 exit 22 means the HTTP response header was bad or unexpected.
 ARIA2_HTTP_RESPONSE_EXIT_CODE = 22
@@ -125,70 +134,6 @@ FILE_COOKIE_SESSION_ERROR_MESSAGE = (
     "Cookies may be expired. Export a fresh cookies.txt file, select it again if needed, "
     "then retry the failed download."
 )
-
-
-class YtdlpFailureKind(str, Enum):
-    HTTP_401 = "http_401"
-    RATE_LIMIT = "rate_limit_429"
-    BOT_CHECK = "bot_check"
-    COOKIE_SESSION = "cookie_session"
-    LOGIN_REQUIRED = "login_required"
-    PO_TOKEN_OR_VISITOR_DATA = "po_token_or_visitor_data"
-    HTTP_403 = "http_403"
-    FORMAT_UNAVAILABLE = "format_unavailable"
-    PERMANENT_VIDEO = "permanent_video"
-    TOOL_CONFIGURATION = "tool_configuration"
-    NETWORK_TIMEOUT = "network_timeout"
-    NETWORK = "network"
-    OUTPUT_PATH = "output_path"
-    UNKNOWN = "unknown"
-
-
-class FFmpegFailureKind(str, Enum):
-    INVALID_INPUT = "invalid_input"
-    NO_AUDIO_STREAM = "no_audio_stream"
-    ENCODER_UNAVAILABLE = "encoder_unavailable"
-    DISK_FULL = "disk_full"
-    PERMISSION_DENIED = "permission_denied"
-    OUTPUT_PATH = "output_path"
-    INTERRUPTED_WRITE = "interrupted_write"
-    UNKNOWN = "unknown"
-
-
-class BatchDecision(str, Enum):
-    RETRY_CURRENT = "retry_current"
-    SKIP_CURRENT = "skip_current"
-    STOP_BATCH = "stop_batch"
-
-
-class DownloadError(Exception):
-    pass
-
-
-class DownloadCancelled(DownloadError):
-    pass
-
-
-class SkipCurrentVideo(DownloadError):
-    pass
-
-
-@dataclass(frozen=True)
-class SystemicBlockContext:
-    block_id: str
-    failure_kind: YtdlpFailureKind
-    retry_allowed: bool
-    reason: str
-    video_id: str = ""
-    title: str = ""
-    part: str = ""
-    cookie_source: str = ""
-    cookie_path: str = ""
-    cookie_changed: bool = False
-    refreshed_retry_used: bool = False
-    output_lines: tuple[str, ...] = ()
-    stage: str = YTDLP_STAGE_UNKNOWN
-    exit_code: int | None = None
 
 
 @dataclass
@@ -507,21 +452,6 @@ class FFmpegExecutionError(DownloadError):
             if line
         )[-FFMPEG_OUTPUT_LINE_LIMIT:]
         self.combined_output = _bounded_sanitized_subprocess_output("", combined_output)
-
-
-@dataclass
-class DownloadOptions:
-    base_folder: str
-    channel_id: str
-    channel_name: str
-    cookies_enabled: bool = False
-    cookies_path: str = ""
-    speed_limit: str | None = None
-    download_mode: str = MODE_VIDEO_THUMB
-    cookie_source: str = COOKIE_SOURCE_FILE
-    bridge_cookie_path: str = ""
-    download_engine: str = DEFAULT_DOWNLOAD_ENGINE
-    file_start_number: int | None = None
 
 
 @dataclass(frozen=True)
