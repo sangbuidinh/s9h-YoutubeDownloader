@@ -105,7 +105,10 @@ def _copy_fixture_root(repository_root: Path, destination: Path) -> None:
     ):
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes((repository_root / relative).read_bytes())
+        if relative in WINDOWS_CHECKOUT_PROJECTION_PATHS:
+            target.write_bytes(_read_git_blob(repository_root, relative))
+        else:
+            target.write_bytes((repository_root / relative).read_bytes())
 
 
 def _run_positive(name: str, root: Path) -> None:
@@ -170,6 +173,34 @@ def _expect_eol_rejection(name: str, root: Path, required_text: str | None = Non
     print(f"PASS negative: {name} [script-hygiene]")
 
 
+def _run_canonical_round_trip_fixture(repository_root: Path) -> None:
+    with tempfile.TemporaryDirectory(prefix="s9h-authenticode-policy-positive-") as temporary:
+        root = Path(temporary)
+        _copy_fixture_root(repository_root, root)
+        provider = _load_json(root, PROVIDER_POLICY_PATH)
+        (root / PROVIDER_POLICY_PATH).write_bytes(_canonical_bytes(provider))
+
+        authoritative = {
+            relative: _read_git_blob(repository_root, relative)
+            for relative in WINDOWS_CHECKOUT_PROJECTION_PATHS
+        }
+        for relative, blob in authoritative.items():
+            if blob.startswith(b"\xef\xbb\xbf") or b"\r" in blob:
+                raise AssertionError(f"{relative.as_posix()} source Git blob is not canonical LF")
+            blob.decode("utf-8", errors="strict")
+            if (root / relative).read_bytes() != blob:
+                raise AssertionError(
+                    f"{relative.as_posix()} fixture was seeded from worktree bytes instead of Git"
+                )
+
+        _initialize_git_fixture(root)
+        for relative, expected in authoritative.items():
+            committed = _read_git_blob(root, relative)
+            if committed != expected:
+                raise AssertionError(f"{relative.as_posix()} temporary Git blob is not canonical LF")
+        _run_positive("canonical round-trip fixture", root)
+
+
 def _run_checkout_eol_regressions(repository_root: Path) -> int:
     projection_paths = (
         SIGN_SCRIPT_PATH,
@@ -231,6 +262,14 @@ def _run_checkout_eol_regressions(repository_root: Path) -> int:
             ("workflow lone CR", workflow_lf.replace(b"\n", b"\r", 1)),
             ("workflow UTF-8 BOM", b"\xef\xbb\xbf" + workflow_crlf),
             (
+                "workflow altered whitespace",
+                workflow_lf.replace(
+                    b"timeout-minutes: 30",
+                    b"timeout-minutes:  30",
+                    1,
+                ).replace(b"\n", b"\r\n"),
+            ),
+            (
                 "valid but uncommitted workflow YAML",
                 (b"# valid YAML but not the committed blob\n" + workflow_lf).replace(
                     b"\n", b"\r\n"
@@ -253,7 +292,19 @@ def _run_checkout_eol_regressions(repository_root: Path) -> int:
             root,
             "could not be proven against Git HEAD",
         )
-    return 8
+
+    with tempfile.TemporaryDirectory(prefix="s9h-authenticode-policy-eol-bad-blob-") as temporary:
+        root = Path(temporary)
+        _copy_fixture_root(repository_root, root)
+        sign_path = root / SIGN_SCRIPT_PATH
+        sign_path.write_bytes(sign_path.read_bytes().replace(b"\n", b"\r\n"))
+        _initialize_git_fixture(root)
+        _expect_eol_rejection(
+            "committed Git blob contains CRLF",
+            root,
+            "committed Git blob must be UTF-8 without BOM and LF-only",
+        )
+    return 10
 
 
 def _run_negative(
@@ -741,13 +792,7 @@ def _run_wrapper_fixtures(repository_root: Path) -> int:
 def main() -> int:
     root = Path(__file__).resolve().parent.parent
     _run_positive("repository Authenticode policy and scripts", root)
-    with tempfile.TemporaryDirectory(prefix="s9h-authenticode-policy-positive-") as temporary:
-        copied_root = Path(temporary)
-        _copy_fixture_root(root, copied_root)
-        provider = _load_json(copied_root, PROVIDER_POLICY_PATH)
-        (copied_root / PROVIDER_POLICY_PATH).write_bytes(_canonical_bytes(provider))
-        _initialize_git_fixture(copied_root)
-        _run_positive("canonical round-trip fixture", copied_root)
+    _run_canonical_round_trip_fixture(root)
     eol_negative_count = _run_checkout_eol_regressions(root)
 
     cases: list[tuple[str, str, dict[str, Any]]] = [
