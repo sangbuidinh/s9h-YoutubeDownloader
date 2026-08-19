@@ -1,0 +1,252 @@
+{
+  "assessment_baseline": "45ecd30aaa95661778956b6724aaccd98bfe66c1",
+  "blockers": [
+    "certificate class decision",
+    "certificate issuance",
+    "production final bytes",
+    "production signature and timestamp verification",
+    "production signing workflow integration",
+    "protected credential and environment configuration",
+    "protected remote signing environment",
+    "provider account and identity validation",
+    "remote synthetic signing validation",
+    "timestamp authority approval"
+  ],
+  "certificate": {
+    "automated_certificate_classes": [
+      "OV",
+      "EV"
+    ],
+    "certificate_class_selected": false,
+    "expected_publisher": null,
+    "expected_thumbprint": null,
+    "operator_entity_type": "UNRESOLVED",
+    "preferred_class": null,
+    "product_advertised_certificate_classes": [
+      "IV",
+      "OV",
+      "EV"
+    ],
+    "provider_confirmation_required_for_iv_automation": true
+  },
+  "custody": {
+    "model": "provider-managed cloud HSM",
+    "non_exportable_provider_key_required": true,
+    "private_key_export_allowed": false,
+    "repository_pfx_allowed": false,
+    "repository_private_key_allowed": false
+  },
+  "official_evidence": {
+    "authentication": {
+      "automated_mode": "Provider account authentication, OAuth TOTP secret and protected master-key file; official guidance limits automated mode to OV or EV certificates",
+      "manual_mode": "Provider account authentication plus per-signing OTP",
+      "repository_credential_storage_authorized": false
+    },
+    "certificate_discovery": {
+      "provider_behavior": "CKA loads enrolled certificates into the Windows CurrentUser Personal certificate store and identifies them by common name and serial number",
+      "repository_selection": "explicit certificate thumbprint required after provisioning",
+      "selection_on_multiple_matches": "fail closed"
+    },
+    "cka": {
+      "architecture_evidence": "x86 PE machine identity verified from the exact repository-pinned official linked bytes",
+      "cka_package_integrated": true,
+      "current_release_build": "20260062",
+      "current_release_label": "SSL-COM-eSigner-CKA_1-1-2_build_20260062",
+      "current_release_version": "1.1.2",
+      "download_page": "https://www.ssl.com/downloads/",
+      "downloadable_windows_package": "SSL.COM eSigner CKA_1.1.2_build_202600624.exe",
+      "immutable_digest": "3f088403139505ddfb0ed3b56b72893f92c865f98b382753a1e1c695a5cece35",
+      "immutable_package_identity_established": true,
+      "install_command": "eSigner_CKA_Installer.exe /CURRENTUSER /VERYSILENT /SUPPRESSMSGBOXES /DIR=<INSTALL_DIR>",
+      "install_command_documented": true,
+      "package_identity": {
+        "architecture": "x86",
+        "authenticode_status_required": "Valid",
+        "byte_size": 16103264,
+        "digest_provenance": "Repository-calculated SHA-256 of the exact official SSL.com linked bytes after Authenticode validation; not represented as an SSL.com-published checksum",
+        "file_version": "1.1.2",
+        "filename_matches_release_label_exactly": false,
+        "official_resource_url": "https://app.esigner.com/documents/7d2c9a7f-99fe-4053-bb1e-07e485a739cf/final",
+        "product_name": "SSL.COM eSigner Cloud Key Adapter",
+        "product_version": "1.1.2",
+        "provider": "SSL.com",
+        "publisher_filename_discrepancy_documented": true,
+        "release_page_label": "SSL-COM-eSigner-CKA_1-1-2_build_20260062",
+        "resource_display_filename": "SSL.COM eSigner CKA_1.1.2_build_202600624.exe",
+        "resource_namespace": "SSL-COM-eSigner-CKA_1-1-2_build_20260062",
+        "sha256": "3f088403139505ddfb0ed3b56b72893f92c865f98b382753a1e1c695a5cece35",
+        "signer_issuer": "CN=SSL.com EV Code Signing Intermediate CA RSA R3, O=SSL Corp, L=Houston, S=Texas, C=US",
+        "signer_serial": "03987FF7E46C81A6B4343A575FA0F8F3",
+        "signer_simple_name": "SSL Corp",
+        "signer_thumbprint": "B40BDE1B8DBA07DEC2D1E7EDFADD9B1BC51F922D",
+        "timestamp_certificate_required": true
+      },
+      "removal_command": "Discover exactly one unins*.exe under the controlled installation root and invoke /VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
+      "removal_command_documented": false
+    },
+    "evidence_retrieved_at_utc": "2026-08-18T16:15:00Z",
+    "integration": {
+      "interface": "Windows CNG",
+      "key_storage_provider": "KSP",
+      "supported_tools": [
+        "certutil.exe",
+        "signtool.exe"
+      ]
+    },
+    "sources": [
+      "https://www.ssl.com/downloads/",
+      "https://www.ssl.com/how-to/automate-ev-code-signing-with-signtool-or-certutil-esigner/",
+      "https://www.ssl.com/how-to/getting-started-with-your-code-signing-certificate-installation-configuration-and-your-first-signing-operation/",
+      "https://www.ssl.com/how-to/how-to-install-ssl-com-esigner-cloud-key-adapter-cka/",
+      "https://www.ssl.com/how-to/how-to-integrate-esigner-cka-with-ci-cd-tools-for-automated-code-signing/",
+      "https://www.ssl.com/products/software-integrity/signing-service/"
+    ]
+  },
+  "policy_id": "s9h-authenticode-provider-v1",
+  "provider": {
+    "alternatives": [
+      {
+        "id": "microsoft-artifact-signing-public-trust",
+        "reason": "Current geographic eligibility is not a safe default for a Vietnam-based operator",
+        "selected": false
+      },
+      {
+        "id": "signpath-foundation",
+        "reason": "The repository project license is not selected, so open-source-program eligibility is not assumed",
+        "selected": false
+      },
+      {
+        "id": "exportable-pfx-in-repository-secrets",
+        "reason": "Key extraction and runner compromise create a materially weaker custody boundary",
+        "selected": false
+      }
+    ],
+    "id": "ssl-com-esigner",
+    "private_key_export": "forbidden",
+    "procurement_authorized": false,
+    "service": "SSL.com eSigner"
+  },
+  "repository_constraints": {
+    "project_license_status": "not-selected",
+    "project_license_status_change_authorized": false
+  },
+  "sandbox": {
+    "account_type": "sandbox",
+    "automated_certificate_classes": [
+      "OV",
+      "EV"
+    ],
+    "certificate_class_selected_for_production": false,
+    "certificate_secret_required_by_current_cli": false,
+    "environment": "authenticode-sandbox",
+    "expected_secret_names": [
+      "ESIGNER_SANDBOX_PASSWORD",
+      "ESIGNER_SANDBOX_TOTP_SECRET",
+      "ESIGNER_SANDBOX_USERNAME"
+    ],
+    "expected_variable_names": [
+      "ESIGNER_SANDBOX_CERTIFICATE_CLASS",
+      "ESIGNER_SANDBOX_EXPECTED_PUBLISHER",
+      "ESIGNER_SANDBOX_EXPECTED_THUMBPRINT",
+      "ESIGNER_SANDBOX_SIGNING_AUTHORIZED"
+    ],
+    "production_certificate_provisioned": false,
+    "workflow_live_validation_completed": false
+  },
+  "schema_version": 1,
+  "signing_contract": {
+    "certificate_identifier_logging": "forbidden",
+    "file_digest": "SHA256",
+    "first_party_targets": [
+      "Youtube.Downloaderbs.exe"
+    ],
+    "plan_only_supported": true,
+    "purpose_gates": {
+      "production": {
+        "required_provider_state": [
+          "account_provisioned",
+          "certificate_provisioned",
+          "credential_source_configured",
+          "production_signing_authorized",
+          "remote_signing_validated",
+          "synthetic_signing_authorized",
+          "timestamp_authority_approved"
+        ],
+        "required_release_gates": [
+          "assembly_authorized",
+          "legal_compliance_certified",
+          "release_gate_reconsideration_allowed",
+          "source_assets_created",
+          "source_availability_certified",
+          "source_kits_ready"
+        ]
+      },
+      "synthetic": {
+        "not_required_flags": [
+          "provider.procurement_authorized",
+          "release.publishing_allowed",
+          "release.release_ready",
+          "state.production_signing_authorized",
+          "state.remote_signing_validated"
+        ],
+        "required_provider_state": [
+          "account_provisioned",
+          "certificate_provisioned",
+          "credential_source_configured",
+          "synthetic_signing_authorized",
+          "timestamp_authority_approved"
+        ]
+      }
+    },
+    "real_signing_purposes": [
+      "synthetic",
+      "production"
+    ],
+    "sequence": [
+      "validate unsigned first-party EXE structure",
+      "sign only the standalone first-party EXE",
+      "obtain an RFC 3161 timestamp",
+      "verify Authenticode under /pa",
+      "verify timestamp presence and validity",
+      "verify expected publisher identity",
+      "assemble the portable package from the byte-identical verified signed EXE",
+      "calculate checksums and downstream assurance artifacts"
+    ],
+    "third_party_targets_rejected": [
+      "yt-dlp.exe",
+      "ffmpeg.exe",
+      "ffprobe.exe",
+      "aria2c.exe",
+      "deno.exe",
+      "every other vendor-supplied executable or DLL"
+    ],
+    "timestamp_digest": "SHA256",
+    "timestamp_protocol": "RFC3161",
+    "unsigned_fallback_representation": "forbidden",
+    "verification_policy": "Default Authenticode",
+    "verification_switch": "/pa"
+  },
+  "state": {
+    "account_provisioned": false,
+    "certificate_provisioned": false,
+    "credential_source_configured": false,
+    "custody_model_selected": true,
+    "production_signing_authorized": false,
+    "production_signing_completed": false,
+    "provider_selected": true,
+    "publishing_allowed": false,
+    "release_ready": false,
+    "remote_signing_validated": false,
+    "sandbox_workflow_implemented": true,
+    "signing_scaffold_implemented": true,
+    "synthetic_signing_authorized": false,
+    "timestamp_authority_approved": false,
+    "verification_scaffold_implemented": true
+  },
+  "timestamp": {
+    "authority_approved": false,
+    "candidate_url": "http://ts.ssl.com",
+    "digest": "SHA256",
+    "protocol": "RFC3161"
+  }
+}

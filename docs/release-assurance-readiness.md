@@ -2,25 +2,25 @@
 
 ## Scope
 
-Phase 7C preserves the Windows Authenticode and production release-assurance plan while integrating synthetic provenance and SBOM attestations into current CI. It does not sign a file, select or provision a credential, generate a production attestation, modify a historical release workflow, or authorize publishing.
+Phase 7D-R2-F1 adds a verified immutable CKA installer identity and a protected sandbox workflow scaffold to the SSL.com eSigner provider and provider-managed cloud-HSM custody selection. It keeps synthetic and production signing gates separate and requires exact installer and signer-certificate identity verification. It does not purchase or provision a certificate, create or store credentials, install provider software locally, dispatch the protected workflow, sign a production file, generate a production attestation, or authorize publishing.
 
-The machine-readable owner is `legal/release-assurance-policy.json`. Its readiness fields and claims are fail-closed. Existing legal, source-availability, source-kit, release, and publishing gates remain independent and unchanged.
+The provider-specific machine-readable owner is `legal/authenticode-provider.json`. Combined release states remain owned by `legal/release-assurance-policy.json`. Their readiness fields and claims are fail-closed. Existing legal, source-availability, source-kit, release, and publishing gates remain independent and unchanged.
 
 ## Current Baseline
 
 - Repository: `sangbuidinh/s9h-YoutubeDownloader`
-- Assessment commit: `bf196a0895990802624f7f1926458100170b2443`
+- Phase 7D assessment baseline: `45ecd30aaa95661778956b6724aaccd98bfe66c1`
 - Product: `Youtube Downloaderbs`
 - Version: `1.3.1`
 - Planning target: a future signed first-party executable, deterministic SPDX 2.3 JSON SBOM, and final-byte GitHub attestations.
-- Implemented state: deterministic synthetic SBOM and release-bundle controls plus local synthetic attestation workflow integration.
-- Verified state: policy, workflow, subject, permission, and verification-command contracts can be checked locally without invoking `actions/attest` or requesting OIDC.
-- Blocked state: Authenticode, production SBOM, provenance, and combined release assurance are not ready.
+- Implemented state: deterministic synthetic SBOM and release-bundle controls, synthetic attestation integration, local fail-closed Authenticode command scaffolding, exact CKA installer identity verification, and the protected sandbox workflow scaffold.
+- Verified state: provider/custody, policy, target, installer identity, command, ordering, secret-hygiene, workflow, subject, permission, cleanup, and verification contracts can be checked locally without signing, installing CKA, invoking `actions/attest`, or requesting OIDC.
+- Blocked state: certificate class, provider/account/certificate provisioning, protected environment and secret provisioning, live synthetic validation, production workflow integration, real production Authenticode signing, production SBOM, provenance, and combined release assurance are not ready.
 - Future authorization: each implementation stage and any publishing action require separate approval.
 
 ## Non-Claims
 
-Phase 7C does not claim that a production executable is signed, timestamped, or signature-verified. It does not claim that a production SBOM or production provenance attestation exists. The synthetic CI integration passed same-repository remote CI, but that result is not production attestation evidence.
+Phase 7D-R2-F1 does not claim that synthetic or production Authenticode signing has occurred. No protected sandbox workflow dispatch or installer execution occurred during implementation, and workflow live validation remains false. It does not claim that a production executable is signed, timestamped, or signature-verified, or that a production SBOM or provenance attestation exists. The Phase 7C synthetic attestation CI result is not Authenticode signing evidence. Plan-only Authenticode output and the protected workflow scaffold are controls, not signatures.
 
 An eventual attestation would link subject bytes to build identity and provenance evidence. It would not certify security, absence of vulnerabilities, legal compliance, complete source correspondence, reproducibility, or release readiness. Existing `legal_compliance_certified`, `source_availability_certified`, `source_assets_created`, `source_kits_ready`, `assembly_authorized`, `release_gate_reconsideration_allowed`, `release_ready`, and `publishing_allowed` states remain false.
 
@@ -47,19 +47,17 @@ Only `Youtube.Downloaderbs.exe` is a first-party signing candidate. A future sig
 
 Signature verification is a separate mandatory operation. The planning contract requires the Windows Default Authenticode verification policy, represented by SignTool `verify /pa`, plus explicit timestamp verification. A successful signing command alone is not release evidence.
 
-No signing provider, certificate subject, certificate thumbprint, timestamp authority, or command-line credential source has been selected.
+The selected technical provider is SSL.com eSigner with a provider-managed cloud HSM and a non-exportable provider key. No production certificate class is selected. General product material advertises IV, OV, and EV with eSigner, while CKA automated-mode guidance identifies OV or EV. The protected synthetic scaffold therefore accepts only OV or EV. The operator entity type remains unresolved, IV automation requires provider confirmation, and no account, certificate, expected publisher, certificate thumbprint, credential source, or timestamp authority is provisioned or approved.
 
 ## Authenticode Credential Boundary
 
 A code-signing private key is release infrastructure, not ordinary source configuration. It must never be stored in the repository, policy JSON, build logs, review ZIPs, or normal application settings.
 
-Candidate custody models for a later decision are:
+The selected custody model is SSL.com-managed cloud HSM. Private-key export, repository PFX storage, repository private-key storage, and logging of account credentials, OTP/TOTP material, master keys, or certificate identifiers are forbidden.
 
-- a hardware-backed certificate or token, with runner access and operator controls reviewed separately;
-- a managed cloud signing service, with workload identity, audit records, availability, and vendor trust reviewed separately;
-- an exportable certificate held in a repository or environment secret, recorded only as a higher-risk option because extraction and runner compromise can expose the key.
+This technical selection is not procurement or production approval. No provider account or certificate has been purchased, provisioned, or configured. Certificate class, identity validation, expected publisher, credential protection, rotation, revocation, timestamp approval, incident response, and remote signing validation remain separate gates.
 
-None is approved. No provider has been purchased or configured. Phase 7D must select custody, identity, rotation, revocation, timestamp, and incident-response controls before any credential is provisioned.
+Microsoft Artifact Signing Public Trust is not selected because current geographic eligibility is not a safe default for a Vietnam-based operator. SignPath Foundation eligibility is not assumed because the repository project license remains `not-selected`. An exportable PFX in GitHub secrets is rejected because key extraction and runner compromise materially weaken custody.
 
 ## Signing and Verification Sequence
 
@@ -169,7 +167,7 @@ No byte-changing operation may follow checksum, manifest, or attestation finaliz
 
 ## Verification Strategy
 
-Phase 7C local verification remains non-signing and non-attesting. The verifier enforces file hygiene, strict canonical JSON, duplicate-key rejection, exact schemas, fixed identities, separate synthetic and production states, false readiness and claims, non-empty blockers, exact signing/SBOM/provenance boundaries, final-byte ordering, existing gate invariants, and rejection of secret, certificate, key, or local-profile material.
+Phase 7D-R2-F1 local verification remains non-signing and non-attesting. The Authenticode verifier enforces file hygiene, strict canonical JSON, duplicate-key rejection, exact provider/custody/scaffold states, separate synthetic and production purpose gates, immutable CKA installer identity, false provisioning/readiness/production states, exact certificate thumbprint and publisher controls, verify-before-execute and final-byte ordering, project-license invariants, and rejection of secret, key, or local-profile material. The dedicated sandbox smoke mutation-tests the actionless manual trigger, protected variables and secrets, controlled install boundary, certificate uniqueness, deterministic synthetic subject, synthetic-only runtime policy, post-sign evidence, contained cleanup, and production non-claims. The release-assurance smoke retains the complete Phase 7B/7C negative matrix through a compatibility projection while the strict Phase 7D verifier owns corrected Authenticode semantics.
 
 Later implementation must add independent evidence gates:
 
@@ -200,14 +198,17 @@ Later implementation must add independent evidence gates:
 - Phase 7A2: deterministic SBOM generator selection and prototype contract.
 - Phase 7B: production SBOM generation and release-bundle integration.
 - Phase 7C: synthetic GitHub provenance and SBOM attestation integration, followed by separately authorized remote CI validation.
-- Phase 7D: Authenticode provider/custody decision and signing implementation.
+- Phase 7D-R1: SSL.com eSigner provider/custody selection and fail-closed local signing/verification scaffold.
+- Phase 7D-R1-F1: separate synthetic/production signing gates, reconcile policy, and require exact signer identity.
+- Phase 7D-R2-F1: pin the exact CKA installer identity and integrate the actionless protected synthetic sandbox scaffold without dispatching it.
+- Subsequent Phase 7D-R2 operator work: provision the protected environment/account/certificate/secrets and perform real synthetic signing validation only after separate authorization.
 - Phase 7E: end-to-end signed release-assurance rehearsal.
 
 Each stage requires separate review. Actual publishing remains separately authorized after all existing legal, source-kit, release, and new assurance gates pass.
 
 ## Official Evidence
 
-All records below were retrieved on `2026-07-17T03:10:40Z`. Findings are paraphrased; no external document is copied into the repository.
+Phase 7A2/7C records below were retrieved on `2026-07-17T03:10:40Z`. SSL.com records were revalidated on `2026-08-18`. Findings are paraphrased; no external document is copied into the repository.
 
 | Source | Owner and revision | Purpose and finding | Weight |
 | --- | --- | --- | --- |
@@ -218,6 +219,10 @@ All records below were retrieved on `2026-07-17T03:10:40Z`. Findings are paraphr
 | [Using artifact attestations to establish provenance](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations) | GitHub; current docs at retrieval | Defines job permissions, subject inputs, GitHub CLI verification, and the SPDX 2.3 predicate type. | Normative implementation guidance |
 | [Verifying attestations offline](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/verify-attestations-offline) | GitHub; current docs at retrieval | Defines downloading bundles while online and verifying them later in a disconnected environment. | Normative verification guidance |
 | [`actions/attest` release `v4.2.0`](https://github.com/actions/attest/releases/tag/v4.2.0), [immutable `action.yml`](https://github.com/actions/attest/blob/f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6/action.yml), and [immutable `README.md`](https://github.com/actions/attest/blob/f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6/README.md) | GitHub; release published `2026-07-16`, commit `f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6` | Exact selected action inputs, outputs, runtime, defaults, subject limits, and SBOM constraints came from `action.yml`; permission purpose and artifact storage-record behavior came from the README. The action file itself does not declare job permissions. | Normative selected action contract |
+| [eSigner for Code](https://www.ssl.com/products/software-integrity/signing-service/) | SSL.com; current page at retrieval | Establishes SSL.com-managed FIPS cloud-HSM custody, non-exportable private keys, CKA/SignTool integration, and headless signing capability. | Selected provider and custody evidence |
+| [SSL.com downloads](https://www.ssl.com/downloads/) | SSL.com; current page at retrieval | Identifies eSigner CKA `1.1.2` build label `20260062` and the linked Windows package. The repository-calculated SHA-256 of the exact Authenticode-valid linked bytes is pinned as integration evidence; it is not represented as an SSL.com-published checksum. | Current package identity evidence |
+| [Install eSigner CKA](https://www.ssl.com/how-to/how-to-install-ssl-com-esigner-cloud-key-adapter-cka/) and [CI/CD integration](https://www.ssl.com/how-to/how-to-integrate-esigner-cka-with-ci-cd-tools-for-automated-code-signing/) | SSL.com; current pages at retrieval | Defines Windows CNG/KSP integration, manual and automated authentication modes, Windows certificate-store behavior, silent-install syntax, and official example certificate discovery. Automated mode is documented for OV or EV certificates. | Integration and authentication evidence |
+| [eSigner CKA with SignTool](https://www.ssl.com/how-to/automate-ev-code-signing-with-signtool-or-certutil-esigner/) | SSL.com; current page at retrieval | Documents `/fd sha256`, RFC 3161 `/tr http://ts.ssl.com`, `/td sha256`, certificate-thumbprint selection, and manual/automated signing behavior. | Candidate command and timestamp evidence |
 | [SPDX Specification 2.3.0](https://spdx.github.io/spdx-spec/v2.3/) and [conformance](https://spdx.github.io/spdx-spec/v2.3/conformance/) | SPDX Project / Linux Foundation; version 2.3.0 | Defines SPDX 2.3 and supported machine-readable JSON serialization with schema validation. | Normative format specification |
 | [SPDX document composition](https://spdx.github.io/spdx-spec/v2.3/composition-of-an-SPDX-document/) and [package information](https://spdx.github.io/spdx-spec/v2.3/package-information/) | SPDX Project / Linux Foundation; version 2.3.0 | Defines creation information, packages, files, relationships, supplier/origin, download location, checksums, and license fields including `NOASSERTION`. | Normative data-model specification |
 | [SPDX relationships](https://spdx.github.io/spdx-spec/v2.3/relationships-between-SPDX-elements/) | SPDX Project / Linux Foundation; version 2.3.0 | Defines package/file/document relationships and unknown relationship handling. | Normative data-model specification |
@@ -226,6 +231,6 @@ The exact action commit is implementation-specific evidence. Both `action.yml` a
 
 ## Current Decision
 
-The synthetic CI integration, immutable action pin, job-level permission design, and online/offline verification commands passed same-repository remote CI. Authenticode implementation and readiness are false. No production final signed bytes, provenance attestation, SBOM attestation, or production attestation verification exists. Combined release-assurance readiness and every assurance claim remain false.
+The SSL.com eSigner provider and provider-managed cloud-HSM custody model are selected. Signing, verification, exact CKA installer verification, and the protected sandbox workflow scaffold are implemented. Synthetic signing does not depend on production authorization or prior remote validation, while production signing requires both plus independent release gates. Authenticode production implementation and readiness remain false, and production signing remains blocked. The exact current installer identity is pinned and `cka_package_integrated=true`, but that is an implementation state rather than provisioning or live validation. Certificate class, account, certificate, credential source, expected publisher, expected thumbprint, timestamp authority, protected `authenticode-sandbox` environment/account/certificate/secrets, and remote signing validation remain unresolved.
 
-The next permitted work after Phase 7C-R2 is a separately authorized exact-head merge and post-merge main validation. No production signing, credential provisioning, production attestation, release, or publishing action is authorized by this document.
+No production final signed bytes, provenance attestation, SBOM attestation, or production attestation verification exists. Combined release-assurance readiness and every assurance claim remain false. The next checkpoint is a separately authorized Phase 7D-R2 certificate-class and provider-provisioning decision; no purchase, credential provisioning, production signing, release, or publishing action is authorized by this document.

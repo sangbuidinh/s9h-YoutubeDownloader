@@ -15,12 +15,14 @@ WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 PIN_INVENTORY_PATH = REPO_ROOT / ".github" / "actions-pins.json"
 
 EXPECTED_WORKFLOWS = (
+    ".github/workflows/authenticode-sandbox.yml",
     ".github/workflows/ci.yml",
     ".github/workflows/prerelease-v1.2.7-rc.1.yml",
     ".github/workflows/prerelease-v1.3.0-rc.1.yml",
     ".github/workflows/release-v1.3.0.yml",
     ".github/workflows/release-v1.3.1.yml",
 )
+SANDBOX_WORKFLOW = ".github/workflows/authenticode-sandbox.yml"
 CI_WORKFLOW = ".github/workflows/ci.yml"
 RAW_EXTRACTION_STEP = "Extract and validate raw synthetic artifact archive"
 RAW_EXTRACTION_SUCCESS = "Secure raw synthetic artifact extraction verified"
@@ -284,7 +286,7 @@ def main() -> int:
 def validate_supply_chain(documents: dict[str, str], inventory: dict) -> None:
     _require(
         tuple(sorted(documents)) == EXPECTED_WORKFLOWS,
-        "workflow file inventory differs from the expected five files",
+        "workflow file inventory differs from the expected six files",
     )
     profiles = _validate_inventory(inventory)
     workflow_profiles = inventory["workflow_profiles"]
@@ -315,6 +317,9 @@ def validate_supply_chain(documents: dict[str, str], inventory: dict) -> None:
             for number, line in enumerate(workflow.splitlines(), 1)
             if re.match(r"^\s*(?:-\s*)?uses\s*:", line)
         ]
+        if path == SANDBOX_WORKFLOW:
+            _require(not uses_lines, "Authenticode sandbox workflow must remain actionless")
+            continue
         _require(bool(uses_lines), f"{path} contains no action invocation")
         profile_name = workflow_profiles[path]
         profile_actions = profiles[profile_name]["actions"]
@@ -507,6 +512,10 @@ def _validate_inventory(inventory: dict) -> dict:
 
 def _validate_workflow_environment(path: str, workflow: str) -> None:
     runners = re.findall(r"(?m)^\s*runs-on:\s*(\S+)\s*$", workflow)
+    if path == SANDBOX_WORKFLOW:
+        _require(runners == ["windows-2022"], "Authenticode sandbox job must use windows-2022")
+        _require("python-version:" not in workflow, "Authenticode sandbox must not add an unneeded Python selector")
+        return
     _require(
         runners == ["windows-2022", "windows-2022"],
         f"{path} jobs must use windows-2022",
@@ -576,6 +585,16 @@ def _validate_permissions(path: str, workflow: str) -> None:
         if match and match.group(3) == "write":
             writes.append((number, len(match.group(1)), match.group(2)))
 
+    if path == SANDBOX_WORKFLOW:
+        job = _mapping_block(lines, "sandbox-signing", 2)
+        _require(
+            _direct_mapping_pairs(_mapping_block(job, "permissions", 4), 6)
+            == [("contents", "read")],
+            "Authenticode sandbox job must have contents read only",
+        )
+        _require(not writes, "Authenticode sandbox workflow must not request write permissions")
+        return
+
     if path == ".github/workflows/ci.yml":
         producer = _mapping_block(lines, "windows-smoke", 2)
         _require(
@@ -622,6 +641,14 @@ def _validate_permissions(path: str, workflow: str) -> None:
 
 
 def _validate_historical_behavior(path: str, workflow: str) -> None:
+    if path == SANDBOX_WORKFLOW:
+        for forbidden in (
+            "softprops/action-gh-release@",
+            "gh release",
+            "git push",
+        ):
+            _require(forbidden not in workflow, "Authenticode sandbox workflow must not publish")
+        return
     if path == ".github/workflows/ci.yml":
         _require(
             "softprops/action-gh-release@" not in workflow,
@@ -641,6 +668,9 @@ def _validate_historical_behavior(path: str, workflow: str) -> None:
 
 def _validate_action_placement(path: str, workflow: str) -> None:
     lines = workflow.splitlines()
+    if path == SANDBOX_WORKFLOW:
+        _require("uses:" not in workflow, "Authenticode sandbox workflow must remain actionless")
+        return
     if path == CI_WORKFLOW:
         producer = "\n".join(_mapping_block(lines, "windows-smoke", 2))
         consumer = "\n".join(_mapping_block(lines, "release-bundle-handoff", 2))

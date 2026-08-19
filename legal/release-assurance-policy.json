@@ -4,10 +4,16 @@
     "blockers": [
       "CI signing identity not provisioned",
       "RFC3161 timestamp authority not approved",
-      "code-signing certificate provider not selected",
-      "private-key custody model not approved",
-      "signed-artifact checksum sequencing not implemented",
-      "signing and verification workflow not implemented"
+      "certificate class decision",
+      "certificate issuance",
+      "production final bytes",
+      "production signature and timestamp verification",
+      "production signing workflow integration",
+      "protected credential and environment configuration",
+      "protected remote signing environment",
+      "provider account and identity validation",
+      "remote synthetic signing validation",
+      "timestamp authority approval"
     ],
     "candidate_timestamp": {
       "digest": "SHA256",
