@@ -1,5 +1,4 @@
 import os
-import queue
 import re
 import hashlib
 import inspect
@@ -12,7 +11,7 @@ import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 
 from core.download_contracts import (
     BatchDecision,
@@ -41,6 +40,53 @@ from core.download_modes import (
     PART_THUMB,
     PART_VIDEO,
     required_parts,
+)
+from core.download_process import (
+    DownloadController,
+    _cancel_requested,
+    _raise_if_cancelled,
+    _sleep_with_cancel,
+    _subprocess_creationflags,
+    _terminate_process_tree,
+    _wait_for_process_exit,
+)
+from core.ffmpeg_tools import (
+    FFMPEG_COMBINED_OUTPUT_LIMIT,
+    FFMPEG_OUTPUT_LINE_CHAR_LIMIT,
+    FFMPEG_OUTPUT_LINE_LIMIT,
+    FFMPEG_PROGRESS_EMIT_INTERVAL_SECONDS,
+    FFMPEG_PROGRESS_QUEUE_POLL_SECONDS,
+    FFMPEG_PROGRESS_SPEED_UNKNOWN,
+    FFmpegExecutionError,
+    _FfmpegProgressState,
+    _bound_subprocess_output_line,
+    _bounded_sanitized_subprocess_output,
+    _collect_meaningful_ffmpeg_lines,
+    _consume_ffmpeg_progress_line as _ffmpeg_consume_progress_line,
+    _emit_ffmpeg_conversion_progress as _ffmpeg_emit_conversion_progress,
+    _ffmpeg_out_time_seconds,
+    _ffmpeg_output_lines,
+    _ffmpeg_progress_percent,
+    _is_absolute_subprocess_path,
+    _is_ffmpeg_progress_line,
+    _is_meaningful_ffmpeg_line,
+    _join_bounded_tail,
+    _normalize_ffmpeg_speed,
+    _parse_ffmpeg_progress_line,
+    _parse_media_timestamp_seconds,
+    _path_placeholder,
+    _protect_urls_for_path_sanitization,
+    _read_process_stream,
+    _redact_sensitive_assignments_outside_urls,
+    _redact_sensitive_url_query_values,
+    _restore_protected_urls,
+    _safe_path_basename,
+    _sanitize_subprocess_output_line,
+    _sanitize_subprocess_paths,
+    _split_url_trailing_punctuation,
+    _standalone_secret_value_end,
+    classify_ffmpeg_failure_kind,
+    run_ffmpeg_command as _run_ffmpeg_command_impl,
 )
 from core.file_status import (
     OutputPaths,
@@ -74,6 +120,24 @@ from core.error_messages import (
 )
 from core.filename_utils import normalize_output_stem
 from core.runtime_paths import runtime_file
+from core.ytdlp_commands import (
+    ARIA2_FAST_DOWNLOADER_ARGS,
+    PREMIERE_SAFE_VIDEO_FORMAT,
+    _Aria2RuntimeValidation,
+    _aria2_unavailable_message,
+    _aria2_runtime_path as _commands_aria2_runtime_path,
+    _base_fast_ytdlp_command as _commands_base_fast_ytdlp_command,
+    _base_ytdlp_command as _commands_base_ytdlp_command,
+    _build_audio_ytdlp_command as _commands_build_audio_ytdlp_command,
+    _build_fast_audio_ytdlp_command as _commands_build_fast_audio_ytdlp_command,
+    _build_fast_video_ytdlp_command as _commands_build_fast_video_ytdlp_command,
+    _build_stable_audio_ytdlp_command as _commands_build_stable_audio_ytdlp_command,
+    _build_stable_video_ytdlp_command as _commands_build_stable_video_ytdlp_command,
+    _build_video_ytdlp_command as _commands_build_video_ytdlp_command,
+    _deno_runtime_path as _commands_deno_runtime_path,
+    _normalize_download_engine,
+    _safe_temp_stem,
+)
 from core.state_store import (
     STATUS_NOT_DOWNLOADED,
     get_effective_status,
@@ -87,25 +151,12 @@ from core.state_store import (
 
 
 USER_AGENT = "YouTube Downloader Source/1.0"
-PREMIERE_SAFE_VIDEO_FORMAT = (
-    "bv*[height<=1080][ext=mp4][vcodec^=avc1]+ba[ext=m4a][acodec^=mp4a]/"
-    "b[height<=1080][ext=mp4][vcodec^=avc1][acodec^=mp4a]"
-)
 MAX_FINAL_PATH_LENGTH = 240
-FFMPEG_OUTPUT_LINE_LIMIT = 20
-FFMPEG_OUTPUT_LINE_CHAR_LIMIT = 500
-FFMPEG_COMBINED_OUTPUT_LIMIT = 8192
-FFMPEG_PROGRESS_EMIT_INTERVAL_SECONDS = 0.3
-FFMPEG_PROGRESS_QUEUE_POLL_SECONDS = 0.1
-FFMPEG_PROGRESS_SPEED_UNKNOWN = "--"
 YTDLP_OUTPUT_TAIL_LIMIT = 200
 YTDLP_FATAL_LINE_LIMIT = 12
 COOKIE_MEDIA_RETRY_TARGET_SECONDS = (2, 5, 10, 30)
 COOKIE_MEDIA_SHORT_PROBE_SECONDS = 2
 COOKIE_MEDIA_PROBE_INTERVAL_VIDEOS = 10
-_STANDALONE_SECRET_ASSIGNMENT_PATTERN = re.compile(
-    r"(?i)\b(?P<name>key|api_key|token|access_token)="
-)
 _ARIA2_HTTP_RESPONSE_EXIT_PATTERN = re.compile(
     r"\baria2c(?:\.exe)?\s+exited\s+with\s+code\s+22\b",
     flags=re.IGNORECASE,
@@ -114,7 +165,6 @@ OUTPUT_PATH_TOO_LONG_MESSAGE = (
     "Output path too long. Please choose a shorter save folder or shorten filename limit."
 )
 YTDLP_COOKIES_OPTION = "--cookies"
-ARIA2_FAST_DOWNLOADER_ARGS = "aria2c:-x 16 -s 16 -j 16 -k 1M"
 # aria2 exit 22 means the HTTP response header was bad or unexpected.
 ARIA2_HTTP_RESPONSE_EXIT_CODE = 22
 ARIA2_VERSION_TIMEOUT_SECONDS = 3.0
@@ -134,6 +184,120 @@ FILE_COOKIE_SESSION_ERROR_MESSAGE = (
     "Cookies may be expired. Export a fresh cookies.txt file, select it again if needed, "
     "then retry the failed download."
 )
+
+
+def _deno_runtime_path() -> Path:
+    return _commands_deno_runtime_path(runtime_file)
+
+
+def _aria2_runtime_path() -> Path:
+    return _commands_aria2_runtime_path(runtime_file)
+
+
+def _base_ytdlp_command(options: DownloadOptions) -> list[str]:
+    return _commands_base_ytdlp_command(
+        options,
+        runtime_file_resolver=runtime_file,
+    )
+
+
+def _base_fast_ytdlp_command(
+    options: DownloadOptions,
+    aria2_validation: _Aria2RuntimeValidation,
+) -> list[str]:
+    return _commands_base_fast_ytdlp_command(
+        options,
+        aria2_validation,
+        runtime_file_resolver=runtime_file,
+    )
+
+
+def _build_stable_video_ytdlp_command(
+    video_id: str,
+    temp_dir: Path,
+    options: DownloadOptions,
+) -> list[str]:
+    return _commands_build_stable_video_ytdlp_command(
+        video_id,
+        temp_dir,
+        options,
+        runtime_file_resolver=runtime_file,
+    )
+
+
+def _build_fast_video_ytdlp_command(
+    video_id: str,
+    temp_dir: Path,
+    options: DownloadOptions,
+    aria2_validation: _Aria2RuntimeValidation,
+) -> list[str]:
+    return _commands_build_fast_video_ytdlp_command(
+        video_id,
+        temp_dir,
+        options,
+        aria2_validation,
+        runtime_file_resolver=runtime_file,
+    )
+
+
+def _build_video_ytdlp_command(
+    video_id: str,
+    temp_dir: Path,
+    options: DownloadOptions,
+    *,
+    aria2_validation: _Aria2RuntimeValidation | None = None,
+) -> list[str]:
+    return _commands_build_video_ytdlp_command(
+        video_id,
+        temp_dir,
+        options,
+        aria2_validation=aria2_validation,
+        runtime_file_resolver=runtime_file,
+    )
+
+
+def _build_stable_audio_ytdlp_command(
+    video_id: str,
+    temp_dir: Path,
+    options: DownloadOptions,
+) -> list[str]:
+    return _commands_build_stable_audio_ytdlp_command(
+        video_id,
+        temp_dir,
+        options,
+        runtime_file_resolver=runtime_file,
+    )
+
+
+def _build_fast_audio_ytdlp_command(
+    video_id: str,
+    temp_dir: Path,
+    options: DownloadOptions,
+    aria2_validation: _Aria2RuntimeValidation,
+) -> list[str]:
+    return _commands_build_fast_audio_ytdlp_command(
+        video_id,
+        temp_dir,
+        options,
+        aria2_validation,
+        runtime_file_resolver=runtime_file,
+    )
+
+
+def _build_audio_ytdlp_command(
+    video_id: str,
+    temp_dir: Path,
+    options: DownloadOptions,
+    *,
+    aria2_validation: _Aria2RuntimeValidation | None = None,
+) -> list[str]:
+    return _commands_build_audio_ytdlp_command(
+        video_id,
+        temp_dir,
+        options,
+        aria2_validation=aria2_validation,
+        runtime_file_resolver=runtime_file,
+    )
 
 
 @dataclass
@@ -250,127 +414,9 @@ class _VideoDownloadTiming:
         )
 
 
-@dataclass
-class _FfmpegProgressState:
-    duration_seconds: float | None
-    out_time_seconds: float = 0.0
-    speed: str = FFMPEG_PROGRESS_SPEED_UNKNOWN
-    percent_value: int = 0
-    last_emit_monotonic: float = 0.0
-
-
 _PROGRESS_CONTEXT = threading.local()
 _VIDEO_DOWNLOAD_TIMING_CONTEXT = threading.local()
 _YTDLP_ATTEMPT_TIMING_CONTEXT = threading.local()
-
-
-class DownloadController:
-    def __init__(self, systemic_block_callback=None):
-        self._cancel_requested = threading.Event()
-        self._process_lock = threading.Lock()
-        self._decision_condition = threading.Condition()
-        self._active_block_id = ""
-        self._systemic_decision: BatchDecision | None = None
-        self.systemic_block_callback = systemic_block_callback
-        self.current_process: subprocess.Popen | None = None
-        self._active_processes: set[subprocess.Popen] = set()
-
-    def request_cancel(self) -> None:
-        self._cancel_requested.set()
-        with self._decision_condition:
-            self._systemic_decision = BatchDecision.STOP_BATCH
-            self._decision_condition.notify_all()
-        with self._process_lock:
-            processes = list(self._active_processes)
-            if self.current_process is not None and self.current_process not in processes:
-                processes.append(self.current_process)
-        for process in processes:
-            threading.Thread(target=self._terminate_process, args=(process,), daemon=True).start()
-
-    def is_cancel_requested(self) -> bool:
-        return self._cancel_requested.is_set()
-
-    def set_current_process(self, process: subprocess.Popen) -> None:
-        with self._process_lock:
-            self._active_processes.add(process)
-            self.current_process = process
-        if self.is_cancel_requested():
-            self._terminate_process(process)
-
-    def clear_current_process(self, process: subprocess.Popen) -> None:
-        with self._process_lock:
-            self._active_processes.discard(process)
-            if self.current_process is process:
-                self.current_process = next(iter(self._active_processes), None)
-
-    def has_active_process(self) -> bool:
-        with self._process_lock:
-            processes = list(self._active_processes)
-        for process in processes:
-            try:
-                if process.poll() is None:
-                    return True
-            except Exception:
-                continue
-        return False
-
-    def is_idle(self) -> bool:
-        with self._decision_condition:
-            waiting_for_decision = bool(
-                self._active_block_id
-                and self._systemic_decision is None
-                and not self.is_cancel_requested()
-            )
-        return not self.has_active_process() and not waiting_for_decision
-
-    def wait_for_systemic_decision(self, context: SystemicBlockContext) -> BatchDecision:
-        callback = self.systemic_block_callback
-        if callback is None:
-            return BatchDecision.STOP_BATCH
-
-        with self._decision_condition:
-            if self.is_cancel_requested():
-                return BatchDecision.STOP_BATCH
-            self._active_block_id = context.block_id
-            self._systemic_decision = None
-
-        try:
-            callback(context)
-        except Exception:
-            return BatchDecision.STOP_BATCH
-
-        with self._decision_condition:
-            while self._systemic_decision is None and not self.is_cancel_requested():
-                self._decision_condition.wait(timeout=0.25)
-            decision = self._systemic_decision or BatchDecision.STOP_BATCH
-            if self._active_block_id == context.block_id:
-                self._active_block_id = ""
-                self._systemic_decision = None
-            return decision
-
-    def submit_systemic_decision(self, block_id: str, decision: BatchDecision | str) -> bool:
-        try:
-            normalized = decision if isinstance(decision, BatchDecision) else BatchDecision(str(decision))
-        except ValueError:
-            return False
-        with self._decision_condition:
-            if block_id != self._active_block_id:
-                return False
-            self._systemic_decision = normalized
-            self._decision_condition.notify_all()
-            return True
-
-    def is_systemic_block_active(self, block_id: str) -> bool:
-        with self._decision_condition:
-            return bool(
-                block_id
-                and block_id == self._active_block_id
-                and self._systemic_decision is None
-                and not self.is_cancel_requested()
-            )
-
-    def _terminate_process(self, process: subprocess.Popen) -> None:
-        _terminate_process_tree(process)
 
 
 class FileOperationError(DownloadError):
@@ -430,30 +476,6 @@ class YtdlpExecutionError(DownloadError):
         self.command = tuple(str(value) for value in (command or ()))
 
 
-class FFmpegExecutionError(DownloadError):
-    def __init__(
-        self,
-        *,
-        operation: str,
-        exit_code: int,
-        message: str,
-        output_lines: list[str] | tuple[str, ...],
-        combined_output: str = "",
-    ):
-        super().__init__(message)
-        self.operation = operation
-        self.exit_code = int(exit_code)
-        self.output_lines = tuple(
-            line
-            for line in (
-                _bound_subprocess_output_line(_sanitize_subprocess_output_line(output_line))
-                for output_line in output_lines
-            )
-            if line
-        )[-FFMPEG_OUTPUT_LINE_LIMIT:]
-        self.combined_output = _bounded_sanitized_subprocess_output("", combined_output)
-
-
 @dataclass(frozen=True)
 class _CookieFileSnapshot:
     exists: bool
@@ -473,13 +495,6 @@ class _PreparedCookieAttempt:
     canonical_snapshot: _CookieFileSnapshot | None = None
     temp_cookie_path: str = ""
     cookies_used: bool = False
-
-
-@dataclass(frozen=True)
-class _Aria2RuntimeValidation:
-    requested: bool
-    available: bool
-    path: Path
 
 
 @dataclass
@@ -648,6 +663,27 @@ def _emit_current_progress(phase: str | None = None, message: str = "", **kwargs
     )
 
 
+def _emit_ffmpeg_conversion_progress(
+    state: _FfmpegProgressState,
+    completed: bool = False,
+    force: bool = False,
+) -> None:
+    _ffmpeg_emit_conversion_progress(
+        state,
+        completed=completed,
+        force=force,
+        progress_emitter=_emit_current_progress,
+    )
+
+
+def _consume_ffmpeg_progress_line(line: str, state: _FfmpegProgressState) -> bool:
+    return _ffmpeg_consume_progress_line(
+        line,
+        state,
+        progress_emitter=_emit_current_progress,
+    )
+
+
 def _emit_general_error_progress(progress_callback, video, index: int, total: int, message: str) -> None:
     _emit_progress(
         progress_callback,
@@ -694,63 +730,6 @@ def _emit_ffmpeg_error_progress(
     failure_kind = classify_ffmpeg_failure_kind(exc)
     friendly = friendly_ffmpeg_failure_kind_error(failure_kind.value, exc.combined_output)
     _emit_progress(progress_callback, "Error", video, index, total, message=friendly.title, kind="error")
-
-
-def _subprocess_creationflags() -> int:
-    return getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-
-
-def _terminate_process_tree(process: subprocess.Popen | None) -> None:
-    if process is None:
-        return
-    try:
-        if process.poll() is not None:
-            return
-    except Exception:
-        return
-
-    if os.name == "nt":
-        try:
-            result = subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                timeout=3,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            if result.returncode == 0:
-                return
-        except Exception:
-            pass
-
-    try:
-        process.terminate()
-    except Exception:
-        pass
-
-    if _wait_for_process_exit(process, 2.0) is not None:
-        return
-
-    try:
-        if process.poll() is None:
-            process.kill()
-    except Exception:
-        pass
-    _wait_for_process_exit(process, 2.0)
-
-
-def _wait_for_process_exit(process: subprocess.Popen, timeout: float) -> int | None:
-    try:
-        return process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return None
-    except Exception:
-        try:
-            return process.poll()
-        except Exception:
-            return None
 
 
 def validate_speed_limit(value: str) -> str | None:
@@ -804,12 +783,6 @@ def validate_download_environment(options: DownloadOptions) -> None:
     if not ffmpeg_path.exists():
         raise DownloadError("ffmpeg.exe missing")
     effective_cookies_path(options)
-
-
-def _normalize_download_engine(value: object) -> str:
-    if value == DOWNLOAD_ENGINE_ARIA2_FAST:
-        return DOWNLOAD_ENGINE_ARIA2_FAST
-    return DOWNLOAD_ENGINE_STABLE
 
 
 def effective_cookies_path(options: DownloadOptions) -> str:
@@ -1781,76 +1754,6 @@ def _download_video(
             pass
 
 
-def _build_stable_video_ytdlp_command(
-    video_id: str,
-    temp_dir: Path,
-    options: DownloadOptions,
-) -> list[str]:
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    output_template = str(temp_dir / f"{_safe_temp_stem(video_id)}.%(ext)s")
-    return _base_ytdlp_command(options) + [
-        "-N",
-        "1",
-        "-f",
-        PREMIERE_SAFE_VIDEO_FORMAT,
-        "--merge-output-format",
-        "mp4",
-        "--no-write-info-json",
-        "--no-write-description",
-        "--no-write-thumbnail",
-        "-o",
-        output_template,
-        url,
-    ]
-
-
-def _build_fast_video_ytdlp_command(
-    video_id: str,
-    temp_dir: Path,
-    options: DownloadOptions,
-    aria2_validation: _Aria2RuntimeValidation,
-) -> list[str]:
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    output_template = str(temp_dir / f"{_safe_temp_stem(video_id)}.%(ext)s")
-    return _base_fast_ytdlp_command(
-        options,
-        aria2_validation,
-    ) + [
-        "-N",
-        "1",
-        "-f",
-        PREMIERE_SAFE_VIDEO_FORMAT,
-        "--merge-output-format",
-        "mp4",
-        "--no-write-info-json",
-        "--no-write-description",
-        "--no-write-thumbnail",
-        "-o",
-        output_template,
-        url,
-    ]
-
-
-def _build_video_ytdlp_command(
-    video_id: str,
-    temp_dir: Path,
-    options: DownloadOptions,
-    *,
-    aria2_validation: _Aria2RuntimeValidation | None = None,
-) -> list[str]:
-    engine = _normalize_download_engine(options.download_engine)
-    if engine == DOWNLOAD_ENGINE_ARIA2_FAST:
-        if aria2_validation is None:
-            raise DownloadError(_aria2_unavailable_message())
-        return _build_fast_video_ytdlp_command(
-            video_id,
-            temp_dir,
-            options,
-            aria2_validation,
-        )
-    return _build_stable_video_ytdlp_command(video_id, temp_dir, options)
-
-
 def _download_audio(
     video_id: str,
     stem: str,
@@ -1870,82 +1773,6 @@ def _download_audio(
     )
     _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
     _move_single_file(temp_dir, "*.mp3", final_path, log, cancel_controller=cancel_controller)
-
-
-def _build_stable_audio_ytdlp_command(
-    video_id: str,
-    temp_dir: Path,
-    options: DownloadOptions,
-) -> list[str]:
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    output_template = str(temp_dir / f"{_safe_temp_stem(video_id)}.%(ext)s")
-    return _base_ytdlp_command(options) + [
-        "-N",
-        "1",
-        "-x",
-        "--audio-format",
-        "mp3",
-        "--audio-quality",
-        "0",
-        "--no-write-info-json",
-        "--no-write-description",
-        "--no-write-thumbnail",
-        "-o",
-        output_template,
-        url,
-    ]
-
-
-def _build_fast_audio_ytdlp_command(
-    video_id: str,
-    temp_dir: Path,
-    options: DownloadOptions,
-    aria2_validation: _Aria2RuntimeValidation,
-) -> list[str]:
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    output_template = str(temp_dir / f"{_safe_temp_stem(video_id)}.%(ext)s")
-    return _base_fast_ytdlp_command(
-        options,
-        aria2_validation,
-    ) + [
-        "-N",
-        "1",
-        "-x",
-        "--audio-format",
-        "mp3",
-        "--audio-quality",
-        "0",
-        "--no-write-info-json",
-        "--no-write-description",
-        "--no-write-thumbnail",
-        "-o",
-        output_template,
-        url,
-    ]
-
-
-def _build_audio_ytdlp_command(
-    video_id: str,
-    temp_dir: Path,
-    options: DownloadOptions,
-    *,
-    aria2_validation: _Aria2RuntimeValidation | None = None,
-) -> list[str]:
-    engine = _normalize_download_engine(options.download_engine)
-    if engine == DOWNLOAD_ENGINE_ARIA2_FAST:
-        if aria2_validation is None:
-            raise DownloadError(_aria2_unavailable_message())
-        return _build_fast_audio_ytdlp_command(
-            video_id,
-            temp_dir,
-            options,
-            aria2_validation,
-        )
-    return _build_stable_audio_ytdlp_command(
-        video_id,
-        temp_dir,
-        options,
-    )
 
 
 def _extract_mp3_from_video(
@@ -1988,31 +1815,6 @@ def _run_ffmpeg_for_audio(command: list[str], cancel_controller: DownloadControl
         operation="extract_mp3",
         cancel_controller=cancel_controller,
     )
-
-
-def _parse_media_timestamp_seconds(value: object) -> float | None:
-    text = str(value or "").strip()
-    if not text or text.upper() == "N/A":
-        return None
-    try:
-        if re.fullmatch(r"\d+(?:\.\d+)?", text):
-            seconds = float(text)
-            return seconds if seconds >= 0 else None
-    except (TypeError, ValueError, OverflowError):
-        return None
-
-    match = re.fullmatch(r"(?P<hours>\d+):(?P<minutes>\d{1,2}):(?P<seconds>\d{1,2}(?:\.\d+)?)", text)
-    if match is None:
-        return None
-    try:
-        hours = int(match.group("hours"))
-        minutes = int(match.group("minutes"))
-        seconds = float(match.group("seconds"))
-    except (TypeError, ValueError, OverflowError):
-        return None
-    if minutes >= 60 or seconds >= 60:
-        return None
-    return hours * 3600 + minutes * 60 + seconds
 
 
 def _probe_media_duration_seconds(
@@ -2065,119 +1867,6 @@ def _probe_media_duration_seconds(
     return None
 
 
-def _parse_ffmpeg_progress_line(line: str) -> tuple[str, str] | None:
-    text = str(line or "").strip()
-    if not text or "=" not in text:
-        return None
-    key, value = text.split("=", 1)
-    key = key.strip()
-    if not key:
-        return None
-    return key, value.strip()
-
-
-def _ffmpeg_out_time_seconds(key: str, value: str) -> float | None:
-    normalized_key = str(key or "").strip().lower()
-    if normalized_key in {"out_time_us", "out_time_ms"}:
-        try:
-            seconds = float(str(value or "").strip()) / 1_000_000.0
-        except (TypeError, ValueError, OverflowError):
-            return None
-        return seconds if seconds >= 0 else None
-    if normalized_key == "out_time":
-        return _parse_media_timestamp_seconds(value)
-    return None
-
-
-def _normalize_ffmpeg_speed(value: str | None) -> str:
-    text = _sanitize_subprocess_output_line(value or "")
-    if not text or text.upper() == "N/A":
-        return FFMPEG_PROGRESS_SPEED_UNKNOWN
-    return _bound_subprocess_output_line(text)
-
-
-def _ffmpeg_progress_percent(
-    out_time_seconds: float,
-    duration_seconds: float | None,
-    completed: bool = False,
-) -> int:
-    if completed:
-        return 100
-    try:
-        duration = float(duration_seconds) if duration_seconds is not None else 0.0
-        out_time = max(0.0, float(out_time_seconds))
-    except (TypeError, ValueError, OverflowError):
-        return 0
-    if duration <= 0:
-        return 0
-    return max(0, min(99, int((out_time / duration) * 100)))
-
-
-def _emit_ffmpeg_conversion_progress(
-    state: _FfmpegProgressState,
-    completed: bool = False,
-    force: bool = False,
-) -> None:
-    now = time.monotonic()
-    if not force and now - state.last_emit_monotonic < FFMPEG_PROGRESS_EMIT_INTERVAL_SECONDS:
-        return
-
-    percent_value = _ffmpeg_progress_percent(
-        state.out_time_seconds,
-        state.duration_seconds,
-        completed=completed,
-    )
-    if not completed:
-        percent_value = max(state.percent_value, percent_value)
-    state.percent_value = percent_value
-    state.last_emit_monotonic = now
-    _emit_current_progress(
-        "FFmpeg",
-        kind="ffmpeg_progress",
-        message="",
-        percent=f"{state.percent_value}%",
-        speed=state.speed,
-        eta=None,
-        fragment=None,
-    )
-
-
-def _consume_ffmpeg_progress_line(line: str, state: _FfmpegProgressState) -> bool:
-    parsed = _parse_ffmpeg_progress_line(line)
-    if parsed is None:
-        return False
-
-    key, value = parsed
-    normalized_key = key.strip().lower()
-    out_time_seconds = _ffmpeg_out_time_seconds(normalized_key, value)
-    if out_time_seconds is not None:
-        state.out_time_seconds = out_time_seconds
-        return True
-
-    if normalized_key == "speed":
-        state.speed = _normalize_ffmpeg_speed(value)
-        return True
-
-    if normalized_key == "progress":
-        normalized_value = value.strip().lower()
-        if normalized_value == "end":
-            _emit_ffmpeg_conversion_progress(state, completed=True, force=True)
-        elif normalized_value == "continue":
-            _emit_ffmpeg_conversion_progress(state)
-        return True
-
-    return True
-
-
-def _read_process_stream(stream, stream_name: str, output_queue: queue.Queue) -> None:
-    try:
-        if stream is not None:
-            for raw_line in stream:
-                output_queue.put((stream_name, str(raw_line).rstrip("\r\n")))
-    finally:
-        output_queue.put((stream_name, None))
-
-
 def _run_ffmpeg_command(
     command: list[str],
     *,
@@ -2185,109 +1874,13 @@ def _run_ffmpeg_command(
     cancel_controller: DownloadController | None = None,
     progress_duration_seconds: float | None = None,
 ) -> str:
-    creationflags = _subprocess_creationflags()
-    process = None
-    stdout_lines: list[str] = []
-    stderr_lines: list[str] = []
-    return_code = -1
-    progress_enabled = progress_duration_seconds is not None
-    progress_state = (
-        _FfmpegProgressState(progress_duration_seconds)
-        if progress_enabled
-        else None
-    )
-    try:
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=creationflags,
-        )
-        if cancel_controller is not None:
-            cancel_controller.set_current_process(process)
-
-        output_queue: queue.Queue = queue.Queue()
-        stream_count = 0
-        for stream_name, stream in (
-            ("stdout", getattr(process, "stdout", None)),
-            ("stderr", getattr(process, "stderr", None)),
-        ):
-            if stream is None:
-                continue
-            stream_count += 1
-            threading.Thread(
-                target=_read_process_stream,
-                args=(stream, stream_name, output_queue),
-                daemon=True,
-            ).start()
-
-        while stream_count > 0:
-            if _cancel_requested(cancel_controller):
-                _terminate_process_tree(process)
-                raise DownloadCancelled("download cancelled/interrupted")
-            try:
-                stream_name, line = output_queue.get(timeout=FFMPEG_PROGRESS_QUEUE_POLL_SECONDS)
-            except queue.Empty:
-                continue
-            if line is None:
-                stream_count -= 1
-                continue
-            if stream_name == "stdout":
-                if progress_state is not None and _consume_ffmpeg_progress_line(line, progress_state):
-                    continue
-                _append_limited(stdout_lines, line, YTDLP_OUTPUT_TAIL_LIMIT)
-            else:
-                _append_limited(stderr_lines, line, YTDLP_OUTPUT_TAIL_LIMIT)
-
-        while True:
-            if _cancel_requested(cancel_controller):
-                _terminate_process_tree(process)
-                raise DownloadCancelled("download cancelled/interrupted")
-            return_code = _wait_for_process_exit(process, FFMPEG_PROGRESS_QUEUE_POLL_SECONDS)
-            if return_code is not None:
-                break
-    except FileNotFoundError:
-        raise DownloadError("ffmpeg.exe missing")
-    except OSError as exc:
-        reason = _sanitize_subprocess_output_line(str(exc)) or type(exc).__name__
-        raise DownloadError(
-            f"ffmpeg process creation failed during {operation}: {type(exc).__name__}: {reason}"
-        ) from exc
-    except KeyboardInterrupt:
-        _terminate_process_tree(process)
-        raise DownloadCancelled("download cancelled/interrupted")
-    finally:
-        if process is not None and cancel_controller is not None:
-            cancel_controller.clear_current_process(process)
-
-    if _cancel_requested(cancel_controller):
-        raise DownloadCancelled("download cancelled/interrupted")
-    stdout = "\n".join(stdout_lines)
-    stderr = "\n".join(stderr_lines)
-    if return_code == 0:
-        if progress_state is not None:
-            _emit_ffmpeg_conversion_progress(progress_state, completed=True, force=True)
-        return _bounded_sanitized_subprocess_output(stdout, stderr)
-
-    output_lines = _ffmpeg_output_lines(stdout, stderr)
-    combined_output = _bounded_sanitized_subprocess_output(stdout, stderr)
-    initial = FFmpegExecutionError(
+    return _run_ffmpeg_command_impl(
+        command,
         operation=operation,
-        exit_code=return_code,
-        message=f"ffmpeg {operation} failed",
-        output_lines=output_lines,
-        combined_output=combined_output,
-    )
-    failure_kind = classify_ffmpeg_failure_kind(initial)
-    raise FFmpegExecutionError(
-        operation=operation,
-        exit_code=return_code,
-        message=f"ffmpeg {operation} failed: {failure_kind.value}",
-        output_lines=output_lines,
-        combined_output=combined_output,
+        cancel_controller=cancel_controller,
+        progress_duration_seconds=progress_duration_seconds,
+        progress_emitter=_emit_current_progress,
+        terminate_process_tree=_terminate_process_tree,
     )
 
 
@@ -2341,57 +1934,6 @@ def _download_thumbnail(
         raise
     except DownloadError:
         raise DownloadError("thumbnail download failed")
-
-
-def _base_ytdlp_command(options: DownloadOptions) -> list[str]:
-    deno_path = _deno_runtime_path()
-    command = [
-        str(runtime_file("yt-dlp.exe")),
-        "--no-playlist",
-        "--newline",
-        "--no-overwrites",
-        "--retries",
-        "30",
-        "--fragment-retries",
-        "30",
-        "--file-access-retries",
-        "10",
-        "--socket-timeout",
-        "60",
-        "--http-chunk-size",
-        "1M",
-        "--ffmpeg-location",
-        str(runtime_file("ffmpeg.exe").parent),
-    ]
-    if deno_path.exists():
-        command.extend([
-            "--js-runtimes",
-            f"deno:{deno_path}",
-            "--remote-components",
-            "ejs:github",
-        ])
-    if options.speed_limit:
-        command.extend(["--limit-rate", options.speed_limit])
-    return command
-
-
-def _base_fast_ytdlp_command(
-    options: DownloadOptions,
-    aria2_validation: _Aria2RuntimeValidation,
-) -> list[str]:
-    if not aria2_validation.available:
-        raise DownloadError(_aria2_unavailable_message())
-
-    command = _base_ytdlp_command(options)
-    command.extend(
-        [
-            "--downloader",
-            str(aria2_validation.path),
-            "--downloader-args",
-            ARIA2_FAST_DOWNLOADER_ARGS,
-        ]
-    )
-    return command
 
 
 def _premiere_safe_mp4_ready(path: Path, cancel_controller: DownloadController | None = None) -> bool:
@@ -2618,21 +2160,6 @@ def _extract_video_height(line: str) -> int | None:
     return None
 
 
-def _deno_runtime_path() -> Path:
-    return runtime_file("deno.exe")
-
-
-def _aria2_runtime_path() -> Path:
-    return runtime_file("aria2c.exe")
-
-
-def _aria2_unavailable_message() -> str:
-    return (
-        "aria2c.exe is unavailable. Fast download cannot start. "
-        "Expected runtime path: data\\bin\\aria2c.exe"
-    )
-
-
 def _prepare_media_downloader_runtime(
     options: DownloadOptions,
     log,
@@ -2811,25 +2338,6 @@ def _get_command_version(
         if line:
             return line
     return ""
-
-
-def _cancel_requested(cancel_controller: DownloadController | None) -> bool:
-    return bool(cancel_controller and cancel_controller.is_cancel_requested())
-
-
-def _raise_if_cancelled(cancel_controller: DownloadController | None) -> None:
-    if _cancel_requested(cancel_controller):
-        raise DownloadCancelled("download cancelled/interrupted")
-
-
-def _sleep_with_cancel(seconds: int | float, cancel_controller: DownloadController | None) -> None:
-    end_time = time.monotonic() + max(0, seconds)
-    while True:
-        _raise_if_cancelled(cancel_controller)
-        remaining = end_time - time.monotonic()
-        if remaining <= 0:
-            return
-        time.sleep(min(0.25, remaining))
 
 
 def _command_cookie_path(command: list[str]) -> str:
@@ -3751,86 +3259,6 @@ def classify_ytdlp_failure_kind(exc: YtdlpExecutionError, options: DownloadOptio
         if _contains_stream_interrupted_output(text) or _contains_network_error(text):
             return YtdlpFailureKind.NETWORK
     return _classify_ytdlp_failure_text(text)
-
-
-def classify_ffmpeg_failure_kind(exc: FFmpegExecutionError) -> FFmpegFailureKind:
-    text = "\n".join([str(exc), exc.combined_output, *exc.output_lines]).lower()
-    if _contains_any(
-        text,
-        (
-            "no space left on device",
-            "disk full",
-            "not enough space",
-            "there is not enough space on the disk",
-        ),
-    ):
-        return FFmpegFailureKind.DISK_FULL
-    if _contains_any(
-        text,
-        (
-            "permission denied",
-            "access is denied",
-            "operation not permitted",
-        ),
-    ):
-        return FFmpegFailureKind.PERMISSION_DENIED
-    if _contains_any(
-        text,
-        (
-            "unknown encoder",
-            "encoder (codec",
-            "encoder not found",
-            "not found for output stream",
-            "error selecting an encoder",
-        ),
-    ):
-        return FFmpegFailureKind.ENCODER_UNAVAILABLE
-    if _contains_any(
-        text,
-        (
-            "matches no streams",
-            "does not contain any stream",
-            "audio stream not found",
-            "no audio stream",
-        ),
-    ):
-        return FFmpegFailureKind.NO_AUDIO_STREAM
-    if _contains_any(
-        text,
-        (
-            "no such file or directory",
-            "invalid filename",
-            "error opening output",
-            "could not open output file",
-            "unable to open output file",
-            "filename too long",
-            "file name too long",
-        ),
-    ):
-        return FFmpegFailureKind.OUTPUT_PATH
-    if _contains_any(
-        text,
-        (
-            "invalid data found when processing input",
-            "moov atom not found",
-            "error opening input",
-            "could not find codec parameters",
-            "invalid argument",
-        ),
-    ):
-        return FFmpegFailureKind.INVALID_INPUT
-    if _contains_any(
-        text,
-        (
-            "broken pipe",
-            "input/output error",
-            "error writing trailer",
-            "error closing file",
-            "conversion failed",
-        ),
-    ):
-        return FFmpegFailureKind.INTERRUPTED_WRITE
-    return FFmpegFailureKind.UNKNOWN
 
 
 def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
@@ -4937,11 +4365,6 @@ def _success_file_list(stem: str, download_mode: str) -> str:
     return f"{', '.join(names[:-1])} and {names[-1]}"
 
 
-def _safe_temp_stem(video_id: str) -> str:
-    stem = re.sub(r"[^A-Za-z0-9_-]", "_", video_id or "video")
-    return stem[:64].strip(".") or "video"
-
-
 def _last_meaningful_output_lines(stdout: str, stderr: str, limit: int = 50) -> list[str]:
     combined = []
     for text in (stderr or "", stdout or ""):
@@ -4950,316 +4373,6 @@ def _last_meaningful_output_lines(stdout: str, stderr: str, limit: int = 50) -> 
             if _is_meaningful_ytdlp_line(sanitized):
                 combined.append(sanitized)
     return combined[-limit:]
-
-
-def _collect_meaningful_ffmpeg_lines(text: str) -> list[str]:
-    lines: list[str] = []
-    for raw_line in str(text or "").splitlines():
-        line = _sanitize_subprocess_output_line(raw_line)
-        if not line:
-            continue
-        line = _bound_subprocess_output_line(line)
-        if not _is_meaningful_ffmpeg_line(line):
-            continue
-        if lines and lines[-1] == line:
-            continue
-        lines.append(line)
-    return lines
-
-
-def _ffmpeg_output_lines(stdout: str, stderr: str, *, limit: int = FFMPEG_OUTPUT_LINE_LIMIT) -> list[str]:
-    stderr_lines = _collect_meaningful_ffmpeg_lines(stderr)
-    stdout_lines = _collect_meaningful_ffmpeg_lines(stdout)
-    preferred_lines = stderr_lines if stderr_lines else stdout_lines
-    return preferred_lines[-max(1, int(limit)) :]
-
-
-def _bounded_sanitized_subprocess_output(
-    stdout: str,
-    stderr: str,
-    *,
-    limit: int = FFMPEG_COMBINED_OUTPUT_LIMIT,
-) -> str:
-    stderr_lines = _collect_meaningful_ffmpeg_lines(stderr)
-    stdout_lines = _collect_meaningful_ffmpeg_lines(stdout)
-    preferred_lines = stderr_lines if stderr_lines else stdout_lines
-    return _join_bounded_tail(preferred_lines, max(1, int(limit)))
-
-
-def _sanitize_subprocess_output_line(line: str) -> str:
-    try:
-        text = str(line or "").strip()
-    except Exception:
-        return ""
-    if not text:
-        return ""
-
-    try:
-        youtube_api_key_prefix = "AI" "za"
-        text = re.sub(
-            re.escape(youtube_api_key_prefix) + r"[0-9A-Za-z_-]{20,}",
-            "<redacted-api-key>",
-            text,
-        )
-        text = re.sub(
-            r"(?i)--cookies(?:[=\s]+(?:\"[^\"]*\"|'[^']*'|\S+))?",
-            "<cookies-arg-redacted>",
-            text,
-        )
-        text = re.sub(
-            r"(?i)\b(?:set-cookie|cookies?|cookie)\s*[:=]\s*[^\r\n]*",
-            "<cookie-redacted>",
-            text,
-        )
-        text = _sanitize_subprocess_paths(text)
-    except Exception:
-        return "<sanitized-output-unavailable>"
-    return text.strip()
-
-
-def _sanitize_subprocess_paths(text: str) -> str:
-    text, protected_urls = _protect_urls_for_path_sanitization(text)
-    text = _redact_sensitive_assignments_outside_urls(text)
-    quoted_path = r"(?P<quote>['\"])(?P<path>(?:[A-Za-z]:[\\/]|\\\\|/)(?:(?!(?P=quote)).)*)(?P=quote)"
-
-    def replace_quoted(match: re.Match) -> str:
-        path_text = match.group("path")
-        if not _is_absolute_subprocess_path(path_text):
-            return match.group(0)
-        quote = match.group("quote")
-        return f"{quote}{_path_placeholder(path_text)}{quote}"
-
-    text = re.sub(quoted_path, replace_quoted, text)
-
-    unquoted_patterns = (
-        r"(?<![\w/])([A-Za-z]:[\\/][^\r\n\"'<>|?*]*?)(?=(?::\s|[,;)\]\r\n]|$))",
-        r"(?<![\w/])(\\\\[^\r\n\"'<>|?*]*?)(?=(?::\s|[,;)\]\r\n]|$))",
-        r"(?<![\w:])(/[^\s\r\n\"'<>?][^\r\n\"'<>?]*?)(?=(?::\s|[,;)\]\r\n]|$))",
-    )
-    for pattern in unquoted_patterns:
-        text = re.sub(pattern, lambda match: _path_placeholder(match.group(1)), text)
-    return _restore_protected_urls(text, protected_urls)
-
-
-def _protect_urls_for_path_sanitization(text: str) -> tuple[str, dict[str, str]]:
-    if not text:
-        return text, {}
-
-    marker = "__S9H_PROTECTED_URL_"
-    while marker in text:
-        marker = f"_{marker}_"
-
-    protected_urls: dict[str, str] = {}
-
-    def replace_url(match: re.Match) -> str:
-        index = len(protected_urls)
-        placeholder = f"{marker}{index}__"
-        url, suffix = _split_url_trailing_punctuation(match.group("url"))
-        protected_urls[placeholder] = _redact_sensitive_url_query_values(url)
-        return f"{placeholder}{suffix}"
-
-    protected_text = re.sub(
-        r"(?P<url>[A-Za-z][A-Za-z0-9+.-]*://[^\s\"'<>]+)",
-        replace_url,
-        text,
-    )
-    return protected_text, protected_urls
-
-
-def _redact_sensitive_url_query_values(url: str) -> str:
-    try:
-        text = str(url or "")
-    except Exception:
-        return ""
-    lower = text.lower()
-    if "googlevideo.com" in lower or "/videoplayback" in lower:
-        return "<signed-media-url-redacted>"
-    if not text or "?" not in text:
-        return text
-
-    if "#" in text:
-        before_fragment, fragment = text.split("#", 1)
-        fragment = f"#{fragment}"
-    else:
-        before_fragment = text
-        fragment = ""
-
-    prefix, query = before_fragment.split("?", 1)
-    query = re.sub(
-        r"(?i)(?P<prefix>^|[&;])"
-        r"(?P<name>key|api_key|token|access_token|sig|signature|lsig)"
-        r"(?P<equals>=)"
-        r"(?P<value>[^&;#]*)",
-        lambda match: f"{match.group('prefix')}{match.group('name')}{match.group('equals')}***",
-        query,
-    )
-    return f"{prefix}?{query}{fragment}"
-
-
-def _redact_sensitive_assignments_outside_urls(text: str) -> str:
-    try:
-        source = str(text or "")
-    except Exception:
-        return ""
-    if not source:
-        return ""
-
-    pieces: list[str] = []
-    cursor = 0
-    search_from = 0
-    while True:
-        match = _STANDALONE_SECRET_ASSIGNMENT_PATTERN.search(source, search_from)
-        if match is None:
-            pieces.append(source[cursor:])
-            break
-
-        value_start = match.end()
-        value_end = _standalone_secret_value_end(source, value_start)
-        pieces.append(source[cursor:match.start()])
-        pieces.append(source[match.start() : value_start])
-        pieces.append("***")
-        cursor = value_end
-        search_from = max(value_end, value_start)
-
-    return "".join(pieces)
-
-
-def _standalone_secret_value_end(text: str, start: int) -> int:
-    index = start
-    bracket_depth = 0
-    while index < len(text):
-        char = text[index]
-        if char in "&#,;)}":
-            break
-        if char == "]" and bracket_depth <= 0:
-            break
-        if char.isspace():
-            break
-        if char == ":" and index + 1 < len(text) and text[index + 1].isspace():
-            break
-        if char == "[":
-            bracket_depth += 1
-        elif char == "]" and bracket_depth > 0:
-            bracket_depth -= 1
-        index += 1
-    return index
-
-
-def _restore_protected_urls(text: str, protected_urls: dict[str, str]) -> str:
-    restored = text
-    for placeholder, url in protected_urls.items():
-        if placeholder in restored:
-            restored = restored.replace(placeholder, url, 1)
-        if placeholder in restored:
-            restored = restored.replace(placeholder, "<url>")
-    return restored
-
-
-def _split_url_trailing_punctuation(url: str) -> tuple[str, str]:
-    candidate = str(url or "")
-    suffix = ""
-    while candidate:
-        last = candidate[-1]
-        if last in ",;":
-            suffix = last + suffix
-            candidate = candidate[:-1]
-            continue
-        if last == ":":
-            suffix = last + suffix
-            candidate = candidate[:-1]
-            continue
-        if last == ")" and candidate.count(")") > candidate.count("("):
-            suffix = last + suffix
-            candidate = candidate[:-1]
-            continue
-        if last == "]" and candidate.count("]") > candidate.count("["):
-            suffix = last + suffix
-            candidate = candidate[:-1]
-            continue
-        break
-    return candidate or "<url>", suffix
-
-
-def _is_absolute_subprocess_path(path_text: str) -> bool:
-    return bool(
-        re.match(r"^[A-Za-z]:[\\/]", path_text or "")
-        or str(path_text or "").startswith("\\\\")
-        or str(path_text or "").startswith("/")
-    )
-
-
-def _path_placeholder(path_text: str) -> str:
-    stripped = str(path_text or "").strip().rstrip("\\/")
-    if not stripped:
-        return "<path>"
-    is_posix = stripped.startswith("/") and not stripped.startswith("\\\\")
-    path_cls = PurePosixPath if is_posix else PureWindowsPath
-    basename = path_cls(stripped).name
-    if not _safe_path_basename(basename):
-        return "<path>"
-    separator = "/" if is_posix or ("/" in stripped and "\\" not in stripped) else "\\"
-    return f"<path>{separator}{basename[:120]}"
-
-
-def _safe_path_basename(basename: str) -> bool:
-    if not basename:
-        return False
-    if any(separator in basename for separator in ("\\", "/")):
-        return False
-    if any(ord(char) < 32 for char in basename):
-        return False
-    if any(char in basename for char in ("?", "&", "=")):
-        return False
-    return True
-
-
-def _bound_subprocess_output_line(line: str, limit: int = FFMPEG_OUTPUT_LINE_CHAR_LIMIT) -> str:
-    text = " ".join(str(line or "").split())
-    if len(text) <= limit:
-        return text
-    return text[: limit - 3].rstrip() + "..."
-
-
-def _join_bounded_tail(lines: list[str], limit: int) -> str:
-    selected: list[str] = []
-    total = 0
-    for line in reversed(lines):
-        addition = len(line) + (1 if selected else 0)
-        if selected and total + addition > limit:
-            break
-        if not selected and addition > limit:
-            selected.append(line[-limit:])
-            break
-        selected.append(line)
-        total += addition
-    return "\n".join(reversed(selected))
-
-
-def _is_meaningful_ffmpeg_line(line: str) -> bool:
-    if not line:
-        return False
-    lower = line.lower().strip()
-    if lower.startswith("ffmpeg version "):
-        return False
-    if lower.startswith("built with "):
-        return False
-    if lower.startswith("configuration:"):
-        return False
-    if lower.startswith("press [q] to stop"):
-        return False
-    if re.match(r"^(libavutil|libavcodec|libavformat|libavdevice|libavfilter|libswscale|libswresample|libpostproc)\s+", lower):
-        return False
-    if _is_ffmpeg_progress_line(lower):
-        return False
-    return True
-
-
-def _is_ffmpeg_progress_line(lower_line: str) -> bool:
-    if lower_line.startswith("frame=") and "time=" in lower_line:
-        return True
-    if lower_line.startswith("size=") and "time=" in lower_line and "bitrate=" in lower_line:
-        return True
-    return False
 
 
 def _sanitize_ytdlp_output_line(line: str) -> str:
