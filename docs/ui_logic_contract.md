@@ -4,7 +4,10 @@ This report maps the real production UI contract from the current codebase. The 
 
 Sources inspected:
 
+- `app.py`
 - `ui/main_window.py`
+- `ui/session_state.py`, for immutable request snapshots and channel/download session bookkeeping
+- `ui/background_tasks.py`, for Tk-free Fetch, Load More, and download worker execution
 - `core/download_contracts.py`, for stable options, decisions, errors, and engine/cookie identifiers
 - `core/download_service.py`, for the UI-facing validation, controller, and batch-operation facade
 - `core/download_process.py`, for controller, process-tree, cancellation, and cancellable-wait ownership
@@ -17,6 +20,9 @@ Sources inspected:
 ## Download Application Boundary
 
 - `ui/main_window.py` obtains download contracts and operations from `core.download_service`; it does not import the downloader implementation directly.
+- `ui/main_window.py` owns the Tk window, variables, widgets, bindings, rendering, dialogs, `root.after` scheduling, and main-thread event acceptance.
+- `ui/session_state.py` owns channel generation/request identity and download-run/terminal bookkeeping without importing Tkinter.
+- `ui/background_tasks.py` owns background worker bodies. It consumes immutable request/input values and queue/callback publishers; it does not import Tkinter or `ui.main_window`.
 - `core/download_contracts.py` is the source of truth for stable download data contracts, enums, lightweight exceptions, cookie-source identifiers, engine identifiers, and yt-dlp stage identifiers.
 - `core/download_service.py` is the narrow application facade for the existing batch validators, `DownloadController`, and `download_items()`.
 - `core/download_process.py` owns process registration, process-tree termination, systemic-decision waiting, cancellation checks, and cancellable sleeps.
@@ -74,8 +80,10 @@ Sources inspected:
 | `next_page_token` | `""` | YouTube API page token. Controls whether `Xem thêm video` can run. |
 | `fetching` | `False` | True while the initial fetch worker is running. Disables fetch and load-more, but does not lock all controls. |
 | `loading_more` | `False` | True while the load-more worker is running. Disables load-more. |
+| `_channel_requests` | `ChannelRequestState()` | Tk-free owner of generation/request sequences, active Fetch/Load More identities, loaded request context, and accepted-request-only manual-key persistence bookkeeping. |
 | `downloading` | `False` | True while the download worker is running. Locks most controls and blocks table selection/status edits. |
 | `download_controller` | `None` | Set to `DownloadController()` for active downloads. It owns cancellation and current process termination. |
+| `_download_session` | `DownloadSessionState()` | Tk-free owner of active run identity, immutable numbering inputs, initially/newly complete IDs, duplicate suppression, and terminal outcome bookkeeping. |
 | `download_stop_requested` | `False` | True after stop/close cancellation is requested. Disables the stop button while the worker winds down. |
 | `exit_after_download_stop` | `False` | True when close flow should exit after a stop request. |
 | `close_requested` | `False` | Guards repeated close handling. |
@@ -529,54 +537,27 @@ Worker threads never directly update Tk widgets. They enqueue events:
 
 Fetch and Load More request tokens carry immutable non-secret request context. The Fetch worker receives the manual key only as a direct captured worker argument; the key is not placed in the token or event payload. Workers do not persist settings. Only the accepted current `fetch_done` terminal event may save the pending non-empty manual key, so stale and duplicate terminal events cannot persist it.
 
-## G. Safe UI Refactor Plan
+## G. Final Phase 8 Ownership
 
-The safe path is to reorganize the existing widgets into grouped `ttk.LabelFrame` sections while preserving the production object names, Tkinter variables, handlers, bindings, and state-update methods.
+- `app.py` is the composition root. It starts the production Tk application through `ui.main_window.main()`.
+- `ui/main_window.py` remains the view/window owner: widget construction and layout, Tk variables and bindings, table/search/filter presentation, file and application dialogs, progress/log rendering, main-thread event dispatch, systemic-pause interaction, and shutdown polling.
+- `ui/session_state.py` owns immutable Fetch/Load More request contracts, channel generation and active-request identity, accepted-request key-persistence bookkeeping, download-run identity, initial/new completion sets, duplicate suppression, and terminal outcome state. It has no Tk dependency.
+- `ui/background_tasks.py` owns the Fetch, Load More, and download worker bodies. Workers call the existing core services and publish the existing event/progress payloads; they never read Tk variables, mutate widgets, show dialogs, or schedule callbacks.
+- `core/download_contracts.py` defines stable UI-facing download data contracts and identifiers.
+- `core/download_service.py` is the only UI-facing download facade. UI code must continue to obtain validators, `DownloadController`, and `download_items()` through it.
+- `core/downloader.py` owns batch and per-item orchestration, retry/cookie policy, media validation/promotion, and output/state reconciliation while preserving legacy import compatibility.
+- `core/download_process.py` owns process registration, cancellation, process-tree termination, systemic-decision waiting, and cancellable sleeps.
+- `core/ytdlp_commands.py` owns Stable/Fast yt-dlp command construction and aria2 runtime command details.
+- `core/ffmpeg_tools.py` owns FFmpeg execution, progress parsing, diagnostic sanitization, and failure classification.
+- `core/youtube_api.py` owns channel/API fetching and duration metadata policy; `core/state_store.py` owns SQLite schema/state semantics. Neither layer depends on UI modules.
 
-Recommended groups:
+### Future Change Routing
 
-1. `Source`
-   - Move existing `api_key_entry`, `channel_entry`, and `fetch_button`.
-   - Reuse `api_key_var`, `channel_var`, and `start_fetch` exactly.
+- UI text, widgets, layout, bindings, table rendering, dialogs, and Tk scheduling belong in `ui/main_window.py`.
+- Channel request identity, stale-result rules, and download-run bookkeeping belong in `ui/session_state.py`.
+- New background execution steps that only consume immutable inputs and publish events belong in `ui/background_tasks.py`; Tk access is forbidden there.
+- Download options or UI-facing download operations belong in `core/download_contracts.py` and `core/download_service.py` before they reach downloader internals.
+- Batch/download feature behavior belongs in `core/downloader.py`; process/cancellation changes belong in `core/download_process.py`; command changes belong in `core/ytdlp_commands.py`; FFmpeg policy belongs in `core/ffmpeg_tools.py`.
+- API/channel features belong in `core/youtube_api.py`. State/storage features and migrations belong in `core/state_store.py`.
 
-2. `Filters`
-   - Move existing `filter_box`, search entry/status label, `hide_below_check`, `hide_below_entry`, `hide_above_check`, and `hide_above_entry`.
-   - Reuse `filter_var`, `search_var`, `search_status_var`, `hide_below_enabled_var`, `hide_below_minutes_var`, `hide_above_enabled_var`, and `hide_above_minutes_var`.
-   - Preserve `apply_filter`, `_on_search_text_changed`, `_find_next_match`, `_find_previous_match`, and `_on_duration_filter_changed`.
-
-3. `Video list`
-   - Move the existing `tree`, scrollbar, `more_button`, and `select_by_date_button`.
-   - Preserve `TREE_COLUMN_IDS`, `TREE_COLUMN_DEFAULTS`, row `iid=str(display_order)`, all tree bindings, column-fit behavior, context menu, and inline status editor.
-   - Reuse `start_load_more` and `open_select_by_date_dialog` exactly.
-
-4. `Output & Cookies`
-   - Move existing save-folder row and all cookie controls.
-   - Reuse `save_folder_var`, `cookies_enabled_var`, `cookies_path_var`, `cookie_source_var`, `bridge_cookie_path_var`, and `cookie_status_var`.
-   - Reuse `choose_save_folder`, `_update_cookies_state`, `choose_cookies_file`, `_on_cookie_source_changed`, `choose_bridge_cookie_file`, `check_bridge_cookie_file`, and `_update_bridge_cookie_status`.
-   - If the visual design hides inactive cookie rows, it must still call `_update_cookies_state()` and must not change `DownloadOptions`, persistence, or effective cookie-path behavior.
-
-5. `Download`
-   - Move `mode_box`, `speed_limit_entry`, `download_button`, and `stop_button`.
-   - Reuse `download_mode_var`, `speed_limit_var`, `_on_download_mode_changed`, `start_download`, `stop_download`, `_update_download_button_text`, `_set_download_controls_locked`, and `_update_stop_button_state`.
-
-6. `Progress / Logs`
-   - Move existing progress labels and `log_text`.
-   - Reuse `progress_current_var`, `progress_detail_var`, `_poll_progress_queue`, `_append_log`, `_log_tag_for`, `_process_events`, and `_handle_event`.
-
-Non-negotiable reuse list for any production UI refactor:
-
-- Variables: `api_key_var`, `channel_var`, `save_folder_var`, `cookies_enabled_var`, `cookies_path_var`, `cookie_source_var`, `bridge_cookie_path_var`, `cookie_status_var`, `speed_limit_var`, `download_mode_var`, `download_engine_var`, `hide_below_enabled_var`, `hide_below_minutes_var`, `hide_above_enabled_var`, `hide_above_minutes_var`, `filter_var`, `search_var`, `search_status_var`, `progress_current_var`, `progress_detail_var`
-- Runtime collections/flags: `videos`, `channel_info`, `selected_orders`, `visible_orders`, `next_page_token`, `fetching`, `loading_more`, `downloading`, `download_controller`, `download_stop_requested`, `exit_after_download_stop`, `close_requested`, `cancel_download`
-- Handlers: `start_fetch`, `start_load_more`, `open_select_by_date_dialog`, `choose_save_folder`, `_update_cookies_state`, `choose_cookies_file`, `_on_cookie_source_changed`, `choose_bridge_cookie_file`, `check_bridge_cookie_file`, `_on_download_mode_changed`, `start_download`, `stop_download`
-- Table handlers: `_on_tree_click`, `_on_tree_double_click`, `_on_tree_right_click`, `_on_tree_space`, `_open_status_editor`, `_save_manual_status`, `_apply_manual_status_to_selected`, `_clear_manual_status_for_selected`
-- State-update helpers: `apply_filter`, `_update_more_button_state`, `_update_stop_button_state`, `_set_download_controls_locked`, `_finish_download_ui`, `_update_download_button_text`, `_update_bridge_cookie_status`
-- Download contract: `DownloadOptions` fields and values must remain unchanged; `effective_cookies_path()` selection between `cookies_path` and `bridge_cookie_path` must remain unchanged; downloader core behavior must remain unchanged.
-
-Implementation recommendation:
-
-- First refactor only `_build_ui()` into smaller private layout-building methods that create the same widgets with the same `self.*` names.
-- Do not rename handlers.
-- Do not change `DownloadOptions`.
-- Do not change downloader, SQLite/state, app settings, cookie bridge, or yt-dlp command behavior.
-- Do not change cookie path persistence, atomic preference saving, malformed-path safety, or isolated-cookie attempt behavior as part of a visual regrouping.
-- Validate by exercising fetch, load more, filter/search, both duration-filter toggles and entries, date selection, manual status edits, both cookie sources, download validation, stop/cancel, and close-while-downloading flows.
+These ownership boundaries complete the Phase 8 architecture refactor. Future feature and bug work should extend the owning module rather than moving orchestration back into `ui/main_window.py` or bypassing `core.download_service.py`.

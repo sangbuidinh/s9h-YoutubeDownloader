@@ -16,6 +16,8 @@ PROCESS_PATH = REPO_ROOT / "core" / "download_process.py"
 YTDLP_COMMANDS_PATH = REPO_ROOT / "core" / "ytdlp_commands.py"
 FFMPEG_TOOLS_PATH = REPO_ROOT / "core" / "ffmpeg_tools.py"
 UI_PATH = REPO_ROOT / "ui" / "main_window.py"
+UI_SESSION_PATH = REPO_ROOT / "ui" / "session_state.py"
+UI_BACKGROUND_PATH = REPO_ROOT / "ui" / "background_tasks.py"
 FOCUSED_MODULE_NAMES = (
     "core.download_process",
     "core.ytdlp_commands",
@@ -39,6 +41,13 @@ def main() -> int:
     service = importlib.import_module("core.download_service")
     downloader = importlib.import_module("core.downloader")
     _assert_not_loaded("tkinter", "download service loaded Tkinter")
+    session_state = importlib.import_module("ui.session_state")
+    background_tasks = importlib.import_module("ui.background_tasks")
+    _assert_not_loaded("tkinter", "UI session/background modules loaded Tkinter")
+    _assert(
+        "ui.main_window" not in sys.modules,
+        "UI session/background modules imported the Tkinter window",
+    )
 
     _test_public_contracts(
         contracts,
@@ -48,6 +57,7 @@ def main() -> int:
         ytdlp_commands,
         ffmpeg_tools,
     )
+    _test_ui_session_contracts(session_state)
     _test_dependency_direction()
     print("download architecture smoke passed")
     return 0
@@ -188,6 +198,8 @@ def _test_dependency_direction() -> None:
         "core.ffmpeg_tools": _module_tree(FFMPEG_TOOLS_PATH),
     }
     ui_tree = _module_tree(UI_PATH)
+    ui_session_tree = _module_tree(UI_SESSION_PATH)
+    ui_background_tree = _module_tree(UI_BACKGROUND_PATH)
 
     _assert_no_import_prefix(
         contracts_tree,
@@ -200,10 +212,19 @@ def _test_dependency_direction() -> None:
             tree,
             ("tkinter", "ui", "core.download_service", "core.downloader"),
         )
+    _assert_no_import_prefix(
+        ui_session_tree,
+        ("tkinter", "core", "ui.main_window", "ui.background_tasks"),
+    )
+    _assert_no_import_prefix(
+        ui_background_tree,
+        ("tkinter", "ui.main_window"),
+    )
 
     service_imports = _imported_modules(service_tree)
     downloader_imports = _imported_modules(downloader_tree)
     ui_imports = _imported_modules(ui_tree)
+    ui_background_imports = _imported_modules(ui_background_tree)
     _assert("core.download_contracts" in service_imports, "facade does not expose contracts")
     _assert("core.downloader" in service_imports, "facade does not reach downloader implementation")
     _assert("core.download_contracts" in downloader_imports, "downloader does not use contract ownership")
@@ -211,6 +232,17 @@ def _test_dependency_direction() -> None:
     _assert("core.downloader" not in ui_imports, "UI still imports downloader implementation")
     for module in FOCUSED_MODULE_NAMES:
         _assert(module not in ui_imports, f"UI imports focused implementation module {module}")
+        _assert(
+            module not in ui_background_imports,
+            f"UI background tasks import focused implementation module {module}",
+        )
+    _assert("ui.session_state" in ui_imports, "main window does not use UI session state")
+    _assert("ui.background_tasks" in ui_imports, "main window does not use UI background tasks")
+    _assert(
+        "ui.session_state" in ui_background_imports,
+        "background tasks do not use immutable UI request contracts",
+    )
+    _assert_acyclic_ui_modules(ui_tree, ui_session_tree, ui_background_tree)
 
     downloader_imports = _imported_modules(downloader_tree)
     for module in FOCUSED_MODULE_NAMES:
@@ -247,6 +279,80 @@ def _test_dependency_direction() -> None:
     )
 
 
+def _test_ui_session_contracts(session_state) -> None:
+    context = session_state.ChannelRequestContext(
+        save_folder="snapshot",
+        download_mode="Video + Thumb",
+        hide_below_enabled=True,
+        hide_below_minutes=3,
+        hide_above_enabled=True,
+        hide_above_minutes=60,
+    )
+    requests = session_state.ChannelRequestState()
+    stale_fetch = requests.begin_fetch("old-channel", context, "old-key")
+    current_fetch = requests.begin_fetch("new-channel", context, "current-key")
+    _assert(not requests.is_current_fetch(stale_fetch), "stale Fetch token remained current")
+    _assert(requests.is_current_fetch(current_fetch), "current Fetch token was rejected")
+    requests.accept_fetch(current_fetch)
+    _assert(
+        requests.take_accepted_manual_key(current_fetch) == "current-key",
+        "accepted Fetch did not retain its matching manual-key persistence claim",
+    )
+
+    load_more = requests.begin_load_more(
+        channel_id="channel-id",
+        uploads_playlist_id="uploads-id",
+        page_token="page-1",
+        start_order=101,
+        context=context,
+    )
+    snapshot = {
+        "channel_id": "channel-id",
+        "uploads_playlist_id": "uploads-id",
+        "page_token": "page-1",
+        "start_order": 101,
+    }
+    _assert(
+        requests.is_current_load_more(load_more, **snapshot),
+        "matching Load More snapshot was rejected",
+    )
+    _assert(
+        not requests.is_current_load_more(load_more, **{**snapshot, "page_token": "page-2"}),
+        "stale Load More page snapshot was accepted",
+    )
+    requests.begin_fetch("newer-channel", context, "")
+    _assert(
+        not requests.is_current_load_more(load_more, **snapshot),
+        "old Load More token survived a newer channel generation",
+    )
+
+    downloads = session_state.DownloadSessionState()
+    first_run = downloads.begin_run(51, {"A", "B"}, {"A"})
+    _assert(downloads.record_completion(first_run, "A") is None, "initially complete item advanced numbering")
+    _assert(downloads.record_completion(first_run, "B") == 52, "new completion did not advance numbering")
+    _assert(downloads.record_completion(first_run, "B") is None, "duplicate completion advanced numbering")
+    second_run = downloads.begin_run(100, {"C"}, set())
+    _assert(downloads.record_completion(first_run, "B") is None, "stale download run changed numbering")
+    _assert(downloads.record_completion(second_run, "C") == 101, "new download run used stale numbering")
+
+
+def _assert_acyclic_ui_modules(
+    main_window_tree: ast.Module,
+    session_tree: ast.Module,
+    background_tree: ast.Module,
+) -> None:
+    module_trees = {
+        "ui.main_window": main_window_tree,
+        "ui.session_state": session_tree,
+        "ui.background_tasks": background_tree,
+    }
+    graph = {
+        name: _imported_modules(tree).intersection(module_trees)
+        for name, tree in module_trees.items()
+    }
+    _assert_acyclic_graph(graph, "circular UI module import includes")
+
+
 def _assert_acyclic_download_modules(
     downloader_tree: ast.Module,
     focused_trees: dict[str, ast.Module],
@@ -256,11 +362,15 @@ def _assert_acyclic_download_modules(
         name: _imported_modules(tree).intersection(module_trees)
         for name, tree in module_trees.items()
     }
+    _assert_acyclic_graph(graph, "circular download module import includes")
+
+
+def _assert_acyclic_graph(graph: dict[str, set[str]], message: str) -> None:
     visiting: set[str] = set()
     visited: set[str] = set()
 
     def visit(name: str) -> None:
-        _assert(name not in visiting, f"circular download module import includes {name}")
+        _assert(name not in visiting, f"{message} {name}")
         if name in visited:
             return
         visiting.add(name)
