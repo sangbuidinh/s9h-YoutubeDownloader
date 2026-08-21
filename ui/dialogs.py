@@ -217,6 +217,26 @@ def _body_heading(title: str, heading: str | None) -> str:
     return "" if text == title.strip() else text
 
 
+def _restore_iconic_parent_for_modal(parent: tk.Misc, modal: bool) -> bool:
+    if not modal:
+        return False
+
+    try:
+        state_getter = getattr(parent, "state", None) or getattr(parent, "wm_state", None)
+        if state_getter is None or str(state_getter()).strip().lower() != "iconic":
+            return False
+        parent.deiconify()
+    except (AttributeError, tk.TclError):
+        return False
+
+    for method_name in ("update_idletasks", "lift"):
+        try:
+            getattr(parent, method_name)()
+        except (AttributeError, tk.TclError):
+            pass
+    return True
+
+
 def show_app_dialog(
     parent: tk.Misc,
     title: str,
@@ -229,6 +249,7 @@ def show_app_dialog(
     modal: bool = True,
     heading: str | None = None,
 ):
+    _restore_iconic_parent_for_modal(parent, modal)
     colors = _ensure_dialog_styles(parent)
     title = _localized_title(title)
     heading = _body_heading(title, _localized_title(heading) if heading else None)
@@ -334,6 +355,7 @@ def show_app_dialog(
     dialog.deiconify()
     dialog.lift()
     if modal:
+        dialog.wait_visibility()
         dialog.grab_set()
     focus_widget = context.initial_focus or button_widgets.get(default_button or "")
     if focus_widget is not None:
