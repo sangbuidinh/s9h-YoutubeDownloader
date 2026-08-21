@@ -7,7 +7,10 @@ Sources inspected:
 - `ui/main_window.py`
 - `core/download_contracts.py`, for stable options, decisions, errors, and engine/cookie identifiers
 - `core/download_service.py`, for the UI-facing validation, controller, and batch-operation facade
-- `core/downloader.py`, limited to the facade implementation, `effective_cookies_path()`, and where `--cookies` is added to yt-dlp commands
+- `core/download_process.py`, for controller, process-tree, cancellation, and cancellable-wait ownership
+- `core/ytdlp_commands.py`, for Stable/Fast yt-dlp command construction
+- `core/ffmpeg_tools.py`, for FFmpeg execution, progress parsing, failure classification, and bounded diagnostics
+- `core/downloader.py`, for batch orchestration, retry/cookie policy, output/state reconciliation, and compatibility adapters
 - `core/app_settings.py`, limited to protected API-key persistence, cookie source, manual cookie path, and bridge cookie path settings
 - `core/download_modes.py`
 
@@ -16,7 +19,11 @@ Sources inspected:
 - `ui/main_window.py` obtains download contracts and operations from `core.download_service`; it does not import the downloader implementation directly.
 - `core/download_contracts.py` is the source of truth for stable download data contracts, enums, lightweight exceptions, cookie-source identifiers, engine identifiers, and yt-dlp stage identifiers.
 - `core/download_service.py` is the narrow application facade for the existing batch validators, `DownloadController`, and `download_items()`.
-- `core/downloader.py` remains the implementation/orchestration module and temporarily re-exports moved public symbols for existing scripts and tests.
+- `core/download_process.py` owns process registration, process-tree termination, systemic-decision waiting, cancellation checks, and cancellable sleeps.
+- `core/ytdlp_commands.py` owns exact Stable/Fast video and audio command construction. Small `core.downloader` adapters preserve its existing runtime-path substitution seam for scripts and tests.
+- `core/ffmpeg_tools.py` owns the streamed FFmpeg runner, progress-protocol parsing, diagnostic sanitization, and failure classification. The downloader adapter supplies the current progress context and legacy process-termination substitution seam.
+- `core/downloader.py` remains the implementation orchestrator for validation, per-item planning, the batch loop, yt-dlp retry decisions, cookie-media bootstrap/lookahead policy, promotion, and SQLite/state reconciliation. It re-exports moved symbols for compatibility.
+- Focused implementation modules do not import Tkinter, the UI, the application facade, or `core.downloader`; dependencies point toward contracts and lower-level process helpers without a cycle.
 - This dependency boundary does not change download behavior, Tkinter ownership, worker/event ordering, state persistence, tool discovery, or release/security behavior.
 
 ## Startup Window Sizing
