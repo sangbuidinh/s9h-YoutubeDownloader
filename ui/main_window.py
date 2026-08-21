@@ -4,7 +4,7 @@ import threading
 import tkinter as tk
 import time
 import urllib.parse
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 from tkinter import filedialog, font, ttk
@@ -71,6 +71,20 @@ from ui.dialogs import (
     show_copy_text_dialog,
     show_error_dialog,
 )
+from ui.background_tasks import (
+    duration_hidden_count,
+    publish_channel_request_log,
+    run_download_task,
+    run_fetch_task,
+    run_load_more_task,
+)
+from ui.session_state import (
+    ChannelRequestContext as _ChannelRequestContext,
+    ChannelRequestState,
+    DownloadSessionState,
+    FetchRequestToken as _FetchRequestToken,
+    LoadMoreRequestToken as _LoadMoreRequestToken,
+)
 
 
 FILTER_ALL = "Hiển thị tất cả"
@@ -134,36 +148,157 @@ def _initial_window_size(
     return target_width, target_height
 
 
-@dataclass(frozen=True)
-class _ChannelRequestContext:
-    save_folder: str
-    download_mode: str
-    hide_below_enabled: bool
-    hide_below_minutes: int
-    hide_above_enabled: bool
-    hide_above_minutes: int
-
-
-@dataclass(frozen=True)
-class _FetchRequestToken:
-    generation: int
-    request_id: int
-    channel_input: str
-    context: _ChannelRequestContext
-
-
-@dataclass(frozen=True)
-class _LoadMoreRequestToken:
-    generation: int
-    request_id: int
-    channel_id: str
-    uploads_playlist_id: str
-    page_token: str
-    start_order: int
-    context: _ChannelRequestContext
-
-
 class YouTubeDownloaderWindow:
+    def _get_channel_request_state(self) -> ChannelRequestState:
+        state = self.__dict__.get("_channel_requests")
+        if not isinstance(state, ChannelRequestState):
+            state = ChannelRequestState()
+            self.__dict__["_channel_requests"] = state
+        return state
+
+    def _get_download_session_state(self) -> DownloadSessionState:
+        state = self.__dict__.get("_download_session")
+        if not isinstance(state, DownloadSessionState):
+            state = DownloadSessionState()
+            self.__dict__["_download_session"] = state
+        return state
+
+    @property
+    def _channel_generation(self) -> int:
+        return self._get_channel_request_state().generation
+
+    @_channel_generation.setter
+    def _channel_generation(self, value: int) -> None:
+        self._get_channel_request_state().generation = value
+
+    @property
+    def _channel_request_sequence(self) -> int:
+        return self._get_channel_request_state().request_sequence
+
+    @_channel_request_sequence.setter
+    def _channel_request_sequence(self, value: int) -> None:
+        self._get_channel_request_state().request_sequence = value
+
+    @property
+    def _active_fetch_request(self) -> _FetchRequestToken | None:
+        return self._get_channel_request_state().active_fetch
+
+    @_active_fetch_request.setter
+    def _active_fetch_request(self, value: _FetchRequestToken | None) -> None:
+        self._get_channel_request_state().active_fetch = value
+
+    @property
+    def _active_load_more_request(self) -> _LoadMoreRequestToken | None:
+        return self._get_channel_request_state().active_load_more
+
+    @_active_load_more_request.setter
+    def _active_load_more_request(self, value: _LoadMoreRequestToken | None) -> None:
+        self._get_channel_request_state().active_load_more = value
+
+    @property
+    def _active_fetch_manual_key(self) -> str:
+        return self._get_channel_request_state().pending_manual_key
+
+    @_active_fetch_manual_key.setter
+    def _active_fetch_manual_key(self, value: str) -> None:
+        self._get_channel_request_state().pending_manual_key = value
+
+    @property
+    def _active_fetch_manual_key_request_id(self) -> int | None:
+        return self._get_channel_request_state().pending_manual_key_request_id
+
+    @_active_fetch_manual_key_request_id.setter
+    def _active_fetch_manual_key_request_id(self, value: int | None) -> None:
+        self._get_channel_request_state().pending_manual_key_request_id = value
+
+    @property
+    def _loaded_channel_generation(self) -> int | None:
+        return self._get_channel_request_state().loaded_generation
+
+    @_loaded_channel_generation.setter
+    def _loaded_channel_generation(self, value: int | None) -> None:
+        self._get_channel_request_state().loaded_generation = value
+
+    @property
+    def _loaded_channel_context(self) -> _ChannelRequestContext | None:
+        return self._get_channel_request_state().loaded_context
+
+    @_loaded_channel_context.setter
+    def _loaded_channel_context(self, value: _ChannelRequestContext | None) -> None:
+        self._get_channel_request_state().loaded_context = value
+
+    @property
+    def _download_terminal_received(self) -> bool:
+        return self._get_download_session_state().terminal_received
+
+    @_download_terminal_received.setter
+    def _download_terminal_received(self, value: bool) -> None:
+        self._get_download_session_state().terminal_received = value
+
+    @property
+    def _download_terminal_outcome(self) -> str:
+        return self._get_download_session_state().terminal_outcome
+
+    @_download_terminal_outcome.setter
+    def _download_terminal_outcome(self, value: str) -> None:
+        self._get_download_session_state().terminal_outcome = value
+
+    @property
+    def _download_terminal_message(self) -> str:
+        return self._get_download_session_state().terminal_message
+
+    @_download_terminal_message.setter
+    def _download_terminal_message(self, value: str) -> None:
+        self._get_download_session_state().terminal_message = value
+
+    @property
+    def _download_run_sequence(self) -> int:
+        return self._get_download_session_state().run_sequence
+
+    @_download_run_sequence.setter
+    def _download_run_sequence(self, value: int) -> None:
+        self._get_download_session_state().run_sequence = value
+
+    @property
+    def _active_download_run_id(self) -> int | None:
+        return self._get_download_session_state().active_run_id
+
+    @_active_download_run_id.setter
+    def _active_download_run_id(self, value: int | None) -> None:
+        self._get_download_session_state().active_run_id = value
+
+    @property
+    def _download_run_start_number(self) -> int | None:
+        return self._get_download_session_state().run_start_number
+
+    @_download_run_start_number.setter
+    def _download_run_start_number(self, value: int | None) -> None:
+        self._get_download_session_state().run_start_number = value
+
+    @property
+    def _download_run_selected_ids(self) -> set[str]:
+        return self._get_download_session_state().selected_ids
+
+    @_download_run_selected_ids.setter
+    def _download_run_selected_ids(self, value) -> None:
+        self._get_download_session_state().selected_ids = set(value)
+
+    @property
+    def _download_run_initial_complete_ids(self) -> set[str]:
+        return self._get_download_session_state().initial_complete_ids
+
+    @_download_run_initial_complete_ids.setter
+    def _download_run_initial_complete_ids(self, value) -> None:
+        self._get_download_session_state().initial_complete_ids = set(value)
+
+    @property
+    def _download_run_completed_ids(self) -> set[str]:
+        return self._get_download_session_state().completed_ids
+
+    @_download_run_completed_ids.setter
+    def _download_run_completed_ids(self, value) -> None:
+        self._get_download_session_state().completed_ids = set(value)
+
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("YouTube Downloaderbs")
@@ -180,14 +315,7 @@ class YouTubeDownloaderWindow:
         self.next_page_token = ""
         self.fetching = False
         self.loading_more = False
-        self._channel_generation = 0
-        self._channel_request_sequence = 0
-        self._active_fetch_request: _FetchRequestToken | None = None
-        self._active_load_more_request: _LoadMoreRequestToken | None = None
-        self._active_fetch_manual_key = ""
-        self._active_fetch_manual_key_request_id: int | None = None
-        self._loaded_channel_generation: int | None = None
-        self._loaded_channel_context: _ChannelRequestContext | None = None
+        self._channel_requests = ChannelRequestState()
         self.downloading = False
         self.download_controller: DownloadController | None = None
         self.download_worker: threading.Thread | None = None
@@ -202,15 +330,7 @@ class YouTubeDownloaderWindow:
         self._root_destroyed = False
         self._shutdown_slow_warning_logged = False
         self._shutdown_cancel_reissued = False
-        self._download_terminal_received = False
-        self._download_terminal_outcome = ""
-        self._download_terminal_message = ""
-        self._download_run_sequence = 0
-        self._active_download_run_id: int | None = None
-        self._download_run_start_number: int | None = None
-        self._download_run_selected_ids: set[str] = set()
-        self._download_run_initial_complete_ids: set[str] = set()
-        self._download_run_completed_ids: set[str] = set()
+        self._download_session = DownloadSessionState()
         self.status_editor = None
 
         api_key_state = load_api_key_persistence_state()
@@ -969,16 +1089,11 @@ class YouTubeDownloaderWindow:
         self._apply_live_duration_filter_if_valid()
         context = self._capture_channel_request_context()
 
-        self._channel_generation += 1
-        request_token = _FetchRequestToken(
-            generation=self._channel_generation,
-            request_id=self._next_channel_request_id(),
-            channel_input=channel_input,
-            context=context,
+        request_token = self._get_channel_request_state().begin_fetch(
+            channel_input,
+            context,
+            manual_key,
         )
-        self._active_fetch_request = request_token
-        self._active_fetch_manual_key = manual_key
-        self._active_fetch_manual_key_request_id = request_token.request_id
         self.fetching = True
         self._refresh_interaction_control_states()
         self.apply_filter()
@@ -991,10 +1106,8 @@ class YouTubeDownloaderWindow:
             )
             worker.start()
         except Exception as exc:
-            self._active_fetch_request = None
+            self._get_channel_request_state().fail_fetch(request_token)
             self.fetching = False
-            self._restore_loaded_generation_after_failed_fetch()
-            self._clear_pending_fetch_manual_key(request_token)
             self._refresh_interaction_control_states()
             friendly = self._friendly_general_message(str(exc) or "Could not start fetch worker")
             self._append_log(friendly)
@@ -1005,39 +1118,15 @@ class YouTubeDownloaderWindow:
         request_token: _FetchRequestToken,
         manual_key: str,
     ) -> None:
-        try:
-            context = request_token.context
-            log = lambda message: self._queue_channel_request_log(request_token, message)
-            channel, videos, next_page_token = fetch_latest_video_page(
-                request_token.channel_input,
-                manual_key,
-                progress=log,
-                hide_below_duration_enabled=context.hide_below_enabled,
-                min_visible_duration_seconds=context.hide_below_minutes * 60,
-                hide_above_duration_enabled=context.hide_above_enabled,
-                max_visible_duration_seconds=context.hide_above_minutes * 60,
-            )
-            log("[INFO] Checking local files...")
-            apply_statuses(
-                videos,
-                context.save_folder,
-                channel.channel_name,
-                channel.channel_id,
-                download_mode=context.download_mode,
-                warning_callback=log,
-            )
-            hidden_by_duration = self._duration_hidden_count(videos, context)
-            if hidden_by_duration:
-                log(f"[INFO] Đã ẩn {hidden_by_duration} video theo thời lượng.")
-            visible_count = len(videos) - hidden_by_duration
-            log(f"[SUCCESS] Đã nạp {visible_count} video sau khi lọc thời lượng.")
-            if not next_page_token:
-                log("[INFO] Không còn video nào.")
-            self.events.put(("fetch_done", request_token, channel, videos, next_page_token))
-        except YoutubeApiError as exc:
-            self.events.put(("fetch_error", request_token, self._friendly_api_message(exc)))
-        except Exception as exc:
-            self.events.put(("fetch_error", request_token, self._friendly_general_message(str(exc) or "Network error")))
+        run_fetch_task(
+            request_token,
+            manual_key,
+            self.events,
+            fetch_page=fetch_latest_video_page,
+            reconcile_statuses=apply_statuses,
+            friendly_api_error=self._friendly_api_message,
+            friendly_general_error=self._friendly_general_message,
+        )
 
     def _update_channel_input_display(self) -> None:
         self.channel_display_var.set(self._format_channel_display(self.channel_var.get()))
@@ -1087,16 +1176,13 @@ class YouTubeDownloaderWindow:
             self._update_more_button_state()
             return
 
-        request_token = _LoadMoreRequestToken(
-            generation=self._loaded_channel_generation,
-            request_id=self._next_channel_request_id(),
+        request_token = self._get_channel_request_state().begin_load_more(
             channel_id=str(self.channel_info.channel_id or ""),
             uploads_playlist_id=str(self.channel_info.uploads_playlist_id or ""),
             page_token=str(self.next_page_token or ""),
             start_order=len(self.videos) + 1,
             context=context,
         )
-        self._active_load_more_request = request_token
         self.loading_more = True
         self._refresh_interaction_control_states()
         try:
@@ -1107,7 +1193,7 @@ class YouTubeDownloaderWindow:
             )
             worker.start()
         except Exception as exc:
-            self._active_load_more_request = None
+            self._get_channel_request_state().complete_load_more(request_token)
             self.loading_more = False
             self._refresh_interaction_control_states()
             friendly = self._friendly_general_message(str(exc) or "Could not start load-more worker")
@@ -1119,34 +1205,14 @@ class YouTubeDownloaderWindow:
         request_token: _LoadMoreRequestToken,
         manual_key: str,
     ) -> None:
-        try:
-            context = request_token.context
-            log = lambda message: self._queue_channel_request_log(request_token, message)
-            log("[INFO] Đang nạp thêm 100 video tiếp theo...")
-            videos, next_page_token = fetch_more_videos(
-                request_token.uploads_playlist_id,
-                request_token.page_token,
-                request_token.start_order,
-                manual_key,
-                progress=log,
-                hide_below_duration_enabled=context.hide_below_enabled,
-                min_visible_duration_seconds=context.hide_below_minutes * 60,
-                hide_above_duration_enabled=context.hide_above_enabled,
-                max_visible_duration_seconds=context.hide_above_minutes * 60,
-            )
-            hidden_by_duration = self._duration_hidden_count(videos, context)
-            if hidden_by_duration:
-                log(f"[INFO] Đã ẩn {hidden_by_duration} video theo thời lượng.")
-            if videos:
-                visible_count = len(videos) - hidden_by_duration
-                log(f"[SUCCESS] Đã nạp thêm {visible_count} video sau khi lọc thời lượng.")
-            if not next_page_token:
-                log("[INFO] Không còn video nào.")
-            self.events.put(("load_more_done", request_token, videos, next_page_token))
-        except YoutubeApiError as exc:
-            self.events.put(("load_more_error", request_token, self._friendly_api_message(exc)))
-        except Exception as exc:
-            self.events.put(("load_more_error", request_token, self._friendly_general_message(str(exc) or "Network error")))
+        run_load_more_task(
+            request_token,
+            manual_key,
+            self.events,
+            fetch_more=fetch_more_videos,
+            friendly_api_error=self._friendly_api_message,
+            friendly_general_error=self._friendly_general_message,
+        )
 
     def _block_combobox_mousewheel(self, combobox: ttk.Combobox) -> None:
         combobox.bind("<MouseWheel>", self._ignore_combobox_mousewheel, add="+")
@@ -1502,9 +1568,6 @@ class YouTubeDownloaderWindow:
         self.shutdown_started_at = None
         self._shutdown_slow_warning_logged = False
         self._shutdown_cancel_reissued = False
-        self._download_terminal_received = False
-        self._download_terminal_outcome = ""
-        self._download_terminal_message = ""
         self.download_controller = DownloadController(
             systemic_block_callback=lambda context: self.events.put(("systemic_download_block", context))
         )
@@ -1539,23 +1602,11 @@ class YouTubeDownloaderWindow:
         selected_video_ids,
         initial_complete_ids,
     ) -> int:
-        self._download_run_sequence = getattr(self, "_download_run_sequence", 0) + 1
-        run_id = self._download_run_sequence
-        selected_ids: set[str] = set()
-        for video_id in selected_video_ids:
-            normalized_id = str(video_id or "").strip()
-            if normalized_id:
-                selected_ids.add(normalized_id)
-        self._active_download_run_id = run_id
-        self._download_run_start_number = run_start_number
-        self._download_run_selected_ids = selected_ids
-        self._download_run_initial_complete_ids = set()
-        for video_id in initial_complete_ids:
-            normalized_id = str(video_id or "").strip()
-            if normalized_id in selected_ids:
-                self._download_run_initial_complete_ids.add(normalized_id)
-        self._download_run_completed_ids = set()
-        return run_id
+        return self._get_download_session_state().begin_run(
+            run_start_number,
+            selected_video_ids,
+            initial_complete_ids,
+        )
 
     def stop_download(self) -> None:
         if not self.downloading:
@@ -1603,27 +1654,18 @@ class YouTubeDownloaderWindow:
         controller: DownloadController,
         download_run_id: int,
     ) -> None:
-        outcome = "completed"
-        message = ""
-        try:
-            download_items(
-                selected,
-                options,
-                self._thread_log,
-                lambda video: self._queue_download_status(video, download_run_id),
-                cancel_controller=controller,
-                progress_callback=self._enqueue_progress_event,
-            )
-        except DownloadError as exc:
-            outcome = "error"
-            message = self._friendly_general_message(str(exc))
-            self._enqueue_progress_event(ProgressEvent(kind="error", phase="Lỗi", message=message))
-        except Exception as exc:
-            outcome = "error"
-            message = self._friendly_general_message(str(exc))
-            self._enqueue_progress_event(ProgressEvent(kind="error", phase="Lỗi", message=message))
-        finally:
-            self.events.put(("download_worker_finished", outcome, message))
+        run_download_task(
+            selected,
+            options,
+            controller,
+            download_run_id,
+            self.events,
+            log_callback=self._thread_log,
+            status_callback=self._queue_download_status,
+            progress_callback=self._enqueue_progress_event,
+            download_batch=download_items,
+            friendly_general_error=self._friendly_general_message,
+        )
 
     def _queue_download_status(self, video, download_run_id: int) -> None:
         self.events.put(("status_update", video.display_order, video.status))
@@ -2243,17 +2285,7 @@ class YouTubeDownloaderWindow:
         )
 
     def _duration_hidden_count(self, videos: list, context: _ChannelRequestContext) -> int:
-        return sum(
-            1
-            for video in videos
-            if not is_video_visible_by_duration(
-                video,
-                hide_below_enabled=context.hide_below_enabled,
-                min_duration_seconds=context.hide_below_minutes * 60,
-                hide_above_enabled=context.hide_above_enabled,
-                max_duration_seconds=context.hide_above_minutes * 60,
-            )
-        )
+        return duration_hidden_count(videos, context)
 
     def _validate_duration_filter_text(self, proposed: str) -> bool:
         try:
@@ -2646,10 +2678,7 @@ class YouTubeDownloaderWindow:
         self.cancel_download = False
         self.exit_after_download_stop = False
         self.close_requested = False
-        self._download_terminal_received = False
-        self._download_terminal_outcome = ""
-        self._download_terminal_message = ""
-        self._active_download_run_id = None
+        self._get_download_session_state().finish_run()
         self._set_download_controls_locked(False)
 
     def _on_close(self) -> None:
@@ -2792,27 +2821,21 @@ class YouTubeDownloaderWindow:
             pass
 
     def _next_channel_request_id(self) -> int:
-        self._channel_request_sequence += 1
-        return self._channel_request_sequence
+        return self._get_channel_request_state().next_request_id()
 
     def _queue_channel_request_log(self, request_token, message: str) -> None:
-        self.events.put(("channel_request_log", request_token, sanitize_log_text(message)))
+        publish_channel_request_log(self.events, request_token, message)
 
     def _restore_loaded_generation_after_failed_fetch(self) -> None:
-        if self._loaded_channel_generation is not None:
-            self._channel_generation = self._loaded_channel_generation
+        self._get_channel_request_state().restore_loaded_generation()
 
     def _clear_pending_fetch_manual_key(self, token: _FetchRequestToken | None = None) -> None:
-        if token is not None and self._active_fetch_manual_key_request_id != token.request_id:
-            return
-        self._active_fetch_manual_key = ""
-        self._active_fetch_manual_key_request_id = None
+        self._get_channel_request_state().clear_pending_manual_key(token)
 
     def _persist_accepted_fetch_manual_key(self, token: _FetchRequestToken) -> None:
-        if self._active_fetch_manual_key_request_id != token.request_id:
+        manual_key = self._get_channel_request_state().take_accepted_manual_key(token)
+        if manual_key is None:
             return
-        manual_key = self._active_fetch_manual_key.strip()
-        self._clear_pending_fetch_manual_key(token)
         if not manual_key:
             return
         if not save_last_api_key(manual_key):
@@ -2826,30 +2849,18 @@ class YouTubeDownloaderWindow:
         return False
 
     def _is_current_fetch_request(self, token: _FetchRequestToken) -> bool:
-        active = self._active_fetch_request
-        return bool(
-            isinstance(token, _FetchRequestToken)
-            and isinstance(active, _FetchRequestToken)
-            and token.generation == self._channel_generation
-            and token.request_id == active.request_id
-            and token.generation == active.generation
-        )
+        return self._get_channel_request_state().is_current_fetch(token)
 
     def _is_current_load_more_request(self, token: _LoadMoreRequestToken) -> bool:
-        active = self._active_load_more_request
         channel = self.channel_info
-        return bool(
-            isinstance(token, _LoadMoreRequestToken)
-            and isinstance(active, _LoadMoreRequestToken)
-            and token.generation == self._channel_generation
-            and token.generation == self._loaded_channel_generation
-            and token.request_id == active.request_id
-            and token.generation == active.generation
-            and channel is not None
-            and str(getattr(channel, "channel_id", "") or "") == token.channel_id
-            and str(getattr(channel, "uploads_playlist_id", "") or "") == token.uploads_playlist_id
-            and str(self.next_page_token or "") == token.page_token
-            and len(self.videos) + 1 == token.start_order
+        if channel is None:
+            return False
+        return self._get_channel_request_state().is_current_load_more(
+            token,
+            channel_id=str(getattr(channel, "channel_id", "") or ""),
+            uploads_playlist_id=str(getattr(channel, "uploads_playlist_id", "") or ""),
+            page_token=str(self.next_page_token or ""),
+            start_order=len(self.videos) + 1,
         )
 
     def _thread_log(self, message: str) -> None:
@@ -3199,9 +3210,7 @@ class YouTubeDownloaderWindow:
             self.selected_orders.clear()
             self.videos = event[3]
             self.next_page_token = event[4]
-            self._loaded_channel_generation = token.generation
-            self._loaded_channel_context = token.context
-            self._active_fetch_request = None
+            self._get_channel_request_state().accept_fetch(token)
             self.fetching = False
             self._persist_accepted_fetch_manual_key(token)
             self._refresh_interaction_control_states()
@@ -3212,10 +3221,8 @@ class YouTubeDownloaderWindow:
             if not self._is_current_fetch_request(token):
                 return
             self._append_log(event[2])
-            self._active_fetch_request = None
+            self._get_channel_request_state().fail_fetch(token)
             self.fetching = False
-            self._restore_loaded_generation_after_failed_fetch()
-            self._clear_pending_fetch_manual_key(token)
             self._refresh_interaction_control_states()
         elif kind == "load_more_done":
             token = event[1]
@@ -3234,7 +3241,7 @@ class YouTubeDownloaderWindow:
                     warning_callback=self._append_log,
                 )
             self.next_page_token = next_page_token
-            self._active_load_more_request = None
+            self._get_channel_request_state().complete_load_more(token)
             self.loading_more = False
             self._refresh_interaction_control_states()
             self.apply_filter()
@@ -3244,7 +3251,7 @@ class YouTubeDownloaderWindow:
                 return
             self._append_log(event[2])
             self.loading_more = False
-            self._active_load_more_request = None
+            self._get_channel_request_state().complete_load_more(token)
             self._refresh_interaction_control_states()
         elif kind == "status_update":
             order, status = event[1], event[2]
@@ -3269,27 +3276,11 @@ class YouTubeDownloaderWindow:
     def _handle_download_video_completed_for_numbering(self, event) -> None:
         if not isinstance(event, (tuple, list)) or len(event) < 3:
             return
-        run_id = event[1]
-        try:
-            video_id = str(event[2] or "").strip()
-        except Exception:
-            return
-        if run_id != getattr(self, "_active_download_run_id", None) or not video_id:
-            return
-        if video_id not in getattr(self, "_download_run_selected_ids", set()):
-            return
-        if video_id in getattr(self, "_download_run_initial_complete_ids", set()):
-            return
-        completed_ids = getattr(self, "_download_run_completed_ids", None)
-        run_start_number = getattr(self, "_download_run_start_number", None)
-        if not isinstance(completed_ids, set) or not isinstance(run_start_number, int):
-            return
-        if video_id in completed_ids:
+        next_number = self._get_download_session_state().record_completion(event[1], event[2])
+        if next_number is None:
             return
 
         # This advances only the next-run suggestion; active-batch allocation stays unchanged.
-        completed_ids.add(video_id)
-        next_number = run_start_number + len(completed_ids)
         try:
             self.file_start_number_var.set(str(next_number))
             self._append_log(
@@ -3299,13 +3290,11 @@ class YouTubeDownloaderWindow:
             return
 
     def _handle_download_worker_finished(self, outcome: str, message: str = "") -> None:
-        if self._download_terminal_received:
+        state = self._get_download_session_state()
+        if not state.record_terminal(outcome, message):
             return
-        self._download_terminal_received = True
-        self._download_terminal_outcome = outcome or "completed"
-        self._download_terminal_message = message or ""
-        if self._download_terminal_outcome == "error" and self._download_terminal_message:
-            self._append_log(self._download_terminal_message)
+        if state.terminal_outcome == "error" and state.terminal_message:
+            self._append_log(state.terminal_message)
 
         if self.shutdown_in_progress or self.exit_after_download_stop:
             self._schedule_shutdown_poll()
