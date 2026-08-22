@@ -1,0 +1,212 @@
+name: Diagnostic app build
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnostic-app-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-diagnostic-app:
+    name: Windows SHA-tagged runtime diagnostic app
+    runs-on: windows-2022
+    timeout-minutes: 35
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+
+    steps:
+      - name: Check out exact diagnostic head
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify full source SHA
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $Actual = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Could not resolve diagnostic source SHA" }
+          if ($Actual -cne $env:SOURCE_SHA) { throw "Checked-out source differs from SOURCE_SHA" }
+          if ($env:SOURCE_SHA -cnotmatch "^[0-9a-f]{40}$") { throw "SOURCE_SHA must be a full 40-character SHA" }
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Install locked build dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python scripts/install_build_dependencies.py `
+            --venv "$env:RUNNER_TEMP\s9h-diagnostic-app-build-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" `
+            --github-env "$env:GITHUB_ENV" `
+            --github-path "$env:GITHUB_PATH"
+          if ($LASTEXITCODE -ne 0) { throw "Locked build dependency installation failed" }
+
+      - name: Compile diagnostic source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m compileall -q app.py core ui scripts
+          if ($LASTEXITCODE -ne 0) { throw "Diagnostic source compile failed" }
+          python scripts/smoke_fast_exact_binary_probe_contract.py
+          if ($LASTEXITCODE -ne 0) { throw "Exact-binary probe contract smoke failed" }
+
+      - name: Prepare exact pinned runtime set
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          $Root = Join-Path $env:RUNNER_TEMP "s9h-runtime-diagnostic-$env:SOURCE_SHA"
+          $DownloadRoot = Join-Path $Root "downloads"
+          $ExtractRoot = Join-Path $Root "extract"
+          $BundleRoot = Join-Path $Root "bundle"
+          $BinRoot = Join-Path $BundleRoot "data\bin"
+          New-Item -ItemType Directory -Force -Path $DownloadRoot, $ExtractRoot, $BinRoot | Out-Null
+
+          function Assert-Sha256 {
+              param(
+                  [Parameter(Mandatory = $true)][string]$Path,
+                  [Parameter(Mandatory = $true)][string]$Expected,
+                  [Parameter(Mandatory = $true)][string]$Name
+              )
+              if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "$Name is missing" }
+              $Actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
+              if ($Actual -ne $Expected.ToUpperInvariant()) { throw "$Name SHA-256 mismatch: $Actual" }
+          }
+
+          function Download-Checked {
+              param(
+                  [Parameter(Mandatory = $true)][string]$Uri,
+                  [Parameter(Mandatory = $true)][string]$Destination,
+                  [Parameter(Mandatory = $true)][string]$Expected,
+                  [Parameter(Mandatory = $true)][string]$Name
+              )
+              Invoke-WebRequest -Uri $Uri -OutFile $Destination
+              Assert-Sha256 -Path $Destination -Expected $Expected -Name $Name
+          }
+
+          $YtDlp = Join-Path $DownloadRoot "yt-dlp.exe"
+          Download-Checked -Uri "https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17/yt-dlp.exe" -Destination $YtDlp -Expected "3DB811B366B2DA47337D2FCFDFE5BBD9A258DAD3F350C54974F005DF115A1545" -Name "yt-dlp.exe"
+
+          $AriaArchive = Join-Path $DownloadRoot "aria2.zip"
+          Download-Checked -Uri "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip" -Destination $AriaArchive -Expected "67D015301EEF0B612191212D564C5BB0A14B5B9C4796B76454276A4D28D9B288" -Name "aria2 archive"
+          $AriaExtract = Join-Path $ExtractRoot "aria2"
+          Expand-Archive -LiteralPath $AriaArchive -DestinationPath $AriaExtract
+          $Aria2 = @(Get-ChildItem -LiteralPath $AriaExtract -Recurse -Filter "aria2c.exe" -File)
+          if ($Aria2.Count -ne 1) { throw "aria2 archive layout changed" }
+          Assert-Sha256 -Path $Aria2[0].FullName -Expected "BE2099C214F63A3CB4954B09A0BECD6E2E34660B886D4C898D260FEBFE9D70C2" -Name "aria2c.exe"
+
+          $FfmpegArchive = Join-Path $DownloadRoot "ffmpeg.zip"
+          Download-Checked -Uri "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.2-essentials_build.zip" -Destination $FfmpegArchive -Expected "DB580001CAA24AC104C8CB856CD113A87B0A443F7BDF47D8C12B1D740584A2EC" -Name "FFmpeg archive"
+          $FfmpegExtract = Join-Path $ExtractRoot "ffmpeg"
+          Expand-Archive -LiteralPath $FfmpegArchive -DestinationPath $FfmpegExtract
+          $Ffmpeg = @(Get-ChildItem -LiteralPath $FfmpegExtract -Recurse -Filter "ffmpeg.exe" -File)
+          $Ffprobe = @(Get-ChildItem -LiteralPath $FfmpegExtract -Recurse -Filter "ffprobe.exe" -File)
+          if ($Ffmpeg.Count -ne 1 -or $Ffprobe.Count -ne 1) { throw "FFmpeg archive layout changed" }
+          Assert-Sha256 -Path $Ffmpeg[0].FullName -Expected "1326DDE4C84FF1F96FE6B8916C5BED29E163E9B5DCCF995F6F3DB069D143EC5E" -Name "ffmpeg.exe"
+          Assert-Sha256 -Path $Ffprobe[0].FullName -Expected "B49CCC7C6547B141AD5A2F6EC69CC04323D7133D7704D70B331B904C63EECB07" -Name "ffprobe.exe"
+
+          $DenoArchive = Join-Path $DownloadRoot "deno.zip"
+          Download-Checked -Uri "https://github.com/denoland/deno/releases/download/v2.7.14/deno-x86_64-pc-windows-msvc.zip" -Destination $DenoArchive -Expected "25F9871F5C1D9E999D60071F8069767134495FD601D2E2C7CE1E8C641487BDA0" -Name "Deno archive"
+          $DenoExtract = Join-Path $ExtractRoot "deno"
+          Expand-Archive -LiteralPath $DenoArchive -DestinationPath $DenoExtract
+          $Deno = @(Get-ChildItem -LiteralPath $DenoExtract -Recurse -Filter "deno.exe" -File)
+          if ($Deno.Count -ne 1) { throw "Deno archive layout changed" }
+          Assert-Sha256 -Path $Deno[0].FullName -Expected "B6E83993F1F1AB97075A77043DE61118966D719B5450BC631251D47C3A34230B" -Name "deno.exe"
+
+          Copy-Item -LiteralPath $YtDlp -Destination (Join-Path $BinRoot "yt-dlp.exe")
+          Copy-Item -LiteralPath $Aria2[0].FullName -Destination (Join-Path $BinRoot "aria2c.exe")
+          Copy-Item -LiteralPath $Ffmpeg[0].FullName -Destination (Join-Path $BinRoot "ffmpeg.exe")
+          Copy-Item -LiteralPath $Ffprobe[0].FullName -Destination (Join-Path $BinRoot "ffprobe.exe")
+          Copy-Item -LiteralPath $Deno[0].FullName -Destination (Join-Path $BinRoot "deno.exe")
+
+          "DIAGNOSTIC_BUNDLE_ROOT=$BundleRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build diagnostic application and exact-binary probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python scripts/package_windows.py
+          if ($LASTEXITCODE -ne 0) { throw "Diagnostic application build failed" }
+          Copy-Item -LiteralPath "dist\Youtube Downloaderbs.exe" -Destination (Join-Path $env:DIAGNOSTIC_BUNDLE_ROOT "Youtube.Downloaderbs-DIAGNOSTIC.exe")
+
+          pyinstaller `
+              --noconfirm `
+              --clean `
+              --onefile `
+              --console `
+              --name FastExactBinaryProbe `
+              scripts/diagnose_fast_exact_binaries.py
+          if ($LASTEXITCODE -ne 0) { throw "FastExactBinaryProbe build failed" }
+          Copy-Item -LiteralPath "dist\FastExactBinaryProbe.exe" -Destination (Join-Path $env:DIAGNOSTIC_BUNDLE_ROOT "FastExactBinaryProbe.exe")
+
+      - name: Write diagnostic SHA marker and instructions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $BinRoot = Join-Path $env:DIAGNOSTIC_BUNDLE_ROOT "data\bin"
+          $AppPath = Join-Path $env:DIAGNOSTIC_BUNDLE_ROOT "Youtube.Downloaderbs-DIAGNOSTIC.exe"
+          $ProbePath = Join-Path $env:DIAGNOSTIC_BUNDLE_ROOT "FastExactBinaryProbe.exe"
+          $Manifest = [ordered]@{
+              schema_version = 1
+              purpose = "bug-01-bug-03-runtime-diagnostic"
+              source_sha = $env:SOURCE_SHA
+              source_branch = "diag/runtime-bugs-20260822"
+              workflow_run_id = "${{ github.run_id }}"
+              workflow_run_attempt = "${{ github.run_attempt }}"
+              built_utc = [DateTime]::UtcNow.ToString("o")
+              app_sha256 = (Get-FileHash -LiteralPath $AppPath -Algorithm SHA256).Hash.ToLowerInvariant()
+              probe_sha256 = (Get-FileHash -LiteralPath $ProbePath -Algorithm SHA256).Hash.ToLowerInvariant()
+              yt_dlp_sha256 = (Get-FileHash -LiteralPath (Join-Path $BinRoot "yt-dlp.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+              aria2_sha256 = (Get-FileHash -LiteralPath (Join-Path $BinRoot "aria2c.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+              ffmpeg_sha256 = (Get-FileHash -LiteralPath (Join-Path $BinRoot "ffmpeg.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+              ffprobe_sha256 = (Get-FileHash -LiteralPath (Join-Path $BinRoot "ffprobe.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+              deno_sha256 = (Get-FileHash -LiteralPath (Join-Path $BinRoot "deno.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          $Manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $env:DIAGNOSTIC_BUNDLE_ROOT "DIAGNOSTIC_BUILD.json") -Encoding utf8
+          Set-Content -LiteralPath (Join-Path $env:DIAGNOSTIC_BUNDLE_ROOT "DIAGNOSTIC_BUILD_SHA.txt") -Value $env:SOURCE_SHA -Encoding ascii
+          @"
+          S9H BUG-01 / BUG-03 DIAGNOSTIC BUILD — DO NOT USE AS PRODUCTION
+          Source SHA: $env:SOURCE_SHA
+
+          1. Keep DIAGNOSTIC_BUILD.json next to Youtube.Downloaderbs-DIAGNOSTIC.exe.
+          2. For BUG-03, run FastExactBinaryProbe.exe first. It does not use YouTube or app UI.
+          3. Run Youtube.Downloaderbs-DIAGNOSTIC.exe and reproduce the real issue.
+          4. For BUG-01, open multiple instances exactly as in the failing workflow and download the affected channels.
+          5. Runtime JSONL is stored under %TEMP%\s9h-ytdl-diag. Each record is flush()+fsync()'d immediately.
+          6. Send only the runtime-*.jsonl files from the reproduction. They contain source SHA, filenames/titles/video IDs and hashed output paths, but no cookie contents/API key/authenticated URLs.
+          7. After the root cause is confirmed, delete %TEMP%\s9h-ytdl-diag. This diagnostic branch/PR must never be merged.
+          "@ | Set-Content -LiteralPath (Join-Path $env:DIAGNOSTIC_BUNDLE_ROOT "README_DIAGNOSTIC.txt") -Encoding utf8
+
+      - name: Verify diagnostic bundle identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $Manifest = Get-Content -LiteralPath (Join-Path $env:DIAGNOSTIC_BUNDLE_ROOT "DIAGNOSTIC_BUILD.json") -Raw | ConvertFrom-Json
+          if ($Manifest.source_sha -cne $env:SOURCE_SHA) { throw "Diagnostic manifest source SHA mismatch" }
+          if ($Manifest.source_sha -cnotmatch "^[0-9a-f]{40}$") { throw "Diagnostic manifest source SHA is not full length" }
+          if (-not (Test-Path -LiteralPath (Join-Path $env:DIAGNOSTIC_BUNDLE_ROOT "Youtube.Downloaderbs-DIAGNOSTIC.exe") -PathType Leaf)) { throw "Diagnostic app missing" }
+          if (-not (Test-Path -LiteralPath (Join-Path $env:DIAGNOSTIC_BUNDLE_ROOT "FastExactBinaryProbe.exe") -PathType Leaf)) { throw "Exact-binary probe missing" }
+          Write-Host "Diagnostic app artifact verified for $env:SOURCE_SHA"
+
+      - name: Upload SHA-tagged diagnostic app
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: s9h-runtime-diagnostic-${{ env.SOURCE_SHA }}
+          path: ${{ env.DIAGNOSTIC_BUNDLE_ROOT }}
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+          retention-days: 2
