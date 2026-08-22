@@ -15,6 +15,7 @@ EXPECTED_RELEASE_TAGS = (
     "v1.3.0",
     "v1.3.0-rc.1",
     "v1.3.1",
+    "v1.3.2",
 )
 REQUIRED_DOCUMENT_CONCEPTS = (
     "source input inventory is evidence-only",
@@ -103,11 +104,11 @@ def _verify_release_policy(path: Path) -> None:
     releases = policy["releases"]
     _require(
         tuple(item["tag"] for item in releases) == EXPECTED_RELEASE_TAGS,
-        "release policy must retain exactly four tracked releases",
+        "release policy must retain exactly five tracked releases",
     )
     _require(
         all(item["status"] == "blocked" for item in releases),
-        "all four tracked releases must remain blocked",
+        "all five tracked releases must remain blocked",
     )
 
 

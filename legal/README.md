@@ -16,7 +16,9 @@ No project license is selected in Phase 6A. This directory does not grant rights
 
 The current stable release sources identify these versions and builds:
 
-- yt-dlp 2026.03.17;
+- yt-dlp nightly 2026.08.18.122307 from `yt-dlp/yt-dlp-nightly-builds`,
+  generated from upstream source commit
+  `5d5b634d8e6b41dc2891847a5ea7a5a3f569a28c` in `yt-dlp/yt-dlp`;
 - Gyan FFmpeg 8.1.2 essentials build;
 - aria2 1.37.0;
 - Deno 2.7.14;
@@ -31,7 +33,7 @@ Gyan identifies its static builds as GPLv3. FFmpeg license configuration varies 
 
 ## Release gate
 
-`legal/release-policy.json` intentionally blocks all four current version workflows. The gate executes before dependency installation, release runtime acquisition, and application build. Existing releases are not retroactively certified.
+`legal/release-policy.json` intentionally blocks all five current version workflows. The gate executes before dependency installation, release runtime acquisition, and application build. Existing releases are not retroactively certified.
 
 ## Source availability status
 
@@ -52,7 +54,7 @@ Phase 6B2 must complete all of the following before the release gate can be reco
 
 The exact pinned FFmpeg and aria2 binary packages were audited without executing them. Exact core source refs were resolved where the package evidence permitted, but core source is not represented as the full source required for the distributed static packages. External static-component sources and build-recipe gaps remain explicit. The result is **source correspondence partially identified**, **source kit not ready**, and **no compliance certification**.
 
-`legal/source-correspondence.json` records the audit findings. `legal/source-kit-requirements.json` defines the prerequisites for Phase 6B2B. The audit confirms that all four workflows remain fail-closed; Phase 6B2A does not enable publishing, source kits and legal payloads remain absent, and existing releases are not retroactively certified.
+`legal/source-correspondence.json` records the audit findings. `legal/source-kit-requirements.json` defines the prerequisites for Phase 6B2B. The audit confirms that all five workflows remain fail-closed; Phase 6B2A does not enable publishing, source kits and legal payloads remain absent, and existing releases are not retroactively certified.
 
 ## Phase 6B2B1 release legal payload
 

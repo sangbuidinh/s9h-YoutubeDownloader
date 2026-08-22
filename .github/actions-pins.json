@@ -76,7 +76,7 @@
           "official_repository": true,
           "action_yml_blob": "6842eb843b7258993656f41f9c358f5c5331fbe7",
           "lifecycle": "frozen-historical",
-          "occurrence_count": 11
+          "occurrence_count": 14
         },
         "actions/setup-python": {
           "repository": "actions/setup-python",
@@ -87,7 +87,7 @@
           "official_repository": true,
           "action_yml_blob": "efa8de904209196588db1453bdb44079b3c393d7",
           "lifecycle": "frozen-historical",
-          "occurrence_count": 8
+          "occurrence_count": 10
         },
         "actions/upload-artifact": {
           "repository": "actions/upload-artifact",
@@ -98,7 +98,7 @@
           "official_repository": true,
           "action_yml_blob": "2a0ecf19e8d0087dd2e5d1785dcf764811e79fae",
           "lifecycle": "frozen-historical",
-          "occurrence_count": 4
+          "occurrence_count": 5
         },
         "actions/download-artifact": {
           "repository": "actions/download-artifact",
@@ -109,7 +109,7 @@
           "official_repository": true,
           "action_yml_blob": "7fc4fb55c7d0c7b198b1c7466e1efd7c7d05fb26",
           "lifecycle": "frozen-historical",
-          "occurrence_count": 4
+          "occurrence_count": 5
         },
         "softprops/action-gh-release": {
           "repository": "softprops/action-gh-release",
@@ -120,7 +120,7 @@
           "official_repository": false,
           "action_yml_blob": "b471d236bc28052c1d78c3d6b57ee480d192da6a",
           "lifecycle": "frozen-historical",
-          "occurrence_count": 4
+          "occurrence_count": 5
         }
       }
     }
@@ -130,7 +130,8 @@
     ".github/workflows/prerelease-v1.2.7-rc.1.yml": "frozen_historical_release",
     ".github/workflows/prerelease-v1.3.0-rc.1.yml": "frozen_historical_release",
     ".github/workflows/release-v1.3.0.yml": "frozen_historical_release",
-    ".github/workflows/release-v1.3.1.yml": "frozen_historical_release"
+    ".github/workflows/release-v1.3.1.yml": "frozen_historical_release",
+    ".github/workflows/release-v1.3.2.yml": "frozen_historical_release"
   },
   "workflow_action_counts": {
     ".github/workflows/ci.yml": {
@@ -162,6 +163,13 @@
       "softprops/action-gh-release": 1
     },
     ".github/workflows/release-v1.3.1.yml": {
+      "actions/checkout": 3,
+      "actions/setup-python": 2,
+      "actions/upload-artifact": 1,
+      "actions/download-artifact": 1,
+      "softprops/action-gh-release": 1
+    },
+    ".github/workflows/release-v1.3.2.yml": {
       "actions/checkout": 3,
       "actions/setup-python": 2,
       "actions/upload-artifact": 1,

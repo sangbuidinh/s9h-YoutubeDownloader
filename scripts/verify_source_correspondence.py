@@ -457,7 +457,7 @@ def _verify_documentation(root: Path) -> None:
         "source correspondence partially identified",
         "source kit not ready",
         "no compliance certification",
-        "all four workflows remain fail-closed",
+        "all five workflows remain fail-closed",
         "does not enable publishing",
         "existing releases are not retroactively certified",
     )

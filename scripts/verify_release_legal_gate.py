@@ -22,6 +22,7 @@ EXPECTED_TAGS = (
     "v1.3.0",
     "v1.3.0-rc.1",
     "v1.3.1",
+    "v1.3.2",
 )
 EXPECTED_REASONS = {
     "v1.2.7-rc.1": (
@@ -40,6 +41,11 @@ EXPECTED_REASONS = {
         "release-legal-payload-not-integrated",
     ),
     "v1.3.1": (
+        "aria2-source-availability-not-integrated",
+        "ffmpeg-corresponding-source-not-certified",
+        "release-legal-payload-not-integrated",
+    ),
+    "v1.3.2": (
         "aria2-source-availability-not-integrated",
         "ffmpeg-corresponding-source-not-certified",
         "release-legal-payload-not-integrated",
@@ -103,7 +109,7 @@ def validate_policy_document(policy: Any) -> dict[str, Any]:
     _require(policy["release_payload_integrated"] is False, "release payload must remain unintegrated")
 
     releases = policy["releases"]
-    _require(isinstance(releases, list) and len(releases) == len(EXPECTED_TAGS), "policy must contain exactly four releases")
+    _require(isinstance(releases, list) and len(releases) == len(EXPECTED_TAGS), "policy must contain exactly five releases")
     tags: list[str] = []
     for release in releases:
         _require(isinstance(release, dict) and tuple(release) == RELEASE_KEYS, "release policy record schema is invalid")

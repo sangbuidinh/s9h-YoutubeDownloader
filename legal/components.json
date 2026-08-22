@@ -140,21 +140,23 @@
     {
       "id": "yt-dlp",
       "name": "yt-dlp",
-      "version": "2026.03.17",
+      "version": "2026.08.18.122307",
       "role": "external executable in portable ZIP",
       "distribution_paths": [
         "data/bin/yt-dlp.exe"
       ],
       "upstream_repository": "yt-dlp/yt-dlp",
-      "upstream_ref": "2026.03.17",
+      "upstream_ref": "5d5b634d8e6b41dc2891847a5ea7a5a3f569a28c",
       "upstream_license_path": "LICENSE",
       "upstream_license_blob_sha1": "68a49daad8ff7e35068f2b7a97d643aab440eaec",
       "license_label": "The Unlicense / public-domain dedication",
-      "local_license_path": "legal/licenses/yt-dlp-2026.03.17-UNLICENSE.txt",
+      "local_license_path": "legal/licenses/yt-dlp-2026.08.18.122307-UNLICENSE.txt",
       "notice_status": "verified-license-text",
       "source_distribution_status": "not-assessed",
       "notes": [
-        "Phase 6A records the direct runtime and preserves its selected upstream license text."
+        "Binary distribution repository: yt-dlp/yt-dlp-nightly-builds; tag: 2026.08.18.122307; asset: yt-dlp.exe; SHA-256: 652e154bce7170070d0f26415c9a3c35c121f5a7903cb8cde6d31c4577517fb9.",
+        "Upstream source and license repository: yt-dlp/yt-dlp at immutable commit 5d5b634d8e6b41dc2891847a5ea7a5a3f569a28c.",
+        "The selected upstream LICENSE blob is preserved without treating the binary distribution repository as the source repository."
       ]
     }
   ]

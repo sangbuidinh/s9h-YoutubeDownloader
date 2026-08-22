@@ -62,7 +62,7 @@ LEGAL_PAYLOAD_FILES = (
     "legal/licenses/Python-3.11.9-LICENSE.txt",
     "legal/licenses/Tcl-Tk-license.terms",
     "legal/licenses/aria2-1.37.0-GPLv2.txt",
-    "legal/licenses/yt-dlp-2026.03.17-UNLICENSE.txt",
+    "legal/licenses/yt-dlp-2026.08.18.122307-UNLICENSE.txt",
 )
 PAYLOAD_PATHS = (
     "legal/THIRD_PARTY_NOTICES.md",
@@ -79,7 +79,7 @@ PAYLOAD_PATHS = (
     "legal/licenses/Python-3.11.9-LICENSE.txt",
     "legal/licenses/Tcl-Tk-license.terms",
     "legal/licenses/aria2-1.37.0-GPLv2.txt",
-    "legal/licenses/yt-dlp-2026.03.17-UNLICENSE.txt",
+    "legal/licenses/yt-dlp-2026.08.18.122307-UNLICENSE.txt",
 )
 SOURCE_TEMPLATES = (
     {

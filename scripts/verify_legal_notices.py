@@ -129,15 +129,15 @@ EXPECTED_COMPONENTS: dict[str, dict[str, Any]] = {
     },
     "yt-dlp": {
         "name": "yt-dlp",
-        "version": "2026.03.17",
+        "version": "2026.08.18.122307",
         "role": "external executable in portable ZIP",
         "distribution_paths": ["data/bin/yt-dlp.exe"],
         "upstream_repository": "yt-dlp/yt-dlp",
-        "upstream_ref": "2026.03.17",
+        "upstream_ref": "5d5b634d8e6b41dc2891847a5ea7a5a3f569a28c",
         "upstream_license_path": "LICENSE",
         "upstream_license_blob_sha1": "68a49daad8ff7e35068f2b7a97d643aab440eaec",
         "license_label": "The Unlicense / public-domain dedication",
-        "local_license_path": "legal/licenses/yt-dlp-2026.03.17-UNLICENSE.txt",
+        "local_license_path": "legal/licenses/yt-dlp-2026.08.18.122307-UNLICENSE.txt",
         "notice_status": "verified-license-text",
         "source_distribution_status": "not-assessed",
     },
@@ -192,7 +192,7 @@ NOTICE_HEADINGS = {
     "pyinstaller": "### PyInstaller 6.21.0",
     "python": "### Python 3.11.9",
     "tcl-tk": "### Tcl/Tk conservative notice",
-    "yt-dlp": "### yt-dlp 2026.03.17",
+    "yt-dlp": "### yt-dlp nightly 2026.08.18.122307",
 }
 ROOT_PROJECT_LICENSE_FILES = (
     "LICENSE",
@@ -590,6 +590,16 @@ def _verify_inventory(root: Path) -> tuple[dict[str, Any], str]:
     _require("complete Corresponding Source" in ffmpeg_notes, "FFmpeg source warning is missing")
     tcl_notes = "\n".join(next(c for c in components if c["id"] == "tcl-tk")["notes"])
     _require("not verified in Phase 6A" in tcl_notes, "Tcl/Tk embedded version status is missing")
+    ytdlp_notes = "\n".join(next(c for c in components if c["id"] == "yt-dlp")["notes"])
+    for required in (
+        "yt-dlp/yt-dlp-nightly-builds",
+        "2026.08.18.122307",
+        "yt-dlp.exe",
+        "652e154bce7170070d0f26415c9a3c35c121f5a7903cb8cde6d31c4577517fb9",
+        "yt-dlp/yt-dlp",
+        "5d5b634d8e6b41dc2891847a5ea7a5a3f569a28c",
+    ):
+        _require(required in ytdlp_notes, f"yt-dlp provenance note is missing: {required}")
     return inventory, text
 
 
@@ -852,7 +862,7 @@ def _verify_sources_of_truth(root: Path, inventory: dict[str, Any]) -> None:
     _require(versions["python"] == build_dependencies["target"]["python"], "inventory Python version mismatch")
     _require(versions["pyinstaller"] == build_dependencies["build_root"]["version"], "inventory PyInstaller mismatch")
 
-    required_release_snippets = (
+    historical_release_snippets = (
         "releases/download/2026.03.17/yt-dlp.exe",
         "ffmpeg-8.1.2-essentials_build.zip",
         '8.1.2-essentials_build-www.gyan.dev',
@@ -861,8 +871,19 @@ def _verify_sources_of_truth(root: Path, inventory: dict[str, Any]) -> None:
     )
     for relative in ("scripts/build_release_v1_3_0.ps1", "scripts/build_release_v1_3_1.ps1"):
         script = _read_required_bytes(root, relative).decode("utf-8-sig")
-        for snippet in required_release_snippets:
+        for snippet in historical_release_snippets:
             _require(snippet in script, f"{relative} runtime identity changed: {snippet}")
+
+    active_release = _read_required_bytes(root, "scripts/build_release_v1_3_2.ps1").decode("utf-8-sig")
+    for snippet in (
+        "yt-dlp/yt-dlp-nightly-builds/releases/download/2026.08.18.122307/yt-dlp.exe",
+        "652E154BCE7170070D0F26415C9A3C35C121F5A7903CB8CDE6D31C4577517FB9",
+        'if ($YtDlpVersion -ne "2026.08.18.122307")',
+        "ffmpeg-8.1.2-essentials_build.zip",
+        "release-1.37.0/aria2-1.37.0-win-64bit-build1.zip",
+        "v2.7.14/deno-x86_64-pc-windows-msvc.zip",
+    ):
+        _require(snippet in active_release, f"active release runtime identity changed: {snippet}")
 
     workflow_dir = root / ".github" / "workflows"
     workflows = sorted(workflow_dir.glob("*.yml"))
@@ -875,7 +896,7 @@ def _verify_sources_of_truth(root: Path, inventory: dict[str, Any]) -> None:
         _require('python-version: "3.11.9"' in text, f"{workflow.name} Python pin changed")
         _require("Python 3.11.9" in text, f"{workflow.name} Python runtime check changed")
     _require(pinned_workflows > 0, "no pinned Python workflow was found")
-    _require(_read_required_bytes(root, "VERSION").decode("utf-8-sig").strip() == "1.3.1", "VERSION changed")
+    _require(_read_required_bytes(root, "VERSION").decode("utf-8-sig").strip() == "1.3.2", "VERSION changed")
 
 
 def _verify_project_claims_and_hygiene(documents: dict[str, str]) -> None:

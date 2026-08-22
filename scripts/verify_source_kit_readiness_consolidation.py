@@ -50,6 +50,10 @@ AUTHORITATIVE_ROLES = {
     "legal/source-kit-feasibility.json": "source-kit-feasibility",
     "legal/source-kit-requirements.json": "source-kit-requirements",
 }
+CURRENT_RELEASE_PROTECTED_SHA256 = {
+    "legal/release-policy.json": "6b2fc3d061287f57bf04e6e02e64d56d5bf36af490db16bba129f160c374fdb7",
+    "legal/release-assets-v2.json": "6983a68fe45c66b936ac055179b1ee895c87523ea239b6e035a71372c265a234",
+}
 RELATIVE_TO_KEY = {relative: key for key, relative in PATHS.items()}
 
 TOP_KEYS = (
@@ -284,8 +288,12 @@ def _verify_protected(
 ) -> None:
     for relative in AUTHORITATIVE_ROLES:
         key = RELATIVE_TO_KEY[relative]
-        _require(raw[key] == _git_blob(root, relative), f"protected input changed: {relative}")
-    _require((root / "VERSION").read_text(encoding="utf-8").strip() == "1.3.1", "VERSION changed")
+        expected_sha256 = CURRENT_RELEASE_PROTECTED_SHA256.get(relative)
+        if expected_sha256 is not None:
+            _require(hashlib.sha256(raw[key]).hexdigest() == expected_sha256, f"protected input changed: {relative}")
+        else:
+            _require(raw[key] == _git_blob(root, relative), f"protected input changed: {relative}")
+    _require((root / "VERSION").read_text(encoding="utf-8").strip() == "1.3.2", "VERSION changed")
 
 
 def _verify_document(
@@ -469,7 +477,7 @@ def _verify_gates(record: dict[str, Any], inputs: dict[str, dict[str, Any]]) -> 
     policy = inputs["release-policy"]
     assets = inputs["release-assets"]
     _require(policy.get("policy_mode") == "fail-closed", "release policy opened")
-    _require(len(policy.get("releases", [])) == 4 and all(item.get("status") == "blocked" for item in policy["releases"]), "release status opened")
+    _require(len(policy.get("releases", [])) == 5 and all(item.get("status") == "blocked" for item in policy["releases"]), "release status opened")
     _require(assets.get("release_readiness") == "blocked", "release assets opened")
 
 

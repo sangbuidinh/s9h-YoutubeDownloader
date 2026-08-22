@@ -44,6 +44,16 @@
         "release-legal-payload-not-integrated"
       ],
       "required_phase": "6B2"
+    },
+    {
+      "tag": "v1.3.2",
+      "status": "blocked",
+      "reason_codes": [
+        "aria2-source-availability-not-integrated",
+        "ffmpeg-corresponding-source-not-certified",
+        "release-legal-payload-not-integrated"
+      ],
+      "required_phase": "6B2"
     }
   ]
 }
