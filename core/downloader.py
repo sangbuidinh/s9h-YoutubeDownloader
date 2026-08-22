@@ -449,8 +449,9 @@ class _InfoJsonMediaContext:
 
 @dataclass(frozen=True)
 class _HybridFormatSelection:
+    kind: str
     video_format_id: str
-    audio_format_id: str
+    audio_format_id: str | None
     video_bytes: int | None
     audio_bytes: int | None
     duration_seconds: float | None
@@ -1956,6 +1957,14 @@ def _fast_hybrid_staged_video(
             )
         staged_video_path = _select_staged_file(hybrid_dir, "video.mp4", ".mp4")
 
+        if selection.kind == "combined":
+            _raise_if_cancelled(cancel_controller)
+            yield staged_video_path
+            return
+
+        if audio_command is None:
+            raise DownloadError("Split hybrid selection did not contain a companion audio command")
+
         _raise_if_cancelled(cancel_controller)
         _set_current_progress_stage(
             "Companion audio",
@@ -2064,32 +2073,46 @@ def _load_hybrid_format_selection(info_json_path: Path) -> _HybridFormatSelectio
     if not isinstance(payload, dict):
         raise DownloadError("yt-dlp metadata did not contain a selected video and companion audio")
 
-    requested_formats = payload.get("requested_formats")
-    if not isinstance(requested_formats, list):
-        raise DownloadError("Premiere-safe separate video and companion audio formats are unavailable")
-    video_format = next(
-        (entry for entry in requested_formats if _is_hybrid_video_format(entry)),
-        None,
-    )
-    audio_format = next(
-        (entry for entry in requested_formats if _is_hybrid_audio_format(entry)),
-        None,
-    )
-    if video_format is None or audio_format is None:
-        raise DownloadError("Premiere-safe separate video and companion audio formats are unavailable")
-
-    video_format_id = str(video_format.get("format_id") or "").strip()
-    audio_format_id = str(audio_format.get("format_id") or "").strip()
-    if not video_format_id or not audio_format_id or video_format_id == audio_format_id:
-        raise DownloadError("yt-dlp metadata did not contain distinct selected format IDs")
     duration_seconds = _positive_number(payload.get("duration"))
-    return _HybridFormatSelection(
-        video_format_id=video_format_id,
-        audio_format_id=audio_format_id,
-        video_bytes=_hybrid_format_bytes(video_format, duration_seconds),
-        audio_bytes=_hybrid_format_bytes(audio_format, duration_seconds),
-        duration_seconds=duration_seconds,
-    )
+    requested_formats = payload.get("requested_formats")
+    if isinstance(requested_formats, list) and requested_formats:
+        video_format = next(
+            (entry for entry in requested_formats if _is_hybrid_video_format(entry)),
+            None,
+        )
+        audio_format = next(
+            (entry for entry in requested_formats if _is_hybrid_audio_format(entry)),
+            None,
+        )
+        if video_format is not None and audio_format is not None:
+            video_format_id = str(video_format.get("format_id") or "").strip()
+            audio_format_id = str(audio_format.get("format_id") or "").strip()
+            if not video_format_id or not audio_format_id or video_format_id == audio_format_id:
+                raise DownloadError("yt-dlp metadata did not contain distinct selected format IDs")
+            return _HybridFormatSelection(
+                kind="split",
+                video_format_id=video_format_id,
+                audio_format_id=audio_format_id,
+                video_bytes=_hybrid_format_bytes(video_format, duration_seconds),
+                audio_bytes=_hybrid_format_bytes(audio_format, duration_seconds),
+                duration_seconds=duration_seconds,
+            )
+        raise DownloadError("Premiere-safe selected separate video and companion audio formats are unavailable")
+
+    if _is_hybrid_combined_format(payload):
+        format_id = str(payload.get("format_id") or "").strip()
+        if not format_id:
+            raise DownloadError("yt-dlp metadata did not contain a selected combined format ID")
+        return _HybridFormatSelection(
+            kind="combined",
+            video_format_id=format_id,
+            audio_format_id=None,
+            video_bytes=_hybrid_format_bytes(payload, duration_seconds),
+            audio_bytes=None,
+            duration_seconds=duration_seconds,
+        )
+
+    raise DownloadError("Premiere-safe selected video formats are unavailable")
 
 
 def _is_hybrid_video_format(value: object) -> bool:
@@ -2112,6 +2135,19 @@ def _is_hybrid_audio_format(value: object) -> bool:
         str(value.get("ext") or "").lower() == "m4a"
         and _codec_is_none(value.get("vcodec"))
         and str(value.get("acodec") or "").lower().startswith("mp4a")
+    )
+
+
+def _is_hybrid_combined_format(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    height = _positive_number(value.get("height"))
+    return bool(
+        str(value.get("ext") or "").lower() == "mp4"
+        and str(value.get("vcodec") or "").lower().startswith("avc1")
+        and str(value.get("acodec") or "").lower().startswith("mp4a")
+        and height is not None
+        and height <= 1080
     )
 
 
@@ -2141,6 +2177,8 @@ def _hybrid_format_bytes(format_info: dict, duration_seconds: float | None) -> i
 
 
 def _hybrid_video_progress_end_percent(selection: _HybridFormatSelection) -> float:
+    if selection.kind == "combined":
+        return 100.0
     if selection.video_bytes is None or selection.audio_bytes is None:
         return 50.0
     total_bytes = selection.video_bytes + selection.audio_bytes
@@ -2154,13 +2192,19 @@ def _build_fast_hybrid_media_commands(
     info_json_path: Path,
     selection: _HybridFormatSelection,
     hybrid_dir: Path,
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str] | None]:
     common = _remove_command_options(
         _build_infojson_media_download_command(base_command, info_json_path),
         {"--merge-output-format"},
     )
     video_command = _replace_option(common, "-f", selection.video_format_id)
     video_command = _replace_option(video_command, "-o", str(hybrid_dir / "video.%(ext)s"))
+
+    if selection.kind == "combined":
+        return video_command, None
+
+    if selection.audio_format_id is None:
+        raise DownloadError("Split hybrid selection did not contain a companion audio format ID")
 
     audio_command = _strip_media_downloader_options(common)
     audio_command = _replace_option(audio_command, "-N", "1")

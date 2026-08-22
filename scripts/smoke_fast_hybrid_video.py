@@ -26,15 +26,18 @@ from core.progress_status import TRANSFER_SOURCE_ARIA2, TRANSFER_SOURCE_YTDLP, P
 VIDEO_ID = "video-id"
 VIDEO_FORMAT_ID = "137"
 AUDIO_FORMAT_ID = "140"
+COMBINED_FORMAT_ID = "synthetic-combined-720"
 
 
 def main() -> int:
     _test_fast_video_uses_one_snapshot_and_split_transports()
+    _test_fast_video_preserves_combined_fallback()
     _test_hybrid_cleanup_and_failure_boundaries()
     _test_cancellation_between_video_and_audio()
     _test_stable_and_separate_mp3_paths_remain_unchanged()
     _test_hybrid_progress_is_stage_correct_and_non_decreasing()
-    _test_combined_or_lower_quality_metadata_is_rejected()
+    _test_combined_fallback_selection_is_preserved()
+    _test_invalid_hybrid_metadata_is_rejected()
     print("fast hybrid video smoke passed")
     return 0
 
@@ -128,6 +131,102 @@ def _test_fast_video_uses_one_snapshot_and_split_transports() -> None:
         _assert(final_path.read_bytes() == b"merged", "Merged output was not promoted")
         _assert(not list(root.rglob("*.info.json")), "Temporary info JSON survived success")
         _assert(not list(root.glob(".s9h-stage-*")), "Hybrid staging survived success")
+
+
+def _test_fast_video_preserves_combined_fallback() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        paths = _runtime_paths(root)
+        options = DownloadOptions(
+            base_folder=str(root / "downloads"),
+            channel_id="channel",
+            channel_name="Channel",
+            download_engine=DOWNLOAD_ENGINE_ARIA2_FAST,
+            speed_limit="2M",
+            file_start_number=1,
+        )
+        commands: list[list[str]] = []
+        ffmpeg_commands: list[list[str]] = []
+        validations: list[Path] = []
+        promotions: list[tuple[Path, Path]] = []
+        events = []
+        final_path = root / "final.mp4"
+
+        def fake_retry(command, current_options, log, cancel_controller=None, cookie_retry_state=None):
+            captured = list(command)
+            commands.append(captured)
+            output_template = _option_value(captured, "-o")
+            if "--write-info-json" in captured:
+                info_path = Path(output_template.replace("%(ext)s", "info.json"))
+                info_path.parent.mkdir(parents=True, exist_ok=True)
+                info_path.write_text(json.dumps(_combined_info()), encoding="utf-8")
+                return
+            output_path = Path(output_template.replace("%(ext)s", "mp4"))
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"combined")
+            downloader._start_progress_attempt(TRANSFER_SOURCE_ARIA2)
+            downloader._emit_aria2_progress(
+                ParsedTransferProgress(source=TRANSFER_SOURCE_ARIA2, percent=0.0, speed_text="")
+            )
+            downloader._emit_aria2_progress(
+                ParsedTransferProgress(source=TRANSFER_SOURCE_ARIA2, percent=100.0, speed_text="")
+            )
+
+        def fake_validate(source, log, strict, cancel_controller=None):
+            validations.append(Path(source))
+
+        def fake_ffmpeg(command, *, operation, cancel_controller=None, progress_duration_seconds=None):
+            ffmpeg_commands.append(list(command))
+            return ""
+
+        def fake_promote(source, final, log, replace_existing=False, cancel_controller=None):
+            promotions.append((Path(source), Path(final)))
+            Path(final).write_bytes(Path(source).read_bytes())
+
+        video = SimpleNamespace(video_id=VIDEO_ID, title="Title", sanitized_filename_base="001 Title")
+        previous = downloader._set_progress_context(events.append, video, 1, 1, "Video")
+        try:
+            with (
+                _patched_runtime(paths),
+                _patched_attr(downloader, "_run_ytdlp_with_retries", fake_retry),
+                _patched_attr(downloader, "_run_ffmpeg_command", fake_ffmpeg),
+                _patched_attr(downloader, "_validate_premiere_safe_mp4_for_download", fake_validate),
+                _patched_attr(downloader, "_atomic_promote_with_retry", fake_promote),
+            ):
+                downloader._download_video(
+                    VIDEO_ID,
+                    "001 Title",
+                    root,
+                    final_path,
+                    options,
+                    lambda _message: None,
+                    aria2_validation=downloader._Aria2RuntimeValidation(True, True, paths.aria2),
+                )
+        finally:
+            downloader._restore_progress_context(previous)
+
+        extraction_commands = [command for command in commands if "--write-info-json" in command]
+        media_commands = [command for command in commands if "--load-info-json" in command]
+        _assert(len(extraction_commands) == 1, f"Combined fallback extracted metadata more than once: {commands}")
+        _assert(len(media_commands) == 1, f"Combined fallback started extra media transfers: {commands}")
+        media = media_commands[0]
+        _assert(_option_value(media, "-f") == COMBINED_FORMAT_ID, f"Combined exact format ID changed: {media}")
+        _assert(_option_value(media, "--downloader") == str(paths.aria2), "Combined fallback did not use aria2")
+        _assert(_option_value(media, "--downloader-args") == ARIA2_FAST_DOWNLOADER_ARGS, "Combined aria2 settings changed")
+        _assert(_option_value(media, "--limit-rate") == "2M", "Combined speed limit was lost")
+        _assert(not any(value.startswith("https://") for value in media), "Combined fallback retained a normal extractor URL")
+        _assert(_option_value(media, "--load-info-json") == _option_value(extraction_commands[0], "-o").replace("%(ext)s", "info.json"), "Combined media did not reuse its extraction snapshot")
+        _assert(not ffmpeg_commands, f"Combined fallback started an extra merge: {ffmpeg_commands}")
+        _assert([path.name for path in validations] == ["video.mp4"], f"Combined output skipped validation: {validations}")
+        _assert(len(promotions) == 1 and promotions[0][0].name == "video.mp4", f"Combined output promotion changed: {promotions}")
+        _assert(final_path.read_bytes() == b"combined", "Combined output was not promoted")
+        numeric = [float(event.percent.removesuffix("%")) for event in events if event.percent]
+        _assert(numeric == sorted(numeric), f"Combined progress moved backwards: {numeric}")
+        _assert(any(event.phase == "Video" and event.message == "Downloading video" for event in events), "Combined video stage was not emitted")
+        _assert(not any(event.phase == "Companion audio" for event in events), "Combined progress emitted a companion-audio stage")
+        _assert(not any(event.phase == "Merging" for event in events), "Combined progress emitted a merge stage")
+        _assert(not list(root.rglob("*.info.json")), "Combined info JSON survived success")
+        _assert(not list(root.glob(".s9h-stage-*")), "Combined staging survived success")
 
 
 def _test_hybrid_cleanup_and_failure_boundaries() -> None:
@@ -260,28 +359,32 @@ def _test_hybrid_progress_is_stage_correct_and_non_decreasing() -> None:
     _assert(downloader._part_from_progress_phase("Companion audio") == downloader.PART_VIDEO, "Companion-audio failure lost logical video scope")
 
 
-def _test_combined_or_lower_quality_metadata_is_rejected() -> None:
+def _test_combined_fallback_selection_is_preserved() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         combined_path = root / "combined.info.json"
         combined_path.write_text(
-            json.dumps(
-                {
-                    "id": VIDEO_ID,
-                    "format_id": "22",
-                    "ext": "mp4",
-                    "vcodec": "avc1.64001F",
-                    "acodec": "mp4a.40.2",
-                }
-            ),
+            json.dumps(_combined_info()),
             encoding="utf-8",
         )
-        try:
-            downloader._load_hybrid_format_selection(combined_path)
-        except DownloadError:
-            pass
-        else:
-            raise AssertionError("Combined fallback was accepted as the split hybrid path")
+        selection = downloader._load_hybrid_format_selection(combined_path)
+        _assert(selection.kind == "combined", f"Combined fallback was not tagged correctly: {selection}")
+        _assert(selection.video_format_id == COMBINED_FORMAT_ID, f"Combined fallback format changed: {selection}")
+        _assert(selection.audio_format_id is None, f"Combined fallback invented companion audio: {selection}")
+        _assert(downloader._hybrid_video_progress_end_percent(selection) == 100.0, "Combined progress did not span the full transfer")
+
+        split_and_combined_path = root / "split-and-combined.info.json"
+        split_and_combined = _selected_info()
+        split_and_combined.update(_combined_info())
+        split_and_combined["requested_formats"] = _selected_info()["requested_formats"]
+        split_and_combined_path.write_text(json.dumps(split_and_combined), encoding="utf-8")
+        split_selection = downloader._load_hybrid_format_selection(split_and_combined_path)
+        _assert(split_selection.kind == "split", f"Valid split selection lost precedence: {split_selection}")
+
+
+def _test_invalid_hybrid_metadata_is_rejected() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
 
         lower_quality_path = root / "lower.info.json"
         lower_quality = _selected_info()
@@ -304,6 +407,42 @@ def _test_combined_or_lower_quality_metadata_is_rejected() -> None:
             pass
         else:
             raise AssertionError("Video metadata without a proven <=1080p height was accepted")
+
+        invalid_combined_variants = (
+            ("container", {"ext": "webm"}),
+            ("video-codec-vp9", {"vcodec": "vp9"}),
+            ("video-codec-av1", {"vcodec": "av01.0.08M.08"}),
+            ("audio-codec", {"acodec": "opus"}),
+            ("height-missing", {"height": None}),
+            ("height-too-high", {"height": 2160}),
+            ("format-id-missing", {"format_id": ""}),
+        )
+        for name, changes in invalid_combined_variants:
+            invalid_path = root / f"invalid-combined-{name}.info.json"
+            invalid_payload = _combined_info()
+            invalid_payload.update(changes)
+            invalid_path.write_text(json.dumps(invalid_payload), encoding="utf-8")
+            try:
+                downloader._load_hybrid_format_selection(invalid_path)
+            except DownloadError:
+                pass
+            else:
+                raise AssertionError(f"Invalid combined fallback was accepted: {name}")
+
+        invalid_split_with_combined_top_level_path = root / "invalid-split-with-combined-top-level.info.json"
+        invalid_split_with_combined_top_level = _combined_info()
+        invalid_split_with_combined_top_level["requested_formats"] = _selected_info()["requested_formats"]
+        invalid_split_with_combined_top_level["requested_formats"][0]["vcodec"] = "vp9"
+        invalid_split_with_combined_top_level_path.write_text(
+            json.dumps(invalid_split_with_combined_top_level),
+            encoding="utf-8",
+        )
+        try:
+            downloader._load_hybrid_format_selection(invalid_split_with_combined_top_level_path)
+        except DownloadError:
+            pass
+        else:
+            raise AssertionError("Invalid split metadata was misclassified from aggregate top-level fields")
 
 
 def _run_fast_case(*, fail_stage: str = "", cancel_after_video: bool = False):
@@ -411,6 +550,19 @@ def _selected_info() -> dict:
                 "filesize": 10_000_000,
             },
         ],
+    }
+
+
+def _combined_info() -> dict:
+    return {
+        "id": VIDEO_ID,
+        "format_id": COMBINED_FORMAT_ID,
+        "ext": "mp4",
+        "vcodec": "avc1.64001F",
+        "acodec": "mp4a.40.2",
+        "height": 720,
+        "filesize": 25_000_000,
+        "duration": 120.0,
     }
 
 
