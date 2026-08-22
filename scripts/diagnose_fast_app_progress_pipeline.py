@@ -5,12 +5,18 @@ import dataclasses
 import os
 import queue
 import shutil
+import sys
 import tempfile
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import core.downloader as downloader
 from core.progress_status import ProgressEvent, format_progress_event_lines, put_latest_progress_event
