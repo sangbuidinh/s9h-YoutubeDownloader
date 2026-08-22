@@ -1,0 +1,177 @@
+name: Diagnostic app Fast progress pipeline
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnostic-app-pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-app-progress-pipeline:
+    name: Windows app reader parser queue display probe
+    runs-on: windows-2022
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+
+    steps:
+      - name: Check out exact diagnostic head
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify full source SHA
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $Actual = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Could not resolve diagnostic source SHA" }
+          if ($Actual -cne $env:SOURCE_SHA) { throw "Checked-out source differs from SOURCE_SHA" }
+          if ($env:SOURCE_SHA -cnotmatch "^[0-9a-f]{40}$") { throw "SOURCE_SHA must be a full 40-character SHA" }
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Prepare exact pinned binaries and SHA marker
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          $Root = Join-Path $env:RUNNER_TEMP "s9h-app-pipeline-$env:SOURCE_SHA"
+          $DownloadRoot = Join-Path $Root "downloads"
+          $ExtractRoot = Join-Path $Root "extract"
+          $BundleRoot = Join-Path $Root "bundle"
+          $BinRoot = Join-Path $BundleRoot "data\bin"
+          New-Item -ItemType Directory -Force -Path $DownloadRoot, $ExtractRoot, $BinRoot | Out-Null
+
+          function Assert-Sha256 {
+              param(
+                  [Parameter(Mandatory = $true)][string]$Path,
+                  [Parameter(Mandatory = $true)][string]$Expected,
+                  [Parameter(Mandatory = $true)][string]$Name
+              )
+              $Actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
+              if ($Actual -ne $Expected.ToUpperInvariant()) { throw "$Name SHA-256 mismatch: $Actual" }
+          }
+
+          $YtDlp = Join-Path $DownloadRoot "yt-dlp.exe"
+          Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17/yt-dlp.exe" -OutFile $YtDlp
+          Assert-Sha256 -Path $YtDlp -Expected "3DB811B366B2DA47337D2FCFDFE5BBD9A258DAD3F350C54974F005DF115A1545" -Name "yt-dlp.exe"
+
+          $AriaArchive = Join-Path $DownloadRoot "aria2.zip"
+          Invoke-WebRequest -Uri "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip" -OutFile $AriaArchive
+          Assert-Sha256 -Path $AriaArchive -Expected "67D015301EEF0B612191212D564C5BB0A14B5B9C4796B76454276A4D28D9B288" -Name "aria2 archive"
+          Expand-Archive -LiteralPath $AriaArchive -DestinationPath $ExtractRoot
+          $AriaMatches = @(Get-ChildItem -LiteralPath $ExtractRoot -Recurse -Filter "aria2c.exe" -File)
+          if ($AriaMatches.Count -ne 1) { throw "aria2 archive layout changed" }
+          Assert-Sha256 -Path $AriaMatches[0].FullName -Expected "BE2099C214F63A3CB4954B09A0BECD6E2E34660B886D4C898D260FEBFE9D70C2" -Name "aria2c.exe"
+
+          Copy-Item -LiteralPath $YtDlp -Destination (Join-Path $BinRoot "yt-dlp.exe")
+          Copy-Item -LiteralPath $AriaMatches[0].FullName -Destination (Join-Path $BinRoot "aria2c.exe")
+
+          $Manifest = [ordered]@{
+              schema_version = 1
+              purpose = "bug-03-app-progress-pipeline"
+              source_sha = $env:SOURCE_SHA
+              source_branch = "diag/runtime-bugs-20260822"
+              workflow_run_id = "${{ github.run_id }}"
+              workflow_run_attempt = "${{ github.run_attempt }}"
+              built_utc = [DateTime]::UtcNow.ToString("o")
+              yt_dlp_sha256 = (Get-FileHash -LiteralPath (Join-Path $BinRoot "yt-dlp.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+              aria2_sha256 = (Get-FileHash -LiteralPath (Join-Path $BinRoot "aria2c.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          $Manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $BundleRoot "DIAGNOSTIC_BUILD.json") -Encoding utf8
+          Set-Content -LiteralPath (Join-Path $BundleRoot "DIAGNOSTIC_BUILD_SHA.txt") -Value $env:SOURCE_SHA -Encoding ascii
+          "DIAGNOSTIC_BUNDLE_ROOT=$BundleRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Re-confirm exact-binary gate on this SHA
+        id: exact_probe
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Continue"
+          $PreviousNativePreference = $PSNativeCommandUseErrorActionPreference
+          try {
+              $PSNativeCommandUseErrorActionPreference = $false
+              python scripts/diagnose_fast_exact_binaries.py --root $env:DIAGNOSTIC_BUNDLE_ROOT
+              $ExitCode = $LASTEXITCODE
+          }
+          finally {
+              $PSNativeCommandUseErrorActionPreference = $PreviousNativePreference
+          }
+          "EXACT_PROBE_EXIT=$ExitCode" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ($ExitCode -ne 0) { exit $ExitCode }
+
+      - name: Run real app reader parser queue display diagnostic
+        id: app_pipeline
+        if: steps.exact_probe.outcome == 'success'
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Continue"
+          $PreviousNativePreference = $PSNativeCommandUseErrorActionPreference
+          try {
+              $PSNativeCommandUseErrorActionPreference = $false
+              python scripts/diagnose_fast_app_progress_pipeline.py --root $env:DIAGNOSTIC_BUNDLE_ROOT
+              $ExitCode = $LASTEXITCODE
+          }
+          finally {
+              $PSNativeCommandUseErrorActionPreference = $PreviousNativePreference
+          }
+          "APP_PIPELINE_EXIT=$ExitCode" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ($ExitCode -ne 0) { exit $ExitCode }
+
+      - name: Collect flushed JSONL evidence
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ResultRoot = Join-Path $env:DIAGNOSTIC_BUNDLE_ROOT "probe-results"
+          New-Item -ItemType Directory -Force -Path $ResultRoot | Out-Null
+          $LogRoot = Join-Path $env:TEMP "s9h-ytdl-diag"
+          foreach ($Pattern in @("fast-exact-binary-probe-*.jsonl", "fast-app-progress-pipeline-*.jsonl")) {
+              $Latest = @(
+                  Get-ChildItem -LiteralPath $LogRoot -Filter $Pattern -File -ErrorAction SilentlyContinue |
+                      Sort-Object LastWriteTimeUtc -Descending |
+                      Select-Object -First 1
+              )
+              if ($Latest.Count -eq 1) {
+                  Copy-Item -LiteralPath $Latest[0].FullName -Destination $ResultRoot
+              }
+          }
+
+      - name: Upload app pipeline diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: s9h-bug03-app-pipeline-${{ env.SOURCE_SHA }}
+          path: ${{ env.DIAGNOSTIC_BUNDLE_ROOT }}
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+          retention-days: 2
+
+      - name: Enforce diagnostic pipeline gate
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:EXACT_PROBE_EXIT) -or [int]$env:EXACT_PROBE_EXIT -ne 0) {
+              throw "Exact-binary gate failed on this SHA"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:APP_PIPELINE_EXIT) -or [int]$env:APP_PIPELINE_EXIT -ne 0) {
+              throw "App progress pipeline diagnostic failed; inspect JSONL"
+          }
+          Write-Host "App reader/parser/emitter/latest-queue/display-merge path produced live Fast progress."
