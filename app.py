@@ -3,6 +3,11 @@ import tkinter as tk
 from tkinter import messagebox
 
 from core import downloader
+from core.runtime_diagnostics import (
+    install_downloader_diagnostics,
+    install_ui_diagnostics,
+    load_diagnostic_session,
+)
 from core.state_store import SQLITE_OPEN_ERROR_MESSAGE, initialize_sqlite_state
 
 
@@ -30,15 +35,29 @@ def _configure_cookie_media_strategy() -> None:
 
 
 if __name__ == "__main__":
+    diagnostic_session = load_diagnostic_session()
+    if diagnostic_session is not None:
+        install_downloader_diagnostics(downloader, diagnostic_session)
+
     try:
         initialize_sqlite_state()
     except Exception as exc:
         detail = f"{type(exc).__name__}: {exc}"
+        if diagnostic_session is not None:
+            diagnostic_session.write("startup_exception", error_type=type(exc).__name__, message=detail)
+            diagnostic_session.close()
         _show_startup_error(f"{SQLITE_OPEN_ERROR_MESSAGE}\n\nChi tiết: {detail}")
         raise SystemExit(1)
 
     _configure_cookie_media_strategy()
 
-    from ui.main_window import main
+    from ui import main_window
 
-    main()
+    if diagnostic_session is not None:
+        install_ui_diagnostics(main_window, diagnostic_session)
+
+    try:
+        main_window.main()
+    finally:
+        if diagnostic_session is not None:
+            diagnostic_session.close()
