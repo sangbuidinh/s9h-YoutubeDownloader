@@ -1,3 +1,4 @@
+import json
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -344,6 +345,7 @@ def _test_fast_uses_retry_pipeline() -> None:
 
         def fake_retry(command, options, log, cancel_controller=None, cookie_retry_state=None):
             calls.append((options.download_engine, list(command)))
+            _write_hybrid_fixture(command)
 
         def fake_direct(command, cancel_controller=None):
             direct_calls.append(list(command))
@@ -359,12 +361,18 @@ def _test_fast_uses_retry_pipeline() -> None:
             final.parent.mkdir(parents=True, exist_ok=True)
             final.write_bytes(b"mp4")
 
+        def fake_ffmpeg(command, **kwargs):
+            Path(command[-1]).write_bytes(b"merged")
+            return ""
+
         with _patched_runtime(paths), _patched_attr(downloader, "_run_ytdlp_with_retries", fake_retry), _patched_attr(
             downloader, "_run_ytdlp", fake_direct
         ), _patched_attr(downloader, "_select_staged_file", fake_select), _patched_attr(
             downloader, "_validate_premiere_safe_mp4_for_download", fake_validate
         ), _patched_attr(
             downloader, "_atomic_promote_with_retry", fake_promote
+        ), _patched_attr(
+            downloader, "_run_ffmpeg_command", fake_ffmpeg
         ):
             downloader._download_video(
                 VIDEO_ID,
@@ -385,11 +393,15 @@ def _test_fast_uses_retry_pipeline() -> None:
                 aria2_validation=_aria2_validation(paths),
             )
 
-    _assert(len(calls) == 2, f"Retry runner was not used once per engine: {calls}")
+    _assert(len(calls) == 4, f"Retry runner did not receive Stable plus three Fast stages: {calls}")
     _assert(not direct_calls, "Direct yt-dlp runner was used")
     _assert(not hasattr(downloader, "_run_fast_ytdlp_command"), "Fast-specific yt-dlp runner still exists")
     _assert("--downloader" not in calls[0][1], "Stable retry command unexpectedly had aria2")
-    _assert("--downloader" in calls[1][1], "Fast retry command missed aria2")
+    _assert("--write-info-json" in calls[1][1], "Fast metadata extraction was not routed through retries")
+    _assert("--downloader" not in calls[1][1], "Fast metadata extraction used aria2")
+    _assert("--downloader" in calls[2][1], "Fast video transport missed aria2")
+    _assert("--downloader" not in calls[3][1], "Fast companion audio transport used aria2")
+    _assert(_option_value(calls[2][1], "--load-info-json") == _option_value(calls[3][1], "--load-info-json"), "Fast transports used different snapshots")
 
 
 def _test_fast_uses_isolated_cookie_copy() -> None:
@@ -476,7 +488,7 @@ def _test_fast_has_no_full_transcode() -> None:
         ffmpeg_calls: list[list[str]] = []
 
         def fake_retry(command, options, log, cancel_controller=None, cookie_retry_state=None):
-            return None
+            _write_hybrid_fixture(command)
 
         def fake_select(staging_dir, pattern, suffix):
             return root / "staged.mp4"
@@ -490,7 +502,8 @@ def _test_fast_has_no_full_transcode() -> None:
 
         def fake_ffmpeg(command, **kwargs):
             ffmpeg_calls.append(list(command))
-            raise AssertionError("Fast production path invoked FFmpeg command directly")
+            Path(command[-1]).write_bytes(b"merged")
+            return ""
 
         with _patched_runtime(paths), _patched_attr(downloader, "_run_ytdlp_with_retries", fake_retry), _patched_attr(
             downloader, "_select_staged_file", fake_select
@@ -509,7 +522,11 @@ def _test_fast_has_no_full_transcode() -> None:
                 aria2_validation=_aria2_validation(paths),
             )
 
-    _assert(not ffmpeg_calls, "Fast production path invoked FFmpeg directly")
+    _assert(len(ffmpeg_calls) == 1, "Fast production path did not perform exactly one merge")
+    merge_text = _joined(ffmpeg_calls[0])
+    _assert("-c copy" in merge_text, "Fast merge was not stream copy")
+    for forbidden in ("libx264", "-crf", "-preset"):
+        _assert(forbidden not in merge_text, f"Fast merge unexpectedly transcoded: {forbidden}")
 
 
 def _test_strict_format_failure_uses_existing_flow() -> None:
@@ -582,8 +599,8 @@ def _test_runtime_logs_describe_engine_only_difference() -> None:
     _assert(validation.available, "Fast runtime validation did not succeed")
     text = "\n".join(logs)
     for expected in (
-        "Download engine: aria2c accelerated media transfer",
-        "Fast pipeline: Stable-equivalent format selection, cookies, retries, merge, validation and promotion.",
+        "Download engine: aria2c accelerated video transfer with native companion audio",
+        "Fast pipeline: one metadata snapshot, split video/audio transfer, stream-copy merge, validation and promotion.",
         "Fast format: MP4 H.264/AAC only, max 1080p.",
         "aria2c profile: connections=16 splits=16 jobs=16 piece=1M",
         "Fast post-processing: merge/remux only; no full video transcode.",
@@ -637,6 +654,40 @@ def _fast_video_command(
             options,
             _aria2_validation(paths),
         )
+
+
+def _write_hybrid_fixture(command: list[str]) -> None:
+    if "--write-info-json" not in command:
+        return
+    output_template = _option_value(command, "-o")
+    info_path = Path(output_template.replace("%(ext)s", "info.json"))
+    info_path.parent.mkdir(parents=True, exist_ok=True)
+    info_path.write_text(
+        json.dumps(
+            {
+                "id": VIDEO_ID,
+                "duration": 60.0,
+                "requested_formats": [
+                    {
+                        "format_id": "137",
+                        "ext": "mp4",
+                        "vcodec": "avc1.640028",
+                        "acodec": "none",
+                        "height": 1080,
+                        "filesize": 9_000_000,
+                    },
+                    {
+                        "format_id": "140",
+                        "ext": "m4a",
+                        "vcodec": "none",
+                        "acodec": "mp4a.40.2",
+                        "filesize": 1_000_000,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def _runtime_paths(root: Path, *, aria2: bool = True):

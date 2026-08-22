@@ -2,6 +2,7 @@ import os
 import re
 import hashlib
 import inspect
+import json
 import shutil
 import subprocess
 import tempfile
@@ -326,6 +327,9 @@ class _ProgressContext:
     last_aria2_percent: float | None = None
     last_aria2_speed: str | None = None
     last_aria2_emit: float | None = None
+    transfer_percent_start: float = 0.0
+    transfer_percent_end: float = 100.0
+    transfer_start_message: str = STAGE_PREPARING
 
 
 @dataclass
@@ -375,6 +379,7 @@ class _VideoDownloadTiming:
     logical_started_at: float
     attempts: list[_YtdlpAttemptTiming] = field(default_factory=list)
     retry_wait_seconds: float = 0.0
+    explicit_merge_seconds: float = 0.0
     validation_seconds: float = 0.0
     promotion_seconds: float = 0.0
     logical_finished_at: float | None = None
@@ -396,6 +401,9 @@ class _VideoDownloadTiming:
     def add_validation(self, started_at: float) -> None:
         self.validation_seconds += max(0.0, float(self.clock()) - float(started_at))
 
+    def add_merge(self, started_at: float) -> None:
+        self.explicit_merge_seconds += max(0.0, float(self.clock()) - float(started_at))
+
     def add_promotion(self, started_at: float) -> None:
         self.promotion_seconds += max(0.0, float(self.clock()) - float(started_at))
 
@@ -410,7 +418,7 @@ class _VideoDownloadTiming:
             prepare += current_prepare
             transfer += current_transfer
             merge += current_merge
-        return prepare, transfer, merge
+        return prepare, transfer, merge + self.explicit_merge_seconds
 
     def format_summary(self, result: str) -> str:
         self.finish_logical_download()
@@ -430,6 +438,22 @@ class _VideoDownloadTiming:
 _PROGRESS_CONTEXT = threading.local()
 _VIDEO_DOWNLOAD_TIMING_CONTEXT = threading.local()
 _YTDLP_ATTEMPT_TIMING_CONTEXT = threading.local()
+_INFOJSON_MEDIA_CONTEXT = threading.local()
+
+
+@dataclass(frozen=True)
+class _InfoJsonMediaContext:
+    cookieless: bool
+    metadata_ready_monotonic: float
+
+
+@dataclass(frozen=True)
+class _HybridFormatSelection:
+    video_format_id: str
+    audio_format_id: str
+    video_bytes: int | None
+    audio_bytes: int | None
+    duration_seconds: float | None
 
 
 class FileOperationError(DownloadError):
@@ -639,8 +663,57 @@ def _current_ytdlp_attempt_timing() -> _YtdlpAttemptTiming | None:
     return getattr(_YTDLP_ATTEMPT_TIMING_CONTEXT, "current", None)
 
 
+@contextmanager
+def _infojson_media_scope(*, cookieless: bool, metadata_ready_monotonic: float):
+    previous = getattr(_INFOJSON_MEDIA_CONTEXT, "current", None)
+    _INFOJSON_MEDIA_CONTEXT.current = _InfoJsonMediaContext(
+        cookieless=bool(cookieless),
+        metadata_ready_monotonic=max(0.0, float(metadata_ready_monotonic)),
+    )
+    try:
+        yield
+    finally:
+        _INFOJSON_MEDIA_CONTEXT.current = previous
+
+
+def _current_infojson_media_context() -> _InfoJsonMediaContext | None:
+    return getattr(_INFOJSON_MEDIA_CONTEXT, "current", None)
+
+
 def _transfer_source_for_command(command: list[str] | tuple[str, ...]) -> str:
     return TRANSFER_SOURCE_ARIA2 if _command_uses_aria2(command) else TRANSFER_SOURCE_YTDLP
+
+
+def _set_current_progress_stage(
+    phase: str,
+    *,
+    percent_start: float = 0.0,
+    percent_end: float = 100.0,
+    start_message: str = STAGE_PREPARING,
+) -> None:
+    context = _current_progress_context()
+    if context is None:
+        return
+    start = max(0.0, min(float(percent_start), 100.0))
+    end = max(start, min(float(percent_end), 100.0))
+    context.phase = str(phase or "Video")
+    context.transfer_percent_start = start
+    context.transfer_percent_end = end
+    context.transfer_start_message = str(start_message or STAGE_PREPARING)
+
+
+def _mapped_current_progress_percent(percent: object) -> float | None:
+    context = _current_progress_context()
+    if context is None:
+        return None
+    try:
+        raw = float(str(percent or "").strip().removesuffix("%"))
+    except (TypeError, ValueError):
+        return None
+    raw = max(0.0, min(raw, 100.0))
+    start = max(0.0, min(float(context.transfer_percent_start), 100.0))
+    end = max(start, min(float(context.transfer_percent_end), 100.0))
+    return start + ((end - start) * (raw / 100.0))
 
 
 def _start_progress_attempt(source: str) -> int | None:
@@ -654,7 +727,7 @@ def _start_progress_attempt(source: str) -> int | None:
     context.last_aria2_speed = None
     context.last_aria2_emit = None
     _emit_current_progress(
-        message=STAGE_PREPARING,
+        message=context.transfer_start_message,
         source=source,
         generation=context.generation,
     )
@@ -1329,8 +1402,8 @@ def download_items(
                         log("[INFO] Premiere-safe mode: MP4 H.264/AAC only, max 1080p.")
                         if engine == DOWNLOAD_ENGINE_ARIA2_FAST:
                             log(
-                                "[INFO] Fast mode: aria2c handles media transfer; format selection, "
-                                "cookies, retries, merge, validation and promotion match Stable."
+                                "[INFO] Fast mode: aria2c handles the selected video stream and "
+                                "native yt-dlp handles the selected companion audio stream."
                             )
                         _emit_progress(progress_callback, "Video", video, index, video_total, message=STAGE_PREPARING)
                         previous_progress = _set_progress_context(
@@ -1371,8 +1444,8 @@ def download_items(
                                 log("[INFO] Premiere-safe mode: MP4 H.264/AAC only, max 1080p.")
                                 if engine == DOWNLOAD_ENGINE_ARIA2_FAST:
                                     log(
-                                        "[INFO] Fast mode: aria2c handles media transfer; format selection, "
-                                        "cookies, retries, merge, validation and promotion match Stable."
+                                        "[INFO] Fast mode: aria2c handles the selected video stream and "
+                                        "native yt-dlp handles the selected companion audio stream."
                                     )
                                 _emit_progress(
                                     progress_callback, "Video", video, index, video_total, message=STAGE_PREPARING
@@ -1756,40 +1829,33 @@ def _download_video(
     try:
         with _video_download_timing_scope(timing):
             _emit_current_progress(message=STAGE_PREPARING, source=timing.engine)
-            _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
-            staged_mp4_path = _select_staged_file(temp_dir, "*.mp4", ".mp4")
-
-            context = _current_progress_context()
-            _emit_current_progress(
-                "Validating MP4",
-                message=STAGE_VALIDATING,
-                generation=getattr(context, "generation", None) if context is not None else None,
-            )
-            validation_started = time.perf_counter()
-            try:
-                _validate_premiere_safe_mp4_for_download(staged_mp4_path, log, True, cancel_controller)
-            finally:
-                timing.add_validation(validation_started)
-
-            context = _current_progress_context()
-            _emit_current_progress(
-                "Video",
-                message=STAGE_PROMOTING,
-                generation=getattr(context, "generation", None) if context is not None else None,
-            )
-            promotion_started = time.perf_counter()
-            try:
-                _atomic_promote_with_retry(
+            if _normalize_download_engine(options.download_engine) == DOWNLOAD_ENGINE_ARIA2_FAST:
+                with _fast_hybrid_staged_video(
+                    video_id,
+                    command,
+                    temp_dir,
+                    options,
+                    log,
+                    cancel_controller,
+                    cookie_retry_state,
+                ) as staged_mp4_path:
+                    _validate_and_promote_video(
+                        staged_mp4_path,
+                        final_path,
+                        log,
+                        cancel_controller,
+                        timing,
+                    )
+            else:
+                _run_ytdlp_with_retries(command, options, log, cancel_controller, cookie_retry_state)
+                staged_mp4_path = _select_staged_file(temp_dir, "*.mp4", ".mp4")
+                _validate_and_promote_video(
                     staged_mp4_path,
                     final_path,
                     log,
-                    replace_existing=True,
-                    cancel_controller=cancel_controller,
+                    cancel_controller,
+                    timing,
                 )
-            finally:
-                timing.add_promotion(promotion_started)
-            if not _final_file_ready(final_path):
-                raise DownloadError("video download failed")
             result = "success"
     except DownloadCancelled:
         result = "cancelled"
@@ -1799,6 +1865,339 @@ def _download_video(
             log(timing.format_summary(result))
         except Exception:
             pass
+
+
+def _validate_and_promote_video(
+    staged_mp4_path: Path,
+    final_path: Path,
+    log,
+    cancel_controller: DownloadController | None,
+    timing: _VideoDownloadTiming,
+) -> None:
+    context = _current_progress_context()
+    _emit_current_progress(
+        "Validating MP4",
+        message=STAGE_VALIDATING,
+        generation=getattr(context, "generation", None) if context is not None else None,
+    )
+    validation_started = time.perf_counter()
+    try:
+        _validate_premiere_safe_mp4_for_download(staged_mp4_path, log, True, cancel_controller)
+    finally:
+        timing.add_validation(validation_started)
+
+    context = _current_progress_context()
+    _emit_current_progress(
+        "Video",
+        message=STAGE_PROMOTING,
+        generation=getattr(context, "generation", None) if context is not None else None,
+    )
+    promotion_started = time.perf_counter()
+    try:
+        _atomic_promote_with_retry(
+            staged_mp4_path,
+            final_path,
+            log,
+            replace_existing=True,
+            cancel_controller=cancel_controller,
+        )
+    finally:
+        timing.add_promotion(promotion_started)
+    if not _final_file_ready(final_path):
+        raise DownloadError("video download failed")
+
+
+@contextmanager
+def _fast_hybrid_staged_video(
+    video_id: str,
+    base_command: list[str],
+    temp_dir: Path,
+    options: DownloadOptions,
+    log,
+    cancel_controller: DownloadController | None,
+    cookie_retry_state: _YtdlpAttemptState | None,
+):
+    attempt_state = cookie_retry_state or _YtdlpAttemptState()
+    with _media_staging_directory(temp_dir, f"{video_id}-hybrid", log) as hybrid_dir:
+        info_json_path, metadata_ready_monotonic = _prepare_fast_hybrid_infojson(
+            base_command,
+            hybrid_dir,
+            options,
+            log,
+            cancel_controller,
+            attempt_state,
+        )
+        selection = _load_hybrid_format_selection(info_json_path)
+        video_command, audio_command = _build_fast_hybrid_media_commands(
+            base_command,
+            info_json_path,
+            selection,
+            hybrid_dir,
+        )
+        video_end_percent = _hybrid_video_progress_end_percent(selection)
+
+        _raise_if_cancelled(cancel_controller)
+        _set_current_progress_stage(
+            "Video",
+            percent_start=0.0,
+            percent_end=video_end_percent,
+            start_message="Downloading video",
+        )
+        with _infojson_media_scope(
+            cookieless=options.cookies_enabled,
+            metadata_ready_monotonic=metadata_ready_monotonic,
+        ):
+            _run_ytdlp_with_retries(
+                video_command,
+                options,
+                log,
+                cancel_controller,
+                attempt_state,
+            )
+        staged_video_path = _select_staged_file(hybrid_dir, "video.mp4", ".mp4")
+
+        _raise_if_cancelled(cancel_controller)
+        _set_current_progress_stage(
+            "Companion audio",
+            percent_start=video_end_percent,
+            percent_end=100.0,
+            start_message="Downloading companion audio",
+        )
+        with _infojson_media_scope(
+            cookieless=options.cookies_enabled,
+            metadata_ready_monotonic=metadata_ready_monotonic,
+        ):
+            _run_ytdlp_with_retries(
+                audio_command,
+                options,
+                log,
+                cancel_controller,
+                attempt_state,
+            )
+        staged_audio_path = _select_staged_file(hybrid_dir, "companion-audio.m4a", ".m4a")
+
+        _raise_if_cancelled(cancel_controller)
+        merged_path = hybrid_dir / "merged.mp4"
+        _set_current_progress_stage("Merging", percent_start=100.0, percent_end=100.0)
+        context = _current_progress_context()
+        _emit_current_progress(
+            "Merging",
+            message=STAGE_MERGING,
+            generation=getattr(context, "generation", None) if context is not None else None,
+        )
+        merge_command = _build_fast_hybrid_merge_command(
+            staged_video_path,
+            staged_audio_path,
+            merged_path,
+        )
+        merge_started = time.perf_counter()
+        try:
+            _run_ffmpeg_command(
+                merge_command,
+                operation="merge_video",
+                cancel_controller=cancel_controller,
+                progress_duration_seconds=selection.duration_seconds,
+            )
+        finally:
+            timing = _current_video_download_timing()
+            if timing is not None:
+                timing.add_merge(merge_started)
+        if not _final_file_ready(merged_path):
+            raise DownloadError("video merge failed")
+        _raise_if_cancelled(cancel_controller)
+        yield merged_path
+
+
+def _prepare_fast_hybrid_infojson(
+    base_command: list[str],
+    hybrid_dir: Path,
+    options: DownloadOptions,
+    log,
+    cancel_controller: DownloadController | None,
+    attempt_state: _YtdlpAttemptState,
+) -> tuple[Path, float]:
+    prefetched = attempt_state.prefetched_media
+    if (
+        prefetched is not None
+        and prefetched.info_json_path is not None
+        and prefetched.info_json_path.exists()
+        and prefetched.ready_monotonic > 0
+    ):
+        _start_attempt_lookahead(attempt_state, log)
+        return prefetched.info_json_path, prefetched.ready_monotonic
+
+    metadata_template = str(hybrid_dir / "metadata.%(ext)s")
+    extract_command = _build_infojson_extract_command(base_command, metadata_template)
+    metadata_state = _YtdlpAttemptState(
+        verified_retry_used=attempt_state.verified_retry_used,
+    )
+    _set_current_progress_stage(
+        "Video",
+        percent_start=0.0,
+        percent_end=0.0,
+        start_message=STAGE_PREPARING,
+    )
+    try:
+        _run_ytdlp_with_retries(
+            extract_command,
+            options,
+            log,
+            cancel_controller,
+            metadata_state,
+        )
+    finally:
+        attempt_state.verified_retry_used = bool(
+            attempt_state.verified_retry_used or metadata_state.verified_retry_used
+        )
+    info_json_path = _select_infojson(hybrid_dir)
+    ready_monotonic = time.monotonic()
+    _start_attempt_lookahead(attempt_state, log)
+    return info_json_path, ready_monotonic
+
+
+def _load_hybrid_format_selection(info_json_path: Path) -> _HybridFormatSelection:
+    try:
+        with info_json_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise DownloadError("yt-dlp metadata file could not be read") from exc
+    if not isinstance(payload, dict):
+        raise DownloadError("yt-dlp metadata did not contain a selected video and companion audio")
+
+    requested_formats = payload.get("requested_formats")
+    if not isinstance(requested_formats, list):
+        raise DownloadError("Premiere-safe separate video and companion audio formats are unavailable")
+    video_format = next(
+        (entry for entry in requested_formats if _is_hybrid_video_format(entry)),
+        None,
+    )
+    audio_format = next(
+        (entry for entry in requested_formats if _is_hybrid_audio_format(entry)),
+        None,
+    )
+    if video_format is None or audio_format is None:
+        raise DownloadError("Premiere-safe separate video and companion audio formats are unavailable")
+
+    video_format_id = str(video_format.get("format_id") or "").strip()
+    audio_format_id = str(audio_format.get("format_id") or "").strip()
+    if not video_format_id or not audio_format_id or video_format_id == audio_format_id:
+        raise DownloadError("yt-dlp metadata did not contain distinct selected format IDs")
+    duration_seconds = _positive_number(payload.get("duration"))
+    return _HybridFormatSelection(
+        video_format_id=video_format_id,
+        audio_format_id=audio_format_id,
+        video_bytes=_hybrid_format_bytes(video_format, duration_seconds),
+        audio_bytes=_hybrid_format_bytes(audio_format, duration_seconds),
+        duration_seconds=duration_seconds,
+    )
+
+
+def _is_hybrid_video_format(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    height = _positive_number(value.get("height"))
+    return bool(
+        str(value.get("ext") or "").lower() == "mp4"
+        and str(value.get("vcodec") or "").lower().startswith("avc1")
+        and _codec_is_none(value.get("acodec"))
+        and height is not None
+        and height <= 1080
+    )
+
+
+def _is_hybrid_audio_format(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    return bool(
+        str(value.get("ext") or "").lower() == "m4a"
+        and _codec_is_none(value.get("vcodec"))
+        and str(value.get("acodec") or "").lower().startswith("mp4a")
+    )
+
+
+def _codec_is_none(value: object) -> bool:
+    return str(value or "none").strip().lower() == "none"
+
+
+def _positive_number(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if number > 0 else None
+
+
+def _hybrid_format_bytes(format_info: dict, duration_seconds: float | None) -> int | None:
+    for key in ("filesize", "filesize_approx"):
+        size = _positive_number(format_info.get(key))
+        if size is not None:
+            return max(1, int(size))
+    bitrate_kbps = _positive_number(format_info.get("tbr"))
+    if bitrate_kbps is not None and duration_seconds is not None:
+        return max(1, int((bitrate_kbps * 1000.0 / 8.0) * duration_seconds))
+    return None
+
+
+def _hybrid_video_progress_end_percent(selection: _HybridFormatSelection) -> float:
+    if selection.video_bytes is None or selection.audio_bytes is None:
+        return 50.0
+    total_bytes = selection.video_bytes + selection.audio_bytes
+    if total_bytes <= 0:
+        return 50.0
+    return max(1.0, min(99.0, (selection.video_bytes / total_bytes) * 100.0))
+
+
+def _build_fast_hybrid_media_commands(
+    base_command: list[str],
+    info_json_path: Path,
+    selection: _HybridFormatSelection,
+    hybrid_dir: Path,
+) -> tuple[list[str], list[str]]:
+    common = _remove_command_options(
+        _build_infojson_media_download_command(base_command, info_json_path),
+        {"--merge-output-format"},
+    )
+    video_command = _replace_option(common, "-f", selection.video_format_id)
+    video_command = _replace_option(video_command, "-o", str(hybrid_dir / "video.%(ext)s"))
+
+    audio_command = _strip_media_downloader_options(common)
+    audio_command = _replace_option(audio_command, "-N", "1")
+    audio_command = _replace_option(audio_command, "-f", selection.audio_format_id)
+    audio_command = _replace_option(
+        audio_command,
+        "-o",
+        str(hybrid_dir / "companion-audio.%(ext)s"),
+    )
+    return video_command, audio_command
+
+
+def _build_fast_hybrid_merge_command(
+    video_path: Path,
+    audio_path: Path,
+    merged_path: Path,
+) -> list[str]:
+    return [
+        str(runtime_file("ffmpeg.exe")),
+        "-y",
+        "-i",
+        str(video_path),
+        "-i",
+        str(audio_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c",
+        "copy",
+        "-movflags",
+        "+faststart",
+        "-progress",
+        "pipe:1",
+        "-nostats",
+        str(merged_path),
+    ]
 
 
 def _download_audio(
@@ -2234,8 +2633,8 @@ def _prepare_media_downloader_runtime(
         log("[ERROR] aria2c.exe is unavailable. Fast download cannot start.")
         raise DownloadError(message)
 
-    log("[INFO] Download engine: aria2c accelerated media transfer")
-    log("[INFO] Fast pipeline: Stable-equivalent format selection, cookies, retries, merge, validation and promotion.")
+    log("[INFO] Download engine: aria2c accelerated video transfer with native companion audio")
+    log("[INFO] Fast pipeline: one metadata snapshot, split video/audio transfer, stream-copy merge, validation and promotion.")
     log("[INFO] Fast format: MP4 H.264/AAC only, max 1080p.")
     log("[INFO] aria2c profile: connections=16 splits=16 jobs=16 piece=1M")
     log("[INFO] Fast post-processing: merge/remux only; no full video transcode.")
@@ -2580,14 +2979,32 @@ def _run_ytdlp_with_retries(
     http_403_delays = [10, 30]
     http_403_retries = 0
     cookie_media_waited_seconds = 0
-    cookie_media_metadata_ready_monotonic = 0.0
+    infojson_media_context = _current_infojson_media_context()
+    cookie_media_metadata_ready_monotonic = (
+        infojson_media_context.metadata_ready_monotonic
+        if infojson_media_context is not None
+        else 0.0
+    )
     cookie_media_probe_active = False
     attempt_state = cookie_retry_state or _YtdlpAttemptState()
+    if (
+        infojson_media_context is not None
+        and infojson_media_context.cookieless
+        and options.cookies_enabled
+    ):
+        attempt_state.cookieless_fallback_used = True
+        attempt_state.authenticated_infojson_fallback_used = True
     stream_interrupted_retried = False
     base_command = _strip_cookie_options(list(command))
     current_command = list(base_command)
     attempt_number = 0
-    use_cookies_for_attempt = bool(options.cookies_enabled)
+    use_cookies_for_attempt = bool(
+        options.cookies_enabled
+        and not (
+            infojson_media_context is not None
+            and infojson_media_context.cookieless
+        )
+    )
     attempt_part = _current_ytdlp_part()
 
     if _batch_cookie_source_changed(options, attempt_state.batch_state):
@@ -2904,7 +3321,13 @@ def _run_ytdlp_with_retries(
                     attempt_info,
                 ):
                     current_command = list(base_command)
-                    use_cookies_for_attempt = bool(options.cookies_enabled)
+                    use_cookies_for_attempt = bool(
+                        options.cookies_enabled
+                        and not (
+                            infojson_media_context is not None
+                            and infojson_media_context.cookieless
+                        )
+                    )
                     continue
 
             raise
@@ -3198,6 +3621,13 @@ def _build_authenticated_infojson_extract_command(
     command: list[str],
     bootstrap_template: str,
 ) -> list[str]:
+    return _build_infojson_extract_command(command, bootstrap_template)
+
+
+def _build_infojson_extract_command(
+    command: list[str],
+    bootstrap_template: str,
+) -> list[str]:
     prepared = _remove_command_flags(
         _strip_media_downloader_options(_strip_cookie_options(list(command))),
         {
@@ -3234,6 +3664,13 @@ def _build_infojson_media_download_command(
 
 
 def _select_authenticated_infojson(bootstrap_dir: Path) -> Path:
+    try:
+        return _select_infojson(bootstrap_dir)
+    except DownloadError as exc:
+        raise DownloadError("authenticated yt-dlp metadata file was not created") from exc
+
+
+def _select_infojson(bootstrap_dir: Path) -> Path:
     matches = sorted(
         (
             path
@@ -3244,7 +3681,7 @@ def _select_authenticated_infojson(bootstrap_dir: Path) -> Path:
         reverse=True,
     )
     if not matches:
-        raise DownloadError("authenticated yt-dlp metadata file was not created")
+        raise DownloadError("yt-dlp metadata file was not created")
     return matches[0]
 
 
@@ -3506,7 +3943,7 @@ def _cookie_source_text(options: DownloadOptions) -> str:
 
 def _part_from_progress_phase(phase: str) -> str:
     lower = (phase or "").strip().lower()
-    if lower in {"video", "validating mp4"}:
+    if lower in {"video", "companion audio", "merging", "validating mp4"}:
         return PART_VIDEO
     if lower in {"mp3", "audio"}:
         return PART_AUDIO
@@ -3807,7 +4244,8 @@ def _emit_aria2_progress(progress: ParsedTransferProgress) -> None:
         return
     now = time.monotonic()
     elapsed = now - context.last_aria2_emit if context.last_aria2_emit is not None else 0.0
-    percent = progress.percent
+    raw_percent = progress.percent
+    percent = _mapped_current_progress_percent(raw_percent)
     percent_changed = (
         context.last_aria2_percent is None
         or percent is None
@@ -3819,7 +4257,7 @@ def _emit_aria2_progress(progress: ParsedTransferProgress) -> None:
         or percent_changed
         or (speed_changed and elapsed >= 0.25)
         or elapsed >= 0.5
-        or (percent is not None and percent >= 100.0)
+        or (raw_percent is not None and raw_percent >= 100.0)
     )
     context.transfer_started = True
     if not should_emit:
@@ -3860,10 +4298,12 @@ def _emit_ytdlp_progress_from_line(line: str, source: str = TRANSFER_SOURCE_YTDL
 
     now = time.monotonic()
     message = parsed.get("message") or ""
-    percent = parsed.get("percent")
+    raw_percent = parsed.get("percent")
+    mapped_percent = _mapped_current_progress_percent(raw_percent)
+    percent = f"{mapped_percent:.1f}%" if mapped_percent is not None else raw_percent
     if source == TRANSFER_SOURCE_ARIA2 and message == STAGE_PREPARING and context.transfer_started:
         return is_transfer
-    force = _is_complete_progress_percent(percent) or message in {
+    force = _is_complete_progress_percent(raw_percent) or message in {
         "Already downloaded",
         "Extracting audio",
         STAGE_MERGING,

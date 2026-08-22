@@ -128,11 +128,11 @@ Sources inspected:
 - Missing, invalid, or unstartable aria2 prevents a selected Fast batch from starting. Stable mode, application startup, and package preflight do not require aria2.
 - Fast failures do not automatically change the selector. The user can manually choose Stable for a later batch and retry.
 - Fast engine parity contract: Stable and Fast use the same Premiere-safe format selector, codec requirements, maximum resolution, yt-dlp extraction behavior, isolated cookie-copy mechanism, HTTP 403 fallback, authenticated info-json fallback, retry handling, one-video lookahead, merge/remux, Premiere-safe validation, atomic promotion, SQLite state rules, and sequential item order.
-- The only intended engine difference is media transfer: Stable uses yt-dlp's internal media downloader, while Fast supplies aria2c through yt-dlp `--downloader` and `--downloader-args` media-transfer options.
-- Video commands for both engines use `PREMIERE_SAFE_VIDEO_FORMAT`, `-N 1`, `--merge-output-format mp4`, and the same no-info/description/thumbnail write controls. Fast adds only aria2c `-x 16 -s 16 -j 16 -k 1M`.
-- Fast metadata extraction, thumbnails, lookahead metadata, API calls, Cookie Bridge, SQLite, probing, validation, and MP3 extraction do not inherit aria2 media downloader options.
+- Stable video keeps the existing single yt-dlp path. Fast video resolves `PREMIERE_SAFE_VIDEO_FORMAT` once, downloads the exact selected H.264 MP4 video format through aria2c, downloads the exact selected AAC/M4A companion format through yt-dlp's native downloader, then stream-copies both staged streams into the MP4 presented to validation and ownership-protected promotion.
+- The Fast video leg retains aria2c `-x 16 -s 16 -j 16 -k 1M`. A combined fallback or metadata that cannot prove the selected separate formats satisfy the Premiere-safe contract fails through the existing handling; it is not silently substituted with lower quality.
+- Fast metadata extraction, companion-audio transfer, thumbnails, lookahead metadata, API calls, Cookie Bridge, SQLite, probing, validation, and separate MP3 extraction do not inherit aria2 media downloader options.
 - Cookies are inserted only through the isolated per-attempt `cookies.txt` copy prepared by `_prepared_cookie_attempt(...)`. Fast does not pass the selected canonical cookie file directly to yt-dlp.
-- Saved-media transfer from authenticated info-json retains Fast aria2 media-transfer options while removing cookies and the YouTube watch URL.
+- Saved Fast video transfer from authenticated info-json retains aria2 media-transfer options while removing cookies and the YouTube watch URL. The saved companion-audio transfer uses the same metadata snapshot and removes aria2 options.
 - Fast does not perform a full video transcode. If no MP4 H.264/AAC format at 1080p or below exists, both engines fail strictly instead of downloading VP9/AV1 or transcoding unrestricted streams.
 
 ### aria2 HTTP-response exit handling
@@ -489,8 +489,9 @@ Rows use `iid=str(video.display_order)` and values:
 ### Transfer progress parity
 
 - Stable parses yt-dlp progress and retains the existing detail format, for example `3.6% | yt-dlp 47.72MiB/s`.
-- Fast parses aria2 terminal status emitted through yt-dlp's external-downloader process, for example `97.0% | aria2c 36MiB/s`.
-- The actual command determines the transfer source. Authenticated metadata-only extraction does not claim aria2 progress; saved-media Fast transfer retains aria2.
+- Fast parses aria2 terminal status emitted through yt-dlp's external-downloader process for the video leg, for example `97.0% | aria2c 36MiB/s`.
+- The actual command determines the transfer source. Metadata-only extraction does not claim aria2 progress; the saved video leg reports aria2 and the saved companion-audio leg reports yt-dlp.
+- Hybrid transfer progress uses selected byte estimates when both streams provide them; the video span is `video_bytes / (video_bytes + audio_bytes)` and the companion-audio span is the remainder. If either estimate is unavailable, the deterministic fallback is 50/50. Merge, validation, and promotion are stage messages after transfer progress reaches 100%; only final item completion marks the item complete.
 - The first line retains the numbered filename. The second line moves through `Đang chuẩn bị tải...`, live transfer, `Đang ghép video và âm thanh...` when a merger actually runs, `Đang kiểm tra file MP4...`, and `Đang hoàn tất file...`.
 - ETA is not displayed. aria2 connection count is retained only in parsed diagnostic data and is not shown in the normal two-line UI.
 - aria2 refreshes are throttled before enqueueing; cancellation checks and subprocess reads are not throttled.
