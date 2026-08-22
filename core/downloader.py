@@ -9,7 +9,8 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -95,6 +96,13 @@ from core.file_status import (
     build_output_paths,
     ensure_output_dirs,
 )
+from core.output_ownership import (
+    OutputClaim,
+    OutputOwnershipError,
+    OutputReservation,
+    reserve_output_paths,
+    verify_output_claim,
+)
 from core.progress_status import (
     STAGE_MERGING,
     STAGE_PREPARING,
@@ -141,6 +149,7 @@ from core.ytdlp_commands import (
 from core.state_store import (
     STATUS_NOT_DOWNLOADED,
     get_effective_status,
+    get_output_path_owners,
     get_video_entry,
     is_mode_complete,
     missing_parts_for_mode,
@@ -183,6 +192,10 @@ BRIDGE_COOKIE_SESSION_ERROR_MESSAGE = (
 FILE_COOKIE_SESSION_ERROR_MESSAGE = (
     "Cookies may be expired. Export a fresh cookies.txt file, select it again if needed, "
     "then retry the failed download."
+)
+_OUTPUT_RESERVATION: ContextVar[OutputReservation | None] = ContextVar(
+    "output_reservation",
+    default=None,
 )
 
 
@@ -873,7 +886,7 @@ def _prepare_numbered_output_for_video(
     raw_title = _numbering_source_title(video)
     stem = _build_numbered_output_stem(raw_title, assigned_number)
     video.sanitized_filename_base = stem
-    paths = build_output_paths(options.base_folder, options.channel_name, stem)
+    paths = build_output_paths(options.base_folder, options.channel_name, stem, options.channel_id)
     return assigned_number, stem, paths
 
 
@@ -909,7 +922,7 @@ def _find_cookie_media_lookahead_candidate(
             continue
         if PART_VIDEO not in missing_parts:
             continue
-        paths = build_output_paths(options.base_folder, options.channel_name, stem)
+        paths = build_output_paths(options.base_folder, options.channel_name, stem, options.channel_id)
         return candidate, stem, paths.channel_dir
     return None
 
@@ -1148,6 +1161,16 @@ def _part_output_ready(paths: OutputPaths, part: str) -> bool:
     return False
 
 
+def _part_output_path(paths: OutputPaths, part: str) -> Path:
+    if part == PART_VIDEO:
+        return paths.video_path
+    if part == PART_AUDIO:
+        return paths.audio_path
+    if part == PART_THUMB:
+        return paths.thumb_path
+    raise OutputOwnershipError("Unsupported output part ownership request.")
+
+
 def _missing_parts_for_current_paths(
     options: DownloadOptions,
     video,
@@ -1232,7 +1255,12 @@ def download_items(
 ) -> None:
     options.download_engine = _normalize_download_engine(options.download_engine)
     validate_download_environment(options)
-    ensure_output_dirs(options.base_folder, options.channel_name, options.download_mode)
+    ensure_output_dirs(
+        options.base_folder,
+        options.channel_name,
+        options.download_mode,
+        options.channel_id,
+    )
     _call_runtime_tool_summary(options, log, cancel_controller)
     aria2_validation = _prepare_media_downloader_runtime(options, log, cancel_controller)
     engine = _normalize_download_engine(options.download_engine)
@@ -1264,12 +1292,22 @@ def download_items(
         assigned_number, stem, paths = _prepare_numbered_output_for_video(video, options, index - 1)
         current_part = None
         run_parts_current_run: list[str] = []
+        reservation_token = None
 
         log(f"[INFO] Starting download: {index}/{len(videos)}")
         log(f"[INFO] Assigned output number: {_format_output_number(assigned_number)}")
         log(f"[INFO] Mode: {options.download_mode}")
         try:
             _validate_output_paths(paths, mode_parts)
+            reservation = reserve_output_paths(
+                paths.channel_dir,
+                options.channel_id,
+                str(video.video_id),
+                {part: _part_output_path(paths, part) for part in mode_parts},
+                legacy_owner_lookup=get_output_path_owners,
+                cancel_check=lambda: _raise_if_cancelled(cancel_controller),
+            )
+            reservation_token = _OUTPUT_RESERVATION.set(reservation)
 
             missing_parts = _missing_parts_for_current_paths(options, video, paths, mode_parts)
             if not missing_parts:
@@ -1496,6 +1534,12 @@ def download_items(
                     message="Not fully downloaded",
                     kind="error",
                 )
+        except OutputOwnershipError as exc:
+            failed_count += 1
+            video.status = STATUS_ERROR
+            status_callback(video)
+            _emit_general_error_progress(progress_callback, video, index, video_total, str(exc))
+            log(f"[ERROR] {exc}")
         except PermissionError as exc:
             _remember_run_part(run_parts_current_run, current_part)
             _mark_part_error(options, video, paths, current_part)
@@ -1621,6 +1665,9 @@ def download_items(
             technical = f"{type(exc).__name__}: {exc}"
             _emit_general_error_progress(progress_callback, video, index, video_total, technical)
             _log_friendly_general_error(log, technical, [technical])
+        finally:
+            if reservation_token is not None:
+                _OUTPUT_RESERVATION.reset(reservation_token)
 
     _shutdown_cookie_media_lookahead(ytdlp_batch_state, log)
 
@@ -4652,44 +4699,60 @@ def _atomic_promote_with_retry(
     log=None,
     replace_existing: bool = False,
     cancel_controller: DownloadController | None = None,
+    ownership_claim: OutputClaim | None = None,
 ) -> None:
-    final_path.parent.mkdir(parents=True, exist_ok=True)
-    if _final_file_ready(final_path) and not replace_existing:
-        return
+    claim = ownership_claim
+    if claim is None:
+        reservation = _OUTPUT_RESERVATION.get()
+        if reservation is not None:
+            claim = reservation.claim_for_path(final_path)
+    ownership_guard = (
+        verify_output_claim(
+            claim,
+            cancel_check=lambda: _raise_if_cancelled(cancel_controller),
+        )
+        if claim is not None
+        else nullcontext()
+    )
 
-    try:
-        if not source_path.exists() or not source_path.is_file() or source_path.stat().st_size <= 0:
-            raise OSError("source file is missing or empty")
-    except OSError as exc:
-        raise FileOperationError("promote", source_path, final_path, exc) from exc
+    with ownership_guard:
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        if _final_file_ready(final_path) and not replace_existing:
+            return
 
-    if not _paths_share_filesystem(source_path, final_path.parent):
-        exc = OSError("source and destination are not on the same filesystem")
-        raise FileOperationError("promote", source_path, final_path, exc) from exc
-
-    promoted = False
-    last_replace_error: OSError | None = None
-    successful_attempt = 0
-    for attempt, delay in enumerate((0, 1, 3, 5)):
-        _raise_if_cancelled(cancel_controller)
-        if delay:
-            _sleep_with_cancel(delay, cancel_controller)
         try:
-            os.replace(source_path, final_path)
-            promoted = True
-            successful_attempt = attempt
-            break
+            if not source_path.exists() or not source_path.is_file() or source_path.stat().st_size <= 0:
+                raise OSError("source file is missing or empty")
         except OSError as exc:
-            last_replace_error = exc
+            raise FileOperationError("promote", source_path, final_path, exc) from exc
 
-    if not promoted:
-        if last_replace_error is None:
-            last_replace_error = OSError("promotion did not complete")
-        raise FileOperationError("promote", source_path, final_path, last_replace_error)
+        if not _paths_share_filesystem(source_path, final_path.parent):
+            exc = OSError("source and destination are not on the same filesystem")
+            raise FileOperationError("promote", source_path, final_path, exc) from exc
 
-    _verify_promoted_file_with_retry(source_path, final_path, cancel_controller)
-    if successful_attempt > 0 and log:
-        log("[WARNING] File was temporarily locked, retry succeeded.")
+        promoted = False
+        last_replace_error: OSError | None = None
+        successful_attempt = 0
+        for attempt, delay in enumerate((0, 1, 3, 5)):
+            _raise_if_cancelled(cancel_controller)
+            if delay:
+                _sleep_with_cancel(delay, cancel_controller)
+            try:
+                os.replace(source_path, final_path)
+                promoted = True
+                successful_attempt = attempt
+                break
+            except OSError as exc:
+                last_replace_error = exc
+
+        if not promoted:
+            if last_replace_error is None:
+                last_replace_error = OSError("promotion did not complete")
+            raise FileOperationError("promote", source_path, final_path, last_replace_error)
+
+        _verify_promoted_file_with_retry(source_path, final_path, cancel_controller)
+        if successful_attempt > 0 and log:
+            log("[WARNING] File was temporarily locked, retry succeeded.")
 
 
 def _verify_promoted_file_with_retry(

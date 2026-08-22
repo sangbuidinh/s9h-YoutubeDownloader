@@ -668,7 +668,7 @@ def _test_outer_loop_friendly_log() -> None:
 
     patches = [
         (downloader, "validate_download_environment", lambda options: None),
-        (downloader, "ensure_output_dirs", lambda base_folder, channel_name, download_mode: None),
+        (downloader, "ensure_output_dirs", lambda base_folder, channel_name, download_mode, channel_id="": None),
         (downloader, "_call_runtime_tool_summary", lambda options, log, cancel_controller: None),
         (downloader, "get_video_entry", lambda channel_id, video_id: object()),
         (downloader, "is_mode_complete", lambda entry, mode: False),

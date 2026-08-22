@@ -2501,7 +2501,12 @@ class YouTubeDownloaderWindow:
         if not save_folder:
             return None
         filename_base = getattr(video, "sanitized_filename_base", "") or getattr(video, "title", "")
-        return build_output_paths(save_folder, self.channel_info.channel_name, filename_base)
+        return build_output_paths(
+            save_folder,
+            self.channel_info.channel_name,
+            filename_base,
+            self.channel_info.channel_id,
+        )
 
     def _save_manual_status(self, video, status: str) -> None:
         if self.downloading:

@@ -24,6 +24,7 @@ PREFLIGHT_COMMANDS = (
         "core\\error_messages.py",
         "core\\file_status.py",
         "core\\filename_utils.py",
+        "core\\output_ownership.py",
         "core\\runtime_paths.py",
         "core\\state_store.py",
         "core\\db_store.py",
