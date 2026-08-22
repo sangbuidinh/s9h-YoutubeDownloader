@@ -9,6 +9,7 @@ from core.download_modes import (
     required_parts,
 )
 from core.filename_utils import normalize_output_stem
+from core.output_ownership import canonical_path_key
 from core.runtime_paths import db_file
 
 
@@ -127,6 +128,48 @@ def get_video_entry(
     # Status is video-scoped, not folder-scoped.
     initialize_sqlite_state()
     return db_store.get_video_entry(channel_id, video_id)
+
+
+def get_output_path_owners(paths: tuple[Path, ...]) -> dict[str, set[tuple[str, str, str]]]:
+    requested = {canonical_path_key(path) for path in paths}
+    owners = {path_key: set() for path_key in requested}
+    if not requested:
+        return owners
+
+    for path_key, owner in _iter_state_output_owners():
+        if path_key in owners:
+            owners[path_key].add(owner)
+    return owners
+
+
+def get_channel_ids_for_output_directory(channel_dir: Path) -> set[str]:
+    directory_key = canonical_path_key(channel_dir).rstrip("/") + "/"
+    return {
+        owner[0]
+        for path_key, owner in _iter_state_output_owners()
+        if path_key.startswith(directory_key)
+    }
+
+
+def _iter_state_output_owners():
+    state = load_state()
+    channels = state.get("channels", {}) if isinstance(state, dict) else {}
+    if not isinstance(channels, dict):
+        return
+    for channel_id, channel in channels.items():
+        if not isinstance(channel, dict):
+            continue
+        videos = channel.get("videos", {})
+        if not isinstance(videos, dict):
+            continue
+        for video_id, entry in videos.items():
+            if not isinstance(entry, dict):
+                continue
+            for part, path_key in PART_PATH_KEYS.items():
+                raw_path = entry.get(path_key)
+                if not isinstance(raw_path, str) or not raw_path.strip():
+                    continue
+                yield canonical_path_key(raw_path), (str(channel_id), str(video_id), part)
 
 
 def get_effective_status(entry: dict | None, download_mode: str = MODE_VIDEO_THUMB) -> str:

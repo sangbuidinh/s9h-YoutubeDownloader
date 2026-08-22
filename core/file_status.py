@@ -10,6 +10,7 @@ from core.filename_utils import (
     normalize_output_stem,
     sanitize_channel_name,
 )
+from core.output_ownership import resolve_channel_directory
 from core.state_store import (
     STATUS_DOWNLOADED,
     STATUS_ERROR,
@@ -21,6 +22,7 @@ from core.state_store import (
     STATUS_MISSING_VIDEO_THUMB,
     STATUS_NOT_DOWNLOADED,
     get_effective_status,
+    get_channel_ids_for_output_directory,
     get_channel_video_entries,
 )
 
@@ -36,16 +38,26 @@ class OutputPaths:
     audio_path: Path
 
 
-def channel_dir_for(base_folder: str | Path, channel_name: str) -> Path:
-    return Path(base_folder) / sanitize_channel_name(channel_name)
+def channel_dir_for(base_folder: str | Path, channel_name: str, channel_id: str = "") -> Path:
+    sanitized_name = sanitize_channel_name(channel_name)
+    if not str(channel_id or "").strip():
+        return Path(base_folder) / sanitized_name
+    return resolve_channel_directory(
+        base_folder,
+        channel_name,
+        channel_id,
+        sanitized_name,
+        legacy_channel_ids=get_channel_ids_for_output_directory,
+    )
 
 
 def build_output_paths(
     base_folder: str | Path,
     channel_name: str,
     filename_base: str,
+    channel_id: str = "",
 ) -> OutputPaths:
-    channel_dir = channel_dir_for(base_folder, channel_name)
+    channel_dir = channel_dir_for(base_folder, channel_name, channel_id)
     video_dir = channel_dir / "video"
     thumb_dir = channel_dir / "thumb"
     audio_dir = channel_dir / "audio"
@@ -65,8 +77,9 @@ def ensure_output_dirs(
     base_folder: str | Path,
     channel_name: str,
     download_mode: str = MODE_VIDEO_THUMB,
+    channel_id: str = "",
 ) -> tuple[Path, Path, Path]:
-    channel_dir = channel_dir_for(base_folder, channel_name)
+    channel_dir = channel_dir_for(base_folder, channel_name, channel_id)
     video_dir = channel_dir / "video"
     thumb_dir = channel_dir / "thumb"
     audio_dir = channel_dir / "audio"
