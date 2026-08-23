@@ -128,27 +128,22 @@ Sources inspected:
 - Missing, invalid, or unstartable aria2 prevents a selected Fast batch from starting. Stable mode, application startup, and package preflight do not require aria2.
 - Fast failures do not automatically change the selector. The user can manually choose Stable for a later batch and retry.
 - Fast engine parity contract: Stable and Fast use the same Premiere-safe format selector, codec requirements, maximum resolution, yt-dlp extraction behavior, isolated cookie-copy mechanism, HTTP 403 fallback, authenticated info-json fallback, retry handling, one-video lookahead, merge/remux, Premiere-safe validation, atomic promotion, SQLite state rules, and sequential item order.
-- Stable video keeps the existing single yt-dlp path. Fast video resolves `PREMIERE_SAFE_VIDEO_FORMAT` once and preserves either valid selector result: a split selection downloads the exact H.264 MP4 video format through aria2c and the exact AAC/M4A companion format through yt-dlp's native downloader before a stream-copy merge; a combined fallback downloads the exact top-level H.264/AAC MP4 format through aria2c without a companion transfer or extra merge. Both routes use the same extracted info-json snapshot and present only the completed MP4 to validation and ownership-protected promotion.
-- The Fast video or combined-media leg retains aria2c `-x 16 -s 16 -j 16 -k 1M`. Metadata must prove an MP4 H.264 selection with known height at or below 1080p and, for a combined fallback, AAC audio; invalid or unproven metadata fails instead of being silently substituted with lower quality.
-- Fast metadata extraction, companion-audio transfer, thumbnails, lookahead metadata, API calls, Cookie Bridge, SQLite, probing, validation, and separate MP3 extraction do not inherit aria2 media downloader options.
+- Stable video keeps the existing single yt-dlp path. Fast video resolves `PREMIERE_SAFE_VIDEO_FORMAT` once and preserves either valid selector result: a split selection downloads the exact H.264 MP4 video format and exact AAC/M4A companion format through yt-dlp's native downloader with `-N 1` before a stream-copy merge; a combined fallback downloads the exact top-level H.264/AAC MP4 format through native yt-dlp with `-N 1` without a companion transfer or extra merge. Both routes use the same extracted info-json snapshot and present only the completed MP4 to validation and ownership-protected promotion.
+- Fast saved-metadata video and companion-audio commands remove all external-downloader options. Metadata must prove an MP4 H.264 selection with known height at or below 1080p and, for a combined fallback, AAC audio; invalid or unproven metadata fails instead of being silently substituted with lower quality.
+- Fast metadata extraction, companion-audio transfer, thumbnails, lookahead metadata, API calls, Cookie Bridge, SQLite, probing, and validation do not inherit aria2 media downloader options. The existing separate Fast MP3 output path retains its aria2-backed command and is not the companion-audio leg.
 - Cookies are inserted only through the isolated per-attempt `cookies.txt` copy prepared by `_prepared_cookie_attempt(...)`. Fast does not pass the selected canonical cookie file directly to yt-dlp.
-- Saved Fast video or combined-media transfer from authenticated info-json retains aria2 media-transfer options while removing cookies and the YouTube watch URL. A split selection's saved companion-audio transfer uses the same metadata snapshot and removes aria2 options.
+- Saved Fast video, combined-media, and companion-audio transfers remove aria2 options, cookies, and the YouTube watch URL while preserving speed-limit options and exact selected format IDs.
 - Fast does not perform a full video transcode. If no MP4 H.264/AAC format at 1080p or below exists, both engines fail strictly instead of downloading VP9/AV1 or transcoding unrestricted streams.
 
 ### aria2 HTTP-response exit handling
 
-Fast media transfer may surface `ERROR: aria2c exited with code 22`. aria2 code 22 means the HTTP response header was bad or unexpected; it does not prove an HTTP 403 status.
-
-For a Fast video media command, this failure is routed into the existing HTTP media-access recovery workflow:
-
-1. The initial media attempt uses an isolated cookie copy.
-2. Code 22 triggers authenticated info-json extraction.
-3. Metadata extraction does not use aria2.
-4. Saved media URLs are downloaded cookieless through aria2.
-5. Repeated code 22 during saved-media transfer follows the existing metadata-age retry targets and one-video lookahead.
-6. Media transfer never automatically switches to Stable.
-
-The internal `HTTP_403` failure kind is reused as a compatibility class for retry routing, while technical logs retain the distinct `aria2_http_response_exit_22` detail.
+The existing aria2 failure classifier remains available to commands that
+actually use aria2. aria2 code 22 means the HTTP response header was bad or
+unexpected; it does not prove an HTTP 403 status. Native Fast video media
+commands do not invoke aria2 and therefore do not enter an aria2 code-22
+transport fallback. The internal compatibility classification and sanitized
+technical detail remain unchanged for the aria2-backed paths that still use
+them.
 
 ### File Start Number
 
@@ -489,12 +484,12 @@ Rows use `iid=str(video.display_order)` and values:
 ### Transfer progress parity
 
 - Stable parses yt-dlp progress and retains the existing detail format, for example `3.6% | yt-dlp 47.72MiB/s`.
-- Fast parses aria2 terminal status emitted through yt-dlp's external-downloader process for the video leg, for example `97.0% | aria2c 36MiB/s`.
-- The actual command determines the transfer source. Metadata-only extraction does not claim aria2 progress; a saved split-video or combined-media leg reports aria2 and a split selection's saved companion-audio leg reports yt-dlp.
-- Split hybrid transfer progress uses selected byte estimates when both streams provide them; the video span is `video_bytes / (video_bytes + audio_bytes)` and the companion-audio span is the remainder. If either estimate is unavailable, the deterministic fallback is 50/50. A combined fallback maps its single aria2 transfer across the full transfer span. Merge, when required, validation, and promotion are stage messages after transfer progress reaches 100%; only final item completion marks the item complete.
+- Fast saved-metadata video and companion-audio legs parse native yt-dlp progress, for example `97.0% | yt-dlp 36MiB/s`.
+- The actual command determines the transfer source. Metadata-only extraction does not claim media-transfer progress; saved split-video, combined-media, and companion-audio legs report yt-dlp.
+- Split hybrid transfer progress uses selected byte estimates when both streams provide them; the video span is `video_bytes / (video_bytes + audio_bytes)` and the companion-audio span is the remainder. If either estimate is unavailable, the deterministic fallback is 50/50. A combined fallback maps its single native transfer across the full transfer span. Merge, when required, validation, and promotion are stage messages after transfer progress reaches 100%; only final item completion marks the item complete.
 - The first line retains the numbered filename. The second line moves through `Đang chuẩn bị tải...`, live transfer, `Đang ghép video và âm thanh...` when a merger actually runs, `Đang kiểm tra file MP4...`, and `Đang hoàn tất file...`.
-- ETA is not displayed. aria2 connection count is retained only in parsed diagnostic data and is not shown in the normal two-line UI.
-- aria2 refreshes are throttled before enqueueing; cancellation checks and subprocess reads are not throttled.
+- ETA is not displayed. aria2 connection count remains diagnostic data only for aria2-backed paths and is not shown in the normal two-line UI.
+- aria2 refreshes remain throttled before enqueueing where aria2 is used; cancellation checks and subprocess reads are not throttled.
 
 ### aria2 progress-line handling
 
@@ -506,7 +501,7 @@ Rows use `iid=str(video.display_order)` and values:
 ### Download-stage timing
 
 - One sanitized `[PERF]` summary is logged for each logical video download result: success, final failure, or cancellation.
-- `engine` is `yt-dlp` or `aria2c` from the actual initial media command; `part` is `video`; `attempts` counts media subprocess attempts.
+- `engine` comes from the actual media transport; Fast video reports `yt-dlp`. `part` is `video`; `attempts` counts media subprocess attempts.
 - `prepare` measures attempt start to first transfer progress, or the complete attempt when no transfer progress appears.
 - `transfer` measures first transfer progress to merger start, or process finish when no merger runs. `merge` is nonzero only when a real `[Merger]` stage occurs.
 - `validate` and `promote` measure the existing Premiere-safe validation and atomic promotion calls. `retry_wait` sums existing video retry delays without changing them.

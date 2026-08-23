@@ -42,7 +42,7 @@ def main() -> int:
     _test_sequential_order_for_stable_and_fast()
     _test_video_audio_thumb_order_is_sequential()
     _test_audio_only_order_is_sequential()
-    _test_fast_invokes_aria2_and_stable_excludes_it()
+    _test_fast_video_is_native_while_separate_audio_retains_aria2()
     _test_fast_has_no_convert_phase_or_source_queue()
     _test_fast_uses_cookie_lookahead_state()
     _test_same_validation_and_promotion_surface()
@@ -99,7 +99,7 @@ def _test_audio_only_order_is_sequential() -> None:
     _assert(fast.part_calls == expected, f"Fast audio-only order changed: {fast.part_calls}")
 
 
-def _test_fast_invokes_aria2_and_stable_excludes_it() -> None:
+def _test_fast_video_is_native_while_separate_audio_retains_aria2() -> None:
     stable = _run_batch(DOWNLOAD_ENGINE_STABLE, MODE_VIDEO_THUMB, ("A",))
     fast = _run_batch(DOWNLOAD_ENGINE_ARIA2_FAST, MODE_VIDEO_THUMB, ("A",))
     stable_video = _commands_for_part(stable, PART_VIDEO)[0]
@@ -110,8 +110,9 @@ def _test_fast_invokes_aria2_and_stable_excludes_it() -> None:
     )
     fast_thumb = _commands_for_part(fast, PART_THUMB)[0]
     _assert("--downloader" not in stable_video, "Stable video command unexpectedly used aria2")
-    _assert("--downloader" in fast_video, "Fast video command missed aria2")
-    _assert("--downloader-args" in fast_video, "Fast video command missed aria2 args")
+    _assert("--downloader" not in fast_video, "Fast video command retained aria2")
+    _assert("--downloader-args" not in fast_video, "Fast video command retained aria2 args")
+    _assert(_option_value(fast_video, "-N") == "1", "Fast video command did not use native -N 1")
     _assert("--downloader" not in fast_thumb, "Fast thumbnail command inherited aria2")
 
     fast_audio = _run_batch(DOWNLOAD_ENGINE_ARIA2_FAST, MODE_AUDIO_THUMB, ("A",))

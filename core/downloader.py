@@ -178,9 +178,6 @@ YTDLP_COOKIES_OPTION = "--cookies"
 # aria2 exit 22 means the HTTP response header was bad or unexpected.
 ARIA2_HTTP_RESPONSE_EXIT_CODE = 22
 ARIA2_VERSION_TIMEOUT_SECONDS = 3.0
-FAST_VIDEO_SLOW_OBSERVATION_SECONDS = 3.0
-FAST_VIDEO_SLOW_THRESHOLD_BPS = 35_780_971.0
-FAST_VIDEO_SLOW_MIN_SAMPLE_SECONDS = 0.9
 OUTPUT_NUMBER_MIN_WIDTH = 3
 _NUMBERED_OUTPUT_PREFIX_PATTERN = re.compile(r"^\d{3,}\s+")
 FILE_START_NUMBER_REQUIRED_MESSAGE = "Please enter a starting file number before downloading."
@@ -385,8 +382,6 @@ class _VideoDownloadTiming:
     explicit_merge_seconds: float = 0.0
     validation_seconds: float = 0.0
     promotion_seconds: float = 0.0
-    performance_fallback: bool = False
-    aria2_before_fallback_seconds: float = 0.0
     logical_finished_at: float | None = None
     clock: object = field(default=time.perf_counter, repr=False, compare=False)
 
@@ -438,19 +433,13 @@ class _VideoDownloadTiming:
             f"validate={self.validation_seconds:.2f}s promote={self.promotion_seconds:.2f}s "
             f"retry_wait={self.retry_wait_seconds:.2f}s total={total:.2f}s result={normalized_result}"
         )
-        if self.performance_fallback:
-            return (
-                f"{summary} performance_fallback=true "
-                f"aria2_before_fallback_seconds={self.aria2_before_fallback_seconds:.2f}"
-            )
-        return f"{summary} performance_fallback=false"
+        return summary
 
 
 _PROGRESS_CONTEXT = threading.local()
 _VIDEO_DOWNLOAD_TIMING_CONTEXT = threading.local()
 _YTDLP_ATTEMPT_TIMING_CONTEXT = threading.local()
 _INFOJSON_MEDIA_CONTEXT = threading.local()
-_FAST_VIDEO_PERFORMANCE_WATCHDOG_CONTEXT = threading.local()
 
 
 @dataclass(frozen=True)
@@ -467,72 +456,6 @@ class _HybridFormatSelection:
     video_bytes: int | None
     audio_bytes: int | None
     duration_seconds: float | None
-
-
-class _FastVideoPerformanceFallback(Exception):
-    def __init__(self, aria2_before_fallback_seconds: float, raw_percent: float | None):
-        self.aria2_before_fallback_seconds = max(
-            0.0,
-            float(aria2_before_fallback_seconds),
-        )
-        self.raw_percent = raw_percent
-        super().__init__("Fast video transfer performance fallback")
-
-
-@dataclass
-class _FastVideoPerformanceWatchdog:
-    observation_seconds: float = FAST_VIDEO_SLOW_OBSERVATION_SECONDS
-    threshold_bps: float = FAST_VIDEO_SLOW_THRESHOLD_BPS
-    minimum_sample_seconds: float = FAST_VIDEO_SLOW_MIN_SAMPLE_SECONDS
-    clock: object = field(default=time.perf_counter, repr=False, compare=False)
-    process_started_at: float | None = None
-    first_sample_at: float | None = None
-    first_downloaded_bytes: float | None = None
-    sample_count: int = 0
-
-    def start_process(self) -> None:
-        self.process_started_at = float(self.clock())
-        self.first_sample_at = None
-        self.first_downloaded_bytes = None
-        self.sample_count = 0
-
-    def observe(
-        self,
-        progress: ParsedTransferProgress,
-    ) -> _FastVideoPerformanceFallback | None:
-        if progress.percent is not None and progress.percent >= 100.0:
-            return None
-        downloaded_bytes = _parse_transfer_quantity_bytes(progress.downloaded_text)
-        if downloaded_bytes is None or downloaded_bytes <= 0:
-            return None
-
-        now = float(self.clock())
-        if self.process_started_at is None:
-            self.process_started_at = now
-        if self.first_sample_at is None or self.first_downloaded_bytes is None:
-            self.first_sample_at = now
-            self.first_downloaded_bytes = downloaded_bytes
-            self.sample_count = 1
-            return None
-
-        self.sample_count += 1
-        observed_seconds = max(0.0, now - self.first_sample_at)
-        if observed_seconds < max(0.0, float(self.observation_seconds)):
-            return None
-        if self.sample_count < 2 or observed_seconds < max(0.0, float(self.minimum_sample_seconds)):
-            return None
-
-        downloaded_delta = downloaded_bytes - self.first_downloaded_bytes
-        if downloaded_delta < 0:
-            return None
-        effective_bps = downloaded_delta / observed_seconds if observed_seconds > 0 else 0.0
-        if effective_bps >= float(self.threshold_bps):
-            return None
-
-        return _FastVideoPerformanceFallback(
-            now - self.process_started_at,
-            progress.percent,
-        )
 
 
 class FileOperationError(DownloadError):
@@ -757,22 +680,6 @@ def _infojson_media_scope(*, cookieless: bool, metadata_ready_monotonic: float):
 
 def _current_infojson_media_context() -> _InfoJsonMediaContext | None:
     return getattr(_INFOJSON_MEDIA_CONTEXT, "current", None)
-
-
-@contextmanager
-def _fast_video_performance_watchdog_scope(
-    watchdog: _FastVideoPerformanceWatchdog | None,
-):
-    previous = getattr(_FAST_VIDEO_PERFORMANCE_WATCHDOG_CONTEXT, "current", None)
-    _FAST_VIDEO_PERFORMANCE_WATCHDOG_CONTEXT.current = watchdog
-    try:
-        yield watchdog
-    finally:
-        _FAST_VIDEO_PERFORMANCE_WATCHDOG_CONTEXT.current = previous
-
-
-def _current_fast_video_performance_watchdog() -> _FastVideoPerformanceWatchdog | None:
-    return getattr(_FAST_VIDEO_PERFORMANCE_WATCHDOG_CONTEXT, "current", None)
 
 
 def _transfer_source_for_command(command: list[str] | tuple[str, ...]) -> str:
@@ -1497,8 +1404,8 @@ def download_items(
                         log("[INFO] Premiere-safe mode: MP4 H.264/AAC only, max 1080p.")
                         if engine == DOWNLOAD_ENGINE_ARIA2_FAST:
                             log(
-                                "[INFO] Fast mode: aria2c handles the selected video stream and "
-                                "native yt-dlp handles the selected companion audio stream."
+                                "[INFO] Fast video media transport: native yt-dlp reads the "
+                                "saved metadata snapshot."
                             )
                         _emit_progress(progress_callback, "Video", video, index, video_total, message=STAGE_PREPARING)
                         previous_progress = _set_progress_context(
@@ -1539,8 +1446,8 @@ def download_items(
                                 log("[INFO] Premiere-safe mode: MP4 H.264/AAC only, max 1080p.")
                                 if engine == DOWNLOAD_ENGINE_ARIA2_FAST:
                                     log(
-                                        "[INFO] Fast mode: aria2c handles the selected video stream and "
-                                        "native yt-dlp handles the selected companion audio stream."
+                                        "[INFO] Fast video media transport: native yt-dlp reads the "
+                                        "saved metadata snapshot."
                                     )
                                 _emit_progress(
                                     progress_callback, "Video", video, index, video_total, message=STAGE_PREPARING
@@ -1917,7 +1824,11 @@ def _download_video(
         aria2_validation=aria2_validation,
     )
     timing = _VideoDownloadTiming(
-        engine=_transfer_source_for_command(command),
+        engine=(
+            TRANSFER_SOURCE_YTDLP
+            if _normalize_download_engine(options.download_engine) == DOWNLOAD_ENGINE_ARIA2_FAST
+            else _transfer_source_for_command(command)
+        ),
         logical_started_at=time.perf_counter(),
     )
     result = "failed"
@@ -2042,54 +1953,13 @@ def _fast_hybrid_staged_video(
             cookieless=options.cookies_enabled,
             metadata_ready_monotonic=metadata_ready_monotonic,
         ):
-            watchdog = (
-                None
-                if options.speed_limit
-                else _FastVideoPerformanceWatchdog()
+            _run_ytdlp_with_retries(
+                video_command,
+                options,
+                log,
+                cancel_controller,
+                attempt_state,
             )
-            try:
-                with _fast_video_performance_watchdog_scope(watchdog):
-                    _run_ytdlp_with_retries(
-                        video_command,
-                        options,
-                        log,
-                        cancel_controller,
-                        attempt_state,
-                    )
-            except _FastVideoPerformanceFallback as fallback:
-                _raise_if_cancelled(cancel_controller)
-                _clean_fast_video_transport_staging(
-                    hybrid_dir,
-                    cancel_controller,
-                )
-                timing = _current_video_download_timing()
-                if timing is not None:
-                    timing.performance_fallback = True
-                    timing.aria2_before_fallback_seconds = (
-                        fallback.aria2_before_fallback_seconds
-                    )
-                log(
-                    "[INFO] Fast video transfer remained below the verified throughput "
-                    "threshold; switching this video to native transfer."
-                )
-                fallback_floor = _mapped_current_progress_percent(fallback.raw_percent)
-                if fallback_floor is None:
-                    fallback_floor = 0.0
-                _set_current_progress_stage(
-                    "Video",
-                    percent_start=fallback_floor,
-                    percent_end=video_end_percent,
-                    start_message="Fast transfer is slow; switching transport...",
-                )
-                _raise_if_cancelled(cancel_controller)
-                native_video_command = _native_fast_video_fallback_command(video_command)
-                _run_ytdlp_with_retries(
-                    native_video_command,
-                    options,
-                    log,
-                    cancel_controller,
-                    attempt_state,
-                )
         staged_video_path = _select_staged_file(hybrid_dir, "video.mp4", ".mp4")
 
         if selection.kind == "combined":
@@ -2332,6 +2202,7 @@ def _build_fast_hybrid_media_commands(
         _build_infojson_media_download_command(base_command, info_json_path),
         {"--merge-output-format"},
     )
+    common = _replace_option(_strip_media_downloader_options(common), "-N", "1")
     video_command = _replace_option(common, "-f", selection.video_format_id)
     video_command = _replace_option(video_command, "-o", str(hybrid_dir / "video.%(ext)s"))
 
@@ -2341,50 +2212,13 @@ def _build_fast_hybrid_media_commands(
     if selection.audio_format_id is None:
         raise DownloadError("Split hybrid selection did not contain a companion audio format ID")
 
-    audio_command = _strip_media_downloader_options(common)
-    audio_command = _replace_option(audio_command, "-N", "1")
-    audio_command = _replace_option(audio_command, "-f", selection.audio_format_id)
+    audio_command = _replace_option(common, "-f", selection.audio_format_id)
     audio_command = _replace_option(
         audio_command,
         "-o",
         str(hybrid_dir / "companion-audio.%(ext)s"),
     )
     return video_command, audio_command
-
-
-def _native_fast_video_fallback_command(video_command: list[str]) -> list[str]:
-    return _replace_option(_strip_media_downloader_options(video_command), "-N", "1")
-
-
-def _clean_fast_video_transport_staging(
-    hybrid_dir: Path,
-    cancel_controller: DownloadController | None,
-) -> None:
-    try:
-        candidates = [
-            path
-            for path in hybrid_dir.iterdir()
-            if path.name.lower().startswith("video.")
-        ]
-    except OSError as exc:
-        raise DownloadError("Fast video staging could not be inspected before fallback") from exc
-
-    for path in candidates:
-        if not path.is_file() and not path.is_symlink():
-            raise DownloadError("Fast video partial staging could not be cleaned before fallback")
-        last_error: OSError | None = None
-        for attempt in range(5):
-            _raise_if_cancelled(cancel_controller)
-            try:
-                path.unlink(missing_ok=True)
-                last_error = None
-                break
-            except OSError as exc:
-                last_error = exc
-                if attempt < 4:
-                    _sleep_with_cancel(0.1, cancel_controller)
-        if last_error is not None or path.exists():
-            raise DownloadError("Fast video partial staging could not be cleaned before fallback")
 
 
 def _build_fast_hybrid_merge_command(
@@ -2847,10 +2681,10 @@ def _prepare_media_downloader_runtime(
         log("[ERROR] aria2c.exe is unavailable. Fast download cannot start.")
         raise DownloadError(message)
 
-    log("[INFO] Download engine: aria2c accelerated video transfer with native companion audio")
+    log("[INFO] Download engine: native yt-dlp Fast video transport; aria2c retained for separate MP3")
     log("[INFO] Fast pipeline: one metadata snapshot, split video/audio transfer, stream-copy merge, validation and promotion.")
     log("[INFO] Fast format: MP4 H.264/AAC only, max 1080p.")
-    log("[INFO] aria2c profile: connections=16 splits=16 jobs=16 piece=1M")
+    log("[INFO] Fast video transport: native yt-dlp with one fragment worker.")
     log("[INFO] Fast post-processing: merge/remux only; no full video transcode.")
     return _Aria2RuntimeValidation(True, True, aria2_path)
 
@@ -4302,11 +4136,6 @@ def _run_ytdlp(command: list[str], cancel_controller: DownloadController | None 
     stream_interrupted = False
     stage = YTDLP_STAGE_EXTRACT
     return_code = 0
-    performance_watchdog = (
-        _current_fast_video_performance_watchdog()
-        if uses_aria2
-        else None
-    )
     try:
         process = subprocess.Popen(
             command,
@@ -4319,8 +4148,6 @@ def _run_ytdlp(command: list[str], cancel_controller: DownloadController | None 
         )
         if cancel_controller is not None:
             cancel_controller.set_current_process(process)
-        if performance_watchdog is not None:
-            performance_watchdog.start_process()
         if _cancel_requested(cancel_controller):
             _terminate_process_tree(process)
             raise DownloadCancelled("download cancelled/interrupted")
@@ -4341,11 +4168,6 @@ def _run_ytdlp(command: list[str], cancel_controller: DownloadController | None 
                     if attempt_timing is not None:
                         attempt_timing.mark_first_transfer()
                     _emit_aria2_progress(aria2_progress)
-                    if performance_watchdog is not None:
-                        fallback = performance_watchdog.observe(aria2_progress)
-                        if fallback is not None:
-                            _terminate_process_tree(process)
-                            raise fallback
                 else:
                     transfer_seen = _emit_ytdlp_progress_from_line(sanitized, transfer_source)
                     if transfer_seen and attempt_timing is not None:
@@ -4989,25 +4811,6 @@ def _strip_media_downloader_options(command: list[str]) -> list[str]:
             "--external-downloader-args",
         },
     )
-
-
-def _parse_transfer_quantity_bytes(text: str | None) -> float | None:
-    value = str(text or "").strip().removesuffix("/s")
-    match = re.fullmatch(r"(?i)(\d+(?:\.\d+)?)([kmgt]?i?b|b)", value)
-    if match is None:
-        return None
-    factors = {
-        "b": 1,
-        "kb": 1000,
-        "mb": 1000**2,
-        "gb": 1000**3,
-        "tb": 1000**4,
-        "kib": 1024,
-        "mib": 1024**2,
-        "gib": 1024**3,
-        "tib": 1024**4,
-    }
-    return float(match.group(1)) * factors[match.group(2).lower()]
 
 
 def _strip_url_arguments(command: list[str]) -> list[str]:

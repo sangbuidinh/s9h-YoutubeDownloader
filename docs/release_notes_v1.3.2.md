@@ -1,8 +1,8 @@
 # Youtube Downloaderbs v1.3.2
 
-This patch release refreshes the checksum-pinned yt-dlp runtime and removes
-the confirmed external-downloader overhead from Fast video's companion-audio
-leg in the normal Windows portable build.
+This patch release refreshes the checksum-pinned yt-dlp runtime and simplifies
+Fast video media transport to native yt-dlp in the normal Windows portable
+build.
 
 ## Changes
 
@@ -14,14 +14,15 @@ leg in the normal Windows portable build.
   commit `5d5b634d8e6b41dc2891847a5ea7a5a3f569a28c`.
 - Synchronizes the active third-party notice and license payload.
 - Resolves the existing Premiere-safe selector once for Fast video. Split
-  selections download the exact H.264 MP4 video stream through aria2c at the
-  unchanged x16 profile, download the exact AAC/M4A companion stream through
-  native yt-dlp, and stream-copy both staged streams. A valid combined fallback
-  downloads its exact top-level H.264/AAC MP4 format through aria2c without a
-  companion transfer or extra merge. Both routes retain validation and final
-  promotion.
+  selections download the exact H.264 MP4 video stream and exact AAC/M4A
+  companion stream through native yt-dlp with one fragment worker, then
+  stream-copy both staged streams. A valid combined fallback downloads its
+  exact top-level H.264/AAC MP4 format through native yt-dlp without a companion
+  transfer or extra merge. Both routes reuse the same saved metadata snapshot
+  and retain validation and final promotion.
 - Preserves Stable video behavior, separate MP3 output behavior, speed limits,
-  cancellation, numbering, and BUG-01 output ownership.
+  cancellation, numbering, and BUG-01 output ownership. aria2 remains bundled
+  and unchanged for the existing separate Fast MP3 path.
 
 ## Root cause boundary
 
@@ -30,17 +31,22 @@ media path and produced HTTP 403 failures. Replacing only yt-dlp with the
 verified 2026.08.18.122307 nightly restored successful Fast aria2
 transfer/progress in the controlled comparison.
 
-This patch does not change aria2, the progress parser or queue, the Tk UI,
-BUG-01 output ownership, or BUG-02 modal behavior. Fast split-video progress
-maps the two transfer legs into one non-decreasing logical transfer span; a
-combined fallback maps its single aria2 transfer across the full transfer span.
+The later six-video comparison showed that the x16 external-downloader video
+leg did not meet the Fast performance target. Production now uses the simpler
+native saved-metadata transport directly; it does not use a throughput watchdog
+or switch transport during a download. This is not a claim of a proven aria2,
+network, or historical performance regression.
+
+This patch does not change the aria2 binary/profile where it remains in use,
+the progress queue, the Tk UI, BUG-01 output ownership, or BUG-02 modal behavior.
+Fast split-video progress maps the two native transfer legs into one
+non-decreasing logical transfer span; a combined fallback maps its single
+native transfer across the full transfer span.
 Neither route marks the item complete before its required merge, validation,
 and promotion steps finish.
 
-The accepted current performance bottleneck is
-`CURRENT_FAST_AUDIO_EXTERNAL_DOWNLOADER_OVERHEAD`. This is not a claim of a
-proven historical aria2 regression. Production performance acceptance remains
-pending operator testing of the packaged application.
+Production performance acceptance remains pending operator testing of the
+packaged application on the exact six-video batch.
 
 ## Download
 

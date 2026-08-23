@@ -42,7 +42,7 @@ def main() -> int:
     _test_command_uses_aria2_detects_only_fast()
     _test_aria2_code_22_helper_is_video_only()
     _test_authenticated_extract_strips_aria2()
-    _test_saved_media_transfer_retains_aria2()
+    _test_saved_fast_video_media_uses_native_ytdlp()
     _test_fast_uses_retry_pipeline()
     _test_fast_uses_isolated_cookie_copy()
     _test_fast_uses_lookahead()
@@ -309,20 +309,32 @@ def _test_authenticated_extract_strips_aria2() -> None:
     _assert("--write-info-json" in extract_command, "Metadata extraction missed write-info-json")
 
 
-def _test_saved_media_transfer_retains_aria2() -> None:
+def _test_saved_fast_video_media_uses_native_ytdlp() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         paths = _runtime_paths(root)
         command = _fast_video_command(root, paths)
         info_json_path = root / "media.info.json"
-        media_command = downloader._build_infojson_media_download_command(command, info_json_path)
+        selection = downloader._HybridFormatSelection(
+            kind="combined",
+            video_format_id="22",
+            audio_format_id=None,
+            video_bytes=100,
+            audio_bytes=None,
+            duration_seconds=10.0,
+        )
+        media_command, audio_command = downloader._build_fast_hybrid_media_commands(
+            command,
+            info_json_path,
+            selection,
+            root,
+        )
 
-    _assert(_option_value(media_command, "--downloader") == str(paths.aria2), "Saved-media transfer lost aria2")
-    _assert(downloader._command_uses_aria2(media_command), "Saved-media transfer was not aria2-backed")
-    _assert(
-        _option_value(media_command, "--downloader-args") == ARIA2_FAST_DOWNLOADER_ARGS,
-        "Saved-media transfer lost aria2 profile",
-    )
+    _assert(audio_command is None, "Combined saved-media transfer invented companion audio")
+    _assert("--downloader" not in media_command, "Saved Fast video retained aria2")
+    _assert("--downloader-args" not in media_command, "Saved Fast video retained aria2 args")
+    _assert(not downloader._command_uses_aria2(media_command), "Saved Fast video was aria2-backed")
+    _assert(_option_value(media_command, "-N") == "1", "Saved Fast video did not use native -N 1")
     _assert(
         _option_value(media_command, "--load-info-json") == str(info_json_path),
         "Saved-media transfer missed load-info-json",
@@ -399,8 +411,11 @@ def _test_fast_uses_retry_pipeline() -> None:
     _assert("--downloader" not in calls[0][1], "Stable retry command unexpectedly had aria2")
     _assert("--write-info-json" in calls[1][1], "Fast metadata extraction was not routed through retries")
     _assert("--downloader" not in calls[1][1], "Fast metadata extraction used aria2")
-    _assert("--downloader" in calls[2][1], "Fast video transport missed aria2")
+    _assert("--downloader" not in calls[2][1], "Fast video transport retained aria2")
+    _assert("--downloader-args" not in calls[2][1], "Fast video transport retained aria2 args")
+    _assert(_option_value(calls[2][1], "-N") == "1", "Fast video transport did not use native -N 1")
     _assert("--downloader" not in calls[3][1], "Fast companion audio transport used aria2")
+    _assert(_option_value(calls[3][1], "-N") == "1", "Fast companion audio did not use native -N 1")
     _assert(_option_value(calls[2][1], "--load-info-json") == _option_value(calls[3][1], "--load-info-json"), "Fast transports used different snapshots")
 
 
@@ -599,10 +614,10 @@ def _test_runtime_logs_describe_engine_only_difference() -> None:
     _assert(validation.available, "Fast runtime validation did not succeed")
     text = "\n".join(logs)
     for expected in (
-        "Download engine: aria2c accelerated video transfer with native companion audio",
+        "Download engine: native yt-dlp Fast video transport; aria2c retained for separate MP3",
         "Fast pipeline: one metadata snapshot, split video/audio transfer, stream-copy merge, validation and promotion.",
         "Fast format: MP4 H.264/AAC only, max 1080p.",
-        "aria2c profile: connections=16 splits=16 jobs=16 piece=1M",
+        "Fast video transport: native yt-dlp with one fragment worker.",
         "Fast post-processing: merge/remux only; no full video transcode.",
     ):
         _assert(expected in text, f"Fast runtime log missing: {expected}")

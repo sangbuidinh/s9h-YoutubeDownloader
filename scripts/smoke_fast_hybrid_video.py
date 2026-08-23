@@ -13,14 +13,13 @@ if str(REPO_ROOT) not in sys.path:
 from core import downloader
 from core.download_process import DownloadController
 from core.downloader import (
-    ARIA2_FAST_DOWNLOADER_ARGS,
     DOWNLOAD_ENGINE_ARIA2_FAST,
     DOWNLOAD_ENGINE_STABLE,
     DownloadCancelled,
     DownloadError,
     DownloadOptions,
 )
-from core.progress_status import TRANSFER_SOURCE_ARIA2, TRANSFER_SOURCE_YTDLP, ParsedTransferProgress, STAGE_MERGING
+from core.progress_status import TRANSFER_SOURCE_YTDLP, STAGE_MERGING
 
 
 VIDEO_ID = "video-id"
@@ -117,9 +116,12 @@ def _test_fast_video_uses_one_snapshot_and_split_transports() -> None:
         _assert("--skip-download" in extraction, "Metadata extraction did not skip media")
         _assert("--downloader" not in extraction, "Metadata extraction used aria2")
         _assert(_option_value(video, "--load-info-json") == _option_value(audio, "--load-info-json"), "Media legs used different snapshots")
-        _assert(_option_value(video, "--downloader") == str(paths.aria2), "Video leg did not use aria2")
-        _assert(_option_value(video, "--downloader-args") == ARIA2_FAST_DOWNLOADER_ARGS, "Video aria2 settings changed")
+        _assert("--downloader" not in video, "Video leg retained an external downloader")
+        _assert("--downloader-args" not in video, "Video leg retained external downloader args")
+        _assert(_option_value(video, "-N") == "1", "Video leg did not use native -N 1")
         _assert("--downloader" not in audio, "Companion audio used aria2")
+        _assert("--downloader-args" not in audio, "Companion audio retained external downloader args")
+        _assert(_option_value(audio, "-N") == "1", "Companion audio did not use native -N 1")
         _assert(not any(value.startswith("https://") for value in video), "Video leg retained a normal extractor URL")
         _assert(not any(value.startswith("https://") for value in audio), "Audio leg retained a normal extractor URL")
         _assert(_option_value(video, "--limit-rate") == "2M", "Video speed limit was lost")
@@ -164,12 +166,14 @@ def _test_fast_video_preserves_combined_fallback() -> None:
             output_path = Path(output_template.replace("%(ext)s", "mp4"))
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_bytes(b"combined")
-            downloader._start_progress_attempt(TRANSFER_SOURCE_ARIA2)
-            downloader._emit_aria2_progress(
-                ParsedTransferProgress(source=TRANSFER_SOURCE_ARIA2, percent=0.0, speed_text="")
+            downloader._start_progress_attempt(TRANSFER_SOURCE_YTDLP)
+            downloader._emit_ytdlp_progress_from_line(
+                "[download]   0.0% of 10.00MiB at 1.00MiB/s ETA 00:10",
+                TRANSFER_SOURCE_YTDLP,
             )
-            downloader._emit_aria2_progress(
-                ParsedTransferProgress(source=TRANSFER_SOURCE_ARIA2, percent=100.0, speed_text="")
+            downloader._emit_ytdlp_progress_from_line(
+                "[download] 100.0% of 10.00MiB at 1.00MiB/s ETA 00:00",
+                TRANSFER_SOURCE_YTDLP,
             )
 
         def fake_validate(source, log, strict, cancel_controller=None):
@@ -211,8 +215,9 @@ def _test_fast_video_preserves_combined_fallback() -> None:
         _assert(len(media_commands) == 1, f"Combined fallback started extra media transfers: {commands}")
         media = media_commands[0]
         _assert(_option_value(media, "-f") == COMBINED_FORMAT_ID, f"Combined exact format ID changed: {media}")
-        _assert(_option_value(media, "--downloader") == str(paths.aria2), "Combined fallback did not use aria2")
-        _assert(_option_value(media, "--downloader-args") == ARIA2_FAST_DOWNLOADER_ARGS, "Combined aria2 settings changed")
+        _assert("--downloader" not in media, "Combined fallback retained an external downloader")
+        _assert("--downloader-args" not in media, "Combined fallback retained external downloader args")
+        _assert(_option_value(media, "-N") == "1", "Combined fallback did not use native -N 1")
         _assert(_option_value(media, "--limit-rate") == "2M", "Combined speed limit was lost")
         _assert(not any(value.startswith("https://") for value in media), "Combined fallback retained a normal extractor URL")
         _assert(_option_value(media, "--load-info-json") == _option_value(extraction_commands[0], "-o").replace("%(ext)s", "info.json"), "Combined media did not reuse its extraction snapshot")
@@ -322,13 +327,10 @@ def _test_hybrid_progress_is_stage_correct_and_non_decreasing() -> None:
             percent_end=90.0,
             start_message="Downloading video",
         )
-        downloader._start_progress_attempt(TRANSFER_SOURCE_ARIA2)
-        downloader._emit_aria2_progress(
-            ParsedTransferProgress(
-                source=TRANSFER_SOURCE_ARIA2,
-                percent=100.0,
-                speed_text="8MiB/s",
-            )
+        downloader._start_progress_attempt(TRANSFER_SOURCE_YTDLP)
+        downloader._emit_ytdlp_progress_from_line(
+            "[download] 100.0% of 100.00MiB at 8.00MiB/s ETA 00:00",
+            TRANSFER_SOURCE_YTDLP,
         )
         downloader._set_current_progress_stage(
             "Companion audio",
