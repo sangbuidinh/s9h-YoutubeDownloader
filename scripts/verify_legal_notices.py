@@ -158,6 +158,7 @@ GITATTRIBUTES_PATH = ".gitattributes"
 GITATTRIBUTES_LINES = (
     "/.gitattributes text eol=lf",
     "/README.md text eol=lf",
+    "/THIRD_PARTY_NOTICES.md text eol=lf",
     "/docs/source-kit-feasibility.md text eol=lf",
     "/docs/sbom-generator-feasibility.md text eol=lf",
     "/docs/release-sbom.md text eol=lf",
@@ -173,6 +174,15 @@ GITATTRIBUTES_LINES = (
     "/schemas/spdx-2.3/spdx-schema.json -text",
     "/schemas/spdx-2.3/LICENSE -text",
     "/schemas/spdx-2.3/IDENTITY.json text eol=lf",
+    "/scripts/verify_aria2_primary_source_evidence.py text eol=lf",
+    "/scripts/verify_ffmpeg_codec_primary_source_evidence.py text eol=lf",
+    "/scripts/verify_ffmpeg_hardware_system_evidence.py text eol=lf",
+    "/scripts/verify_ffmpeg_remaining_library_evidence.py text eol=lf",
+    "/scripts/verify_ffmpeg_support_primary_source_evidence.py text eol=lf",
+    "/scripts/verify_release_legal_gate.py text eol=lf",
+    "/scripts/verify_release_legal_payload.py text eol=lf",
+    "/scripts/verify_source_correspondence.py text eol=lf",
+    "/scripts/verify_source_kit_feasibility.py text eol=lf",
     "/scripts/vendor-notices/fastjsonschema-2.21.2-LICENSE.txt -text -whitespace",
 )
 GITATTRIBUTES_BYTES = ("\n".join(GITATTRIBUTES_LINES) + "\n").encode("utf-8")
