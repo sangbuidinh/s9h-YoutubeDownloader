@@ -16,7 +16,7 @@ from ui import main_window
 
 
 def main() -> int:
-    _test_download_items_passes_controller_to_summary()
+    _test_runtime_summary_wrapper_passes_controller()
     _test_active_probe_registration()
     _test_cancel_hanging_version_probe()
     _test_no_next_probe_after_cancel()
@@ -31,29 +31,19 @@ def main() -> int:
     return 0
 
 
-def _test_download_items_passes_controller_to_summary() -> None:
+def _test_runtime_summary_wrapper_passes_controller() -> None:
     controller = DownloadController()
     seen = []
-    old_validate = downloader.validate_download_environment
     old_summary = downloader._log_runtime_tool_summary
     try:
-        downloader.validate_download_environment = lambda _options: None
-
         def summary(options, _log, cancel_controller=None):
             seen.append((options, cancel_controller))
 
         downloader._log_runtime_tool_summary = summary
         with TemporaryDirectory(prefix="probe_summary_controller_") as temp_dir:
             options = DownloadOptions(str(Path(temp_dir)), "channel", "Channel", file_start_number=1)
-            downloader.download_items(
-                [],
-                options,
-                lambda _message: None,
-                lambda _video: None,
-                cancel_controller=controller,
-            )
+            downloader._call_runtime_tool_summary(options, lambda _message: None, controller)
     finally:
-        downloader.validate_download_environment = old_validate
         downloader._log_runtime_tool_summary = old_summary
 
     _assert(len(seen) == 1, f"summary call count was wrong: {seen}")

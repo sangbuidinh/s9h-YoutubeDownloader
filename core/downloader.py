@@ -148,13 +148,11 @@ from core.ytdlp_commands import (
     _safe_temp_stem,
 )
 from core.state_store import (
-    STATUS_NOT_DOWNLOADED,
     get_effective_status,
     get_output_path_owners,
     get_video_entry,
     is_mode_complete,
     missing_parts_for_mode,
-    part_status_from_entry,
     reconcile_downloaded_item_state,
     update_video_part_state,
 )
@@ -1246,35 +1244,27 @@ def _part_output_path(paths: OutputPaths, part: str) -> Path:
     raise OutputOwnershipError("Unsupported output part ownership request.")
 
 
+def _parts_requested_by_video_state(
+    options: DownloadOptions,
+    video,
+    mode_parts: tuple[str, ...],
+) -> tuple[str, ...]:
+    entry = get_video_entry(options.channel_id, video.video_id)
+    state_missing_parts = set(missing_parts_for_mode(entry, options.download_mode))
+    return tuple(part for part in mode_parts if part in state_missing_parts)
+
+
 def _missing_parts_for_current_paths(
     options: DownloadOptions,
     video,
     paths: OutputPaths,
     mode_parts: tuple[str, ...],
 ) -> tuple[str, ...]:
-    entry = get_video_entry(options.channel_id, video.video_id)
+    requested_parts = _parts_requested_by_video_state(options, video, mode_parts)
     missing: list[str] = []
-    for part in mode_parts:
+    for part in requested_parts:
         ready = _part_output_ready(paths, part)
-        current_status = part_status_from_entry(entry, part)
         if ready:
-            if current_status != STATUS_DOWNLOADED:
-                try:
-                    update_video_part_state(
-                        options.channel_id,
-                        options.channel_name,
-                        options.base_folder,
-                        video,
-                        paths,
-                        part,
-                        STATUS_DOWNLOADED,
-                        options.download_mode,
-                    )
-                except OSError:
-                    pass
-            continue
-
-        if current_status == STATUS_DOWNLOADED:
             try:
                 update_video_part_state(
                     options.channel_id,
@@ -1283,11 +1273,12 @@ def _missing_parts_for_current_paths(
                     video,
                     paths,
                     part,
-                    STATUS_NOT_DOWNLOADED,
+                    STATUS_DOWNLOADED,
                     options.download_mode,
                 )
             except OSError:
                 pass
+            continue
         missing.append(part)
 
     return tuple(missing)
@@ -1336,9 +1327,9 @@ def download_items(
         options.download_mode,
         options.channel_id,
     )
-    _call_runtime_tool_summary(options, log, cancel_controller)
-    aria2_validation = _prepare_media_downloader_runtime(options, log, cancel_controller)
     engine = _normalize_download_engine(options.download_engine)
+    runtime_initialized = False
+    aria2_validation = None
     downloaded_count = 0
     failed_count = 0
     skipped_count = 0
@@ -1373,18 +1364,28 @@ def download_items(
         log(f"[INFO] Assigned output number: {_format_output_number(assigned_number)}")
         log(f"[INFO] Mode: {options.download_mode}")
         try:
-            _validate_output_paths(paths, mode_parts)
+            requested_parts = _parts_requested_by_video_state(options, video, mode_parts)
+            if not requested_parts:
+                entry = get_video_entry(options.channel_id, video.video_id)
+                log(f"[SKIP] {video.video_id} marked as downloaded in SQLite state")
+                _emit_progress(progress_callback, "Skipped", video, index, video_total)
+                skipped_count += 1
+                video.status = get_effective_status(entry, options.download_mode)
+                status_callback(video)
+                continue
+
+            _validate_output_paths(paths, requested_parts)
             reservation = reserve_output_paths(
                 paths.channel_dir,
                 options.channel_id,
                 str(video.video_id),
-                {part: _part_output_path(paths, part) for part in mode_parts},
+                {part: _part_output_path(paths, part) for part in requested_parts},
                 legacy_owner_lookup=get_output_path_owners,
                 cancel_check=lambda: _raise_if_cancelled(cancel_controller),
             )
             reservation_token = _OUTPUT_RESERVATION.set(reservation)
 
-            missing_parts = _missing_parts_for_current_paths(options, video, paths, mode_parts)
+            missing_parts = _missing_parts_for_current_paths(options, video, paths, requested_parts)
             if not missing_parts:
                 entry = get_video_entry(options.channel_id, video.video_id)
                 log(f"[SKIP] {stem} already complete for current numbered paths")
@@ -1393,6 +1394,11 @@ def download_items(
                 video.status = get_effective_status(entry, options.download_mode)
                 status_callback(video)
                 continue
+
+            if not runtime_initialized:
+                _call_runtime_tool_summary(options, log, cancel_controller)
+                aria2_validation = _prepare_media_downloader_runtime(options, log, cancel_controller)
+                runtime_initialized = True
 
             with _media_staging_directory(paths.channel_dir, video.video_id, log) as temp_path:
                 for part in missing_parts:
