@@ -13,7 +13,7 @@ The application uses the YouTube Data API to list channel uploads and yt-dlp plu
 - Filters videos by title, downloaded state, and configurable minimum or maximum duration.
 - Supports individual selection, visible-row selection, and date-based selection.
 - Requires a positive File start number and creates numbered output filenames.
-- Provides the default Stable yt-dlp transfer engine and an optional Fast aria2c engine.
+- Provides the default Stable yt-dlp transfer engine and an optional Fast optimized transport: native yt-dlp for video and aria2c for separate MP3 downloads.
 - Downloads video, MP3 audio, and thumbnails through three explicit modes.
 - Supports a user-selected cookies file and a Local Cookie Bridge file source.
 - Stores video-scoped download state in a local SQLite database.
@@ -112,21 +112,24 @@ Thumbnail downloads try the URL returned by the YouTube Data API first and use y
 
 Stable is the default, compatibility-first engine. yt-dlp handles media transfer internally with one fragment connection. Format selection, cookie isolation, retries, merge/remux, validation, and atomic promotion use the same policy as Fast.
 
-### Fast - aria2c experimental
+### Fast - optimized transport (experimental)
 
-Fast supplies aria2c to yt-dlp for media transfer with this current profile:
+Fast video uses the same Premiere-safe selection policy as Stable. It reuses the saved metadata and exact selected formats, then transfers media through native yt-dlp with one fragment worker (`-N 1`, equivalent to `-N1`):
+
+- Split selection transfers the exact selected H.264/MP4 video stream and exact selected AAC/M4A companion stream separately through native yt-dlp, then stream-copy merges them.
+- Combined fallback transfers the exact selected combined H.264/AAC MP4 through native yt-dlp without an additional merge.
+
+Video output continues through the existing validation and atomic-promotion stages. Cookie handling, retries, progress staging, sequential per-video order, and the no-unrestricted-transcoding policy remain unchanged.
+
+Separate Fast MP3 downloads still use aria2c with the current profile:
 
 ```text
 -x 16 -s 16 -j 16 -k 1M
 ```
 
-Actual speed depends on the video, YouTube CDN route, network, and public IP behavior. Fast is not guaranteed to outperform Stable.
+Native yt-dlp progress represents the current Fast video transfer leg, while aria2 percentage applies only to the separate Fast MP3 transport. Transfer progress does not represent completion of the full logical pipeline; merge, validation, promotion, MP3 extraction, thumbnail work, and state updates may continue afterward.
 
-Fast changes the media-transfer process only. It retains the same Premiere-safe format selector, cookies workflow, fallback handling, FFmpeg merge/remux, ffprobe validation, atomic promotion, and sequential per-video order as Stable. It does not perform unrestricted video transcoding.
-
-The percentage reported from aria2c represents transfer progress, not completion of the full logical pipeline. Merge, validation, promotion, MP3 extraction, thumbnail work, and state updates may continue after transfer reaches 100%.
-
-If Fast is selected but `aria2c.exe` is missing or cannot start, the batch is blocked with a tool error. Select Stable for a later batch or repair the portable runtime installation.
+Actual speed depends on the video, YouTube CDN route, network, and public IP behavior. Fast is not guaranteed to outperform Stable. Selecting Fast still validates `aria2c.exe` when the batch runtime is initialized because the Fast configuration retains aria2 for separate MP3 transport. If aria2 is missing or cannot start, the Fast batch is blocked even though Fast video media legs use native yt-dlp.
 
 ## Output Compatibility
 

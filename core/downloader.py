@@ -376,6 +376,7 @@ class _VideoDownloadTiming:
     engine: str
     logical_started_at: float
     attempts: list[_YtdlpAttemptTiming] = field(default_factory=list)
+    explicit_prepare_seconds: float = 0.0
     retry_wait_seconds: float = 0.0
     explicit_merge_seconds: float = 0.0
     validation_seconds: float = 0.0
@@ -396,6 +397,9 @@ class _VideoDownloadTiming:
     def add_retry_wait(self, seconds: int | float) -> None:
         self.retry_wait_seconds += max(0.0, float(seconds))
 
+    def add_prepare(self, started_at: float) -> None:
+        self.explicit_prepare_seconds += max(0.0, float(self.clock()) - float(started_at))
+
     def add_validation(self, started_at: float) -> None:
         self.validation_seconds += max(0.0, float(self.clock()) - float(started_at))
 
@@ -410,7 +414,8 @@ class _VideoDownloadTiming:
             self.logical_finished_at = float(self.clock())
 
     def stage_totals(self) -> tuple[float, float, float]:
-        prepare = transfer = merge = 0.0
+        prepare = self.explicit_prepare_seconds
+        transfer = merge = 0.0
         for attempt in self.attempts:
             current_prepare, current_transfer, current_merge = attempt.stage_seconds()
             prepare += current_prepare
@@ -3197,12 +3202,18 @@ def _run_ytdlp_with_retries(
                 attempt_part = _current_ytdlp_part()
                 log(_ytdlp_start_log_line(prepared_attempt.command, options, attempt_number, attempt_part))
                 video_timing = _current_video_download_timing()
+                counts_as_media_attempt = "--skip-download" not in prepared_attempt.command
+                explicit_prepare_started = (
+                    float(video_timing.clock())
+                    if video_timing is not None and not counts_as_media_attempt
+                    else None
+                )
                 attempt_timing = (
                     video_timing.start_attempt(
                         attempt_number,
                         _transfer_source_for_command(prepared_attempt.command),
                     )
-                    if video_timing is not None
+                    if video_timing is not None and counts_as_media_attempt
                     else None
                 )
                 with _ytdlp_attempt_timing_scope(attempt_timing):
@@ -3215,6 +3226,9 @@ def _run_ytdlp_with_retries(
                     else:
                         if attempt_timing is not None:
                             attempt_timing.finish(True)
+                    finally:
+                        if video_timing is not None and explicit_prepare_started is not None:
+                            video_timing.add_prepare(explicit_prepare_started)
             if (
                 SHOW_TECHNICAL_WARNINGS
                 and stderr
