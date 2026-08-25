@@ -1254,6 +1254,17 @@ def _parts_requested_by_video_state(
     return tuple(part for part in mode_parts if part in state_missing_parts)
 
 
+def _reservation_parts_for_requested_parts(
+    options: DownloadOptions,
+    mode_parts: tuple[str, ...],
+    requested_parts: tuple[str, ...],
+) -> tuple[str, ...]:
+    reservation_parts = set(requested_parts)
+    if options.download_mode == MODE_VIDEO_AUDIO_THUMB and PART_AUDIO in reservation_parts:
+        reservation_parts.add(PART_VIDEO)
+    return tuple(part for part in mode_parts if part in reservation_parts)
+
+
 def _missing_parts_for_current_paths(
     options: DownloadOptions,
     video,
@@ -1374,12 +1385,17 @@ def download_items(
                 status_callback(video)
                 continue
 
-            _validate_output_paths(paths, requested_parts)
+            reservation_parts = _reservation_parts_for_requested_parts(
+                options,
+                mode_parts,
+                requested_parts,
+            )
+            _validate_output_paths(paths, reservation_parts)
             reservation = reserve_output_paths(
                 paths.channel_dir,
                 options.channel_id,
                 str(video.video_id),
-                {part: _part_output_path(paths, part) for part in requested_parts},
+                {part: _part_output_path(paths, part) for part in reservation_parts},
                 legacy_owner_lookup=get_output_path_owners,
                 cancel_check=lambda: _raise_if_cancelled(cancel_controller),
             )
