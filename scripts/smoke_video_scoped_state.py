@@ -11,7 +11,15 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core import db_store, downloader, state_store
-from core.download_modes import MODE_VIDEO_THUMB, PART_THUMB, PART_VIDEO, required_parts
+from core.download_modes import (
+    MODE_AUDIO_THUMB,
+    MODE_VIDEO_AUDIO_THUMB,
+    MODE_VIDEO_THUMB,
+    PART_AUDIO,
+    PART_THUMB,
+    PART_VIDEO,
+    required_parts,
+)
 from core.file_status import apply_statuses
 
 
@@ -25,9 +33,17 @@ FOLDER_B = "D:/B"
 def main() -> int:
     _configure_stdio()
     _test_downloaded_video_status_is_global()
-    _test_downloader_redownloads_when_numbered_paths_are_missing()
+    _test_downloader_skips_downloaded_across_number_and_folder_changes()
+    _test_downloaded_skip_precedes_output_ownership()
+    _test_selected_row_numbering_survives_skip()
     _test_manual_status_is_video_level()
     _test_redownload_clears_manual_override_globally()
+    _test_manual_missing_audio_remains_part_scoped()
+    _test_audio_repair_reservation_part_matrix()
+    _test_audio_repair_downloads_reserved_video_prerequisite()
+    _test_audio_repair_rejects_foreign_video_prerequisite()
+    _test_audio_repair_reuses_same_video_prerequisite()
+    _test_direct_audio_mode_does_not_reserve_video_prerequisite()
     _test_v3_duplicate_folder_rows_migrate_to_one_video()
     print("video-scoped state smoke tests passed")
     return 0
@@ -52,26 +68,112 @@ def _test_downloaded_video_status_is_global() -> None:
             _assert(folder_b_video.status == state_store.STATUS_DOWNLOADED, "different Save folder did not show downloaded")
 
 
-def _test_downloader_redownloads_when_numbered_paths_are_missing() -> None:
+def _test_downloader_skips_downloaded_across_number_and_folder_changes() -> None:
+    for engine in (downloader.DOWNLOAD_ENGINE_STABLE, downloader.DOWNLOAD_ENGINE_ARIA2_FAST):
+        for mode in (MODE_VIDEO_THUMB, MODE_VIDEO_AUDIO_THUMB):
+            with _temp_runtime() as paths:
+                with _patched_db_file(paths["db_path"]):
+                    old_paths = _seed_downloaded(
+                        str(paths["folder_a"]),
+                        mode=mode,
+                        stem="001 Same Video",
+                    )
+                    old_bytes = _write_old_outputs(old_paths, mode)
+                    logs: list[str] = []
+                    calls = _empty_calls()
+                    statuses: list[str] = []
+                    with _patched_downloader_transfers(calls):
+                        downloader.download_items(
+                            [_video()],
+                            _download_options(
+                                str(paths["folder_b"]),
+                                start_number=51,
+                                engine=engine,
+                                mode=mode,
+                            ),
+                            logs.append,
+                            lambda video_arg: statuses.append(video_arg.status),
+                            cancel_controller=downloader.DownloadController(),
+                        )
+
+                    entry = state_store.get_video_entry(CHANNEL_ID, VIDEO_ID)
+                    new_paths = _paths_for(str(paths["folder_b"]), "051 Same Video")
+                    _assert(
+                        any("[SKIP] same-video marked as downloaded in SQLite state" in line for line in logs),
+                        f"{engine}/{mode} did not log the video-scoped skip",
+                    )
+                    _assert(calls == _empty_calls(), f"{engine}/{mode} invoked transfer/runtime work: {calls}")
+                    _assert(_count_items(paths["db_path"]) == 1, f"{engine}/{mode} created another video row")
+                    _assert(
+                        state_store.get_effective_status(entry, mode) == state_store.STATUS_DOWNLOADED,
+                        f"{engine}/{mode} downgraded downloaded state",
+                    )
+                    _assert(statuses and statuses[-1] == state_store.STATUS_DOWNLOADED, f"{engine}/{mode} callback status changed")
+                    _assert(_read_outputs(old_paths, mode) == old_bytes, f"{engine}/{mode} changed old outputs")
+                    _assert(not any(path.exists() for path in _part_paths(new_paths, mode)), f"{engine}/{mode} created new outputs")
+
+
+def _test_downloaded_skip_precedes_output_ownership() -> None:
     with _temp_runtime() as paths:
         with _patched_db_file(paths["db_path"]):
-            _seed_downloaded(FOLDER_A)
+            _seed_downloaded(str(paths["folder_a"]), stem="001 Same Video")
+            target_paths = _paths_for(str(paths["folder_b"]), "051 Same Video")
+            _seed_downloaded(
+                str(paths["folder_b"]),
+                video=_video("other-video", "Other Video"),
+                stem="051 Same Video",
+            )
             logs: list[str] = []
-            calls = {"video": 0, "thumb": 0}
+            calls = _empty_calls()
             with _patched_downloader_transfers(calls):
                 downloader.download_items(
                     [_video()],
-                    _download_options(str(paths["folder_b"])),
+                    _download_options(str(paths["folder_b"]), start_number=51),
                     logs.append,
                     lambda _video_arg: None,
                     cancel_controller=downloader.DownloadController(),
                 )
 
+            ownership_errors = [line for line in logs if line.startswith("[ERROR]")]
+            _assert(not ownership_errors, f"downloaded skip reached output ownership: {ownership_errors}")
             _assert(
-                "[SKIP] same-video marked as downloaded in SQLite state" not in logs,
-                "download_items skipped old state even though current numbered files were missing",
+                any("[SKIP] same-video marked as downloaded in SQLite state" in line for line in logs),
+                "downloaded item was not skipped before ownership",
             )
-            _assert(calls == {"video": 1, "thumb": 1}, "download_items did not rebuild missing numbered files")
+            _assert(calls == _empty_calls(), f"ownership scenario invoked work for skipped video: {calls}")
+            _assert(not any(path.exists() for path in _part_paths(target_paths, MODE_VIDEO_THUMB)), "skip created owned outputs")
+
+
+def _test_selected_row_numbering_survives_skip() -> None:
+    with _temp_runtime() as paths:
+        with _patched_db_file(paths["db_path"]):
+            first = _video("first-video", "First Video")
+            second = _video("second-video", "Second Video")
+            _seed_downloaded(
+                str(paths["folder_a"]),
+                video=first,
+                stem="001 First Video",
+            )
+            logs: list[str] = []
+            calls = _empty_calls()
+            with _patched_downloader_transfers(calls):
+                downloader.download_items(
+                    [first, second],
+                    _download_options(str(paths["folder_b"]), start_number=101),
+                    logs.append,
+                    lambda _video_arg: None,
+                    cancel_controller=downloader.DownloadController(),
+                )
+
+            second_paths = _paths_for(str(paths["folder_b"]), "102 Second Video")
+            compacted_paths = _paths_for(str(paths["folder_b"]), "101 Second Video")
+            _assert(second_paths.video_path.exists(), "actual download did not retain selected-row number 102")
+            _assert(second_paths.thumb_path.exists(), "actual thumbnail did not retain selected-row number 102")
+            _assert(not compacted_paths.video_path.exists(), "download numbering compacted after a skipped row")
+            _assert(not compacted_paths.thumb_path.exists(), "thumbnail numbering compacted after a skipped row")
+            _assert(calls["video"] == 1 and calls["thumb"] == 1, f"unexpected selected-row transfer calls: {calls}")
+            _assert("[INFO] Assigned output number: 101" in logs, "skipped row did not consume number 101")
+            _assert("[INFO] Assigned output number: 102" in logs, "downloaded row did not retain number 102")
 
 
 def _test_manual_status_is_video_level() -> None:
@@ -107,7 +209,7 @@ def _test_manual_status_is_video_level() -> None:
 def _test_redownload_clears_manual_override_globally() -> None:
     with _temp_runtime() as paths:
         with _patched_db_file(paths["db_path"]):
-            _seed_downloaded(FOLDER_A)
+            _seed_downloaded(str(paths["folder_a"]), stem="001 Same Video")
             state_store.update_manual_status(
                 CHANNEL_ID,
                 CHANNEL_NAME,
@@ -117,11 +219,11 @@ def _test_redownload_clears_manual_override_globally() -> None:
             )
             _assert(_count_items(paths["db_path"]) == 1, "manual status before re-download created a separate row")
 
-            calls = {"video": 0, "thumb": 0}
+            calls = _empty_calls()
             with _patched_downloader_transfers(calls):
                 downloader.download_items(
                     [_video()],
-                    _download_options(str(paths["folder_b"])),
+                    _download_options(str(paths["folder_b"]), start_number=51),
                     lambda _message: None,
                     lambda _video_arg: None,
                     cancel_controller=downloader.DownloadController(),
@@ -134,7 +236,258 @@ def _test_redownload_clears_manual_override_globally() -> None:
                 state_store.get_effective_status(entry, MODE_VIDEO_THUMB) == state_store.STATUS_DOWNLOADED,
                 "re-download did not restore downloaded status globally",
             )
-            _assert(calls == {"video": 1, "thumb": 1}, "re-download did not run required fake downloads")
+            _assert(calls["video"] == 1, "manual reset did not re-download video")
+            _assert(calls["thumb"] == 1, "manual reset did not re-download thumbnail")
+            _assert(calls["audio"] == 0, "manual video/thumb reset unexpectedly downloaded audio")
+            _assert(calls["metadata"] == 1, "manual reset did not enter the normal video attempt path")
+            _assert(calls["runtime"] == 1 and calls["prepare"] == 1, "manual reset skipped normal runtime setup")
+
+
+def _test_manual_missing_audio_remains_part_scoped() -> None:
+    with _temp_runtime() as paths:
+        with _patched_db_file(paths["db_path"]):
+            current_paths = _seed_downloaded(
+                str(paths["folder_b"]),
+                mode=MODE_VIDEO_AUDIO_THUMB,
+                stem="051 Same Video",
+            )
+            current_paths.video_path.parent.mkdir(parents=True, exist_ok=True)
+            current_paths.video_path.write_bytes(b"ready mp4")
+            current_paths.thumb_path.parent.mkdir(parents=True, exist_ok=True)
+            current_paths.thumb_path.write_bytes(b"ready jpg")
+            if current_paths.audio_path.exists():
+                current_paths.audio_path.unlink()
+            state_store.update_manual_status(
+                CHANNEL_ID,
+                CHANNEL_NAME,
+                str(paths["folder_b"]),
+                _video(),
+                state_store.STATUS_MISSING_AUDIO,
+            )
+
+            calls = _empty_calls()
+            with _patched_downloader_transfers(calls):
+                downloader.download_items(
+                    [_video()],
+                    _download_options(
+                        str(paths["folder_b"]),
+                        start_number=51,
+                        mode=MODE_VIDEO_AUDIO_THUMB,
+                    ),
+                    lambda _message: None,
+                    lambda _video_arg: None,
+                    cancel_controller=downloader.DownloadController(),
+                )
+
+            entry = state_store.get_video_entry(CHANNEL_ID, VIDEO_ID)
+            _assert(calls["video"] == 0, f"manual missing audio re-downloaded video: {calls}")
+            _assert(calls["thumb"] == 0, f"manual missing audio re-downloaded thumbnail: {calls}")
+            _assert(calls["audio"] == 1, f"manual missing audio did not run audio behavior: {calls}")
+            _assert(
+                state_store.get_effective_status(entry, MODE_VIDEO_AUDIO_THUMB) == state_store.STATUS_DOWNLOADED,
+                "manual missing audio did not reconcile to downloaded",
+            )
+
+
+def _test_audio_repair_reservation_part_matrix() -> None:
+    video_audio_options = _download_options("", mode=MODE_VIDEO_AUDIO_THUMB)
+    video_audio_parts = required_parts(MODE_VIDEO_AUDIO_THUMB)
+    cases = (
+        ((PART_AUDIO,), (PART_VIDEO, PART_AUDIO)),
+        ((PART_AUDIO, PART_THUMB), (PART_VIDEO, PART_AUDIO, PART_THUMB)),
+        ((PART_VIDEO, PART_AUDIO), (PART_VIDEO, PART_AUDIO)),
+        ((PART_VIDEO, PART_THUMB), (PART_VIDEO, PART_THUMB)),
+    )
+    for requested_parts, expected_parts in cases:
+        actual = downloader._reservation_parts_for_requested_parts(
+            video_audio_options,
+            video_audio_parts,
+            requested_parts,
+        )
+        _assert(actual == expected_parts, f"reservation ordering changed for {requested_parts}: {actual}")
+
+    direct_audio_options = _download_options("", mode=MODE_AUDIO_THUMB)
+    direct_audio_parts = required_parts(MODE_AUDIO_THUMB)
+    actual = downloader._reservation_parts_for_requested_parts(
+        direct_audio_options,
+        direct_audio_parts,
+        (PART_AUDIO,),
+    )
+    _assert(actual == (PART_AUDIO,), f"direct audio mode added a video prerequisite: {actual}")
+
+
+def _test_audio_repair_downloads_reserved_video_prerequisite() -> None:
+    with _temp_runtime() as paths:
+        with _patched_db_file(paths["db_path"]):
+            old_paths = _seed_downloaded(
+                str(paths["folder_a"]),
+                mode=MODE_VIDEO_AUDIO_THUMB,
+                stem="001 Same Video",
+            )
+            _mark_audio_not_downloaded(str(paths["folder_a"]), old_paths)
+            current_paths = _paths_for(str(paths["folder_b"]), "051 Same Video")
+            reservations: list[tuple[str, ...]] = []
+            missing_inputs: list[tuple[str, ...]] = []
+            calls = _empty_calls()
+            logs: list[str] = []
+
+            with (
+                _capture_reservation_parts(reservations),
+                _capture_missing_part_inputs(missing_inputs),
+                _patched_downloader_transfers(calls),
+            ):
+                downloader.download_items(
+                    [_video()],
+                    _download_options(
+                        str(paths["folder_b"]),
+                        start_number=51,
+                        mode=MODE_VIDEO_AUDIO_THUMB,
+                    ),
+                    logs.append,
+                    lambda _video_arg: None,
+                    cancel_controller=downloader.DownloadController(),
+                )
+
+            entry = state_store.get_video_entry(CHANNEL_ID, VIDEO_ID)
+            _assert(
+                reservations == [(PART_VIDEO, PART_AUDIO)],
+                f"audio repair did not reserve its video prerequisite: {reservations}",
+            )
+            _assert(missing_inputs == [(PART_AUDIO,)], f"reservation parts leaked into requested work: {missing_inputs}")
+            _assert(calls["video"] == 1, f"missing video prerequisite was not downloaded once: {calls}")
+            _assert(calls["audio"] == 1, f"audio repair did not extract once: {calls}")
+            _assert(calls["thumb"] == 0, f"audio repair downloaded an unrelated thumbnail: {calls}")
+            _assert(calls["audio_sources"] == [b"fixture mp4"], f"audio repair used the wrong video source: {calls}")
+            _assert(current_paths.video_path.read_bytes() == b"fixture mp4", "video prerequisite was not promoted")
+            _assert(current_paths.audio_path.read_bytes() == b"fixture mp3", "repaired audio was not promoted")
+            _assert(not any(line.startswith("[ERROR]") for line in logs), f"audio repair logged an error: {logs}")
+            _assert(
+                state_store.get_effective_status(entry, MODE_VIDEO_AUDIO_THUMB) == state_store.STATUS_DOWNLOADED,
+                "audio repair with downloaded prerequisite did not finish downloaded",
+            )
+
+
+def _test_audio_repair_rejects_foreign_video_prerequisite() -> None:
+    with _temp_runtime() as paths:
+        with _patched_db_file(paths["db_path"]):
+            old_paths = _seed_downloaded(
+                str(paths["folder_a"]),
+                mode=MODE_VIDEO_AUDIO_THUMB,
+                stem="001 Same Video",
+            )
+            _mark_audio_not_downloaded(str(paths["folder_a"]), old_paths)
+            current_paths = _seed_downloaded(
+                str(paths["folder_b"]),
+                mode=MODE_VIDEO_THUMB,
+                video=_video("foreign-video", "Foreign Video"),
+                stem="051 Same Video",
+            )
+            current_paths.video_path.parent.mkdir(parents=True, exist_ok=True)
+            current_paths.video_path.write_bytes(b"foreign mp4")
+            reservations: list[tuple[str, ...]] = []
+            calls = _empty_calls()
+            logs: list[str] = []
+
+            with _capture_reservation_parts(reservations), _patched_downloader_transfers(calls):
+                downloader.download_items(
+                    [_video()],
+                    _download_options(
+                        str(paths["folder_b"]),
+                        start_number=51,
+                        mode=MODE_VIDEO_AUDIO_THUMB,
+                    ),
+                    logs.append,
+                    lambda _video_arg: None,
+                    cancel_controller=downloader.DownloadController(),
+                )
+
+            _assert(
+                reservations == [(PART_VIDEO, PART_AUDIO)],
+                f"foreign prerequisite was not included in the reservation attempt: {reservations}",
+            )
+            _assert(calls == _empty_calls(), f"foreign prerequisite reached transfer or extraction work: {calls}")
+            _assert(
+                any("Output filename collision" in line for line in logs),
+                f"foreign prerequisite did not fail through ownership: {logs}",
+            )
+            _assert(current_paths.video_path.read_bytes() == b"foreign mp4", "foreign video was modified")
+            _assert(not current_paths.audio_path.exists(), "audio was extracted from a foreign video")
+
+
+def _test_audio_repair_reuses_same_video_prerequisite() -> None:
+    with _temp_runtime() as paths:
+        with _patched_db_file(paths["db_path"]):
+            current_paths = _seed_downloaded(
+                str(paths["folder_b"]),
+                mode=MODE_VIDEO_AUDIO_THUMB,
+                stem="051 Same Video",
+            )
+            current_paths.video_path.parent.mkdir(parents=True, exist_ok=True)
+            current_paths.video_path.write_bytes(b"same-video mp4")
+            if current_paths.audio_path.exists():
+                current_paths.audio_path.unlink()
+            _mark_audio_not_downloaded(str(paths["folder_b"]), current_paths)
+            reservations: list[tuple[str, ...]] = []
+            calls = _empty_calls()
+
+            with _capture_reservation_parts(reservations), _patched_downloader_transfers(calls):
+                downloader.download_items(
+                    [_video()],
+                    _download_options(
+                        str(paths["folder_b"]),
+                        start_number=51,
+                        mode=MODE_VIDEO_AUDIO_THUMB,
+                    ),
+                    lambda _message: None,
+                    lambda _video_arg: None,
+                    cancel_controller=downloader.DownloadController(),
+                )
+
+            entry = state_store.get_video_entry(CHANNEL_ID, VIDEO_ID)
+            _assert(reservations == [(PART_VIDEO, PART_AUDIO)], f"same-video reservation parts changed: {reservations}")
+            _assert(calls["video"] == 0, f"same-video prerequisite was downloaded again: {calls}")
+            _assert(calls["audio"] == 1, f"same-video audio was not extracted once: {calls}")
+            _assert(calls["audio_sources"] == [b"same-video mp4"], f"same-video source was not reused: {calls}")
+            _assert(current_paths.video_path.read_bytes() == b"same-video mp4", "same-video prerequisite was modified")
+            _assert(
+                state_store.get_effective_status(entry, MODE_VIDEO_AUDIO_THUMB) == state_store.STATUS_DOWNLOADED,
+                "same-video audio repair did not finish downloaded",
+            )
+
+
+def _test_direct_audio_mode_does_not_reserve_video_prerequisite() -> None:
+    with _temp_runtime() as paths:
+        with _patched_db_file(paths["db_path"]):
+            current_paths = _seed_downloaded(
+                str(paths["folder_b"]),
+                mode=MODE_AUDIO_THUMB,
+                stem="051 Same Video",
+            )
+            _mark_audio_not_downloaded(
+                str(paths["folder_b"]),
+                current_paths,
+                mode=MODE_AUDIO_THUMB,
+            )
+            reservations: list[tuple[str, ...]] = []
+            calls = _empty_calls()
+
+            with _capture_reservation_parts(reservations), _patched_downloader_transfers(calls):
+                downloader.download_items(
+                    [_video()],
+                    _download_options(
+                        str(paths["folder_b"]),
+                        start_number=51,
+                        mode=MODE_AUDIO_THUMB,
+                    ),
+                    lambda _message: None,
+                    lambda _video_arg: None,
+                    cancel_controller=downloader.DownloadController(),
+                )
+
+            _assert(reservations == [(PART_AUDIO,)], f"direct audio mode reserved a video prerequisite: {reservations}")
+            _assert(calls["video"] == 0, f"direct audio mode downloaded video: {calls}")
+            _assert(calls["audio"] == 1, f"direct audio mode did not download audio once: {calls}")
+            _assert(not current_paths.video_path.exists(), "direct audio mode created a video prerequisite")
 
 
 def _test_v3_duplicate_folder_rows_migrate_to_one_video() -> None:
@@ -156,10 +509,16 @@ def _test_v3_duplicate_folder_rows_migrate_to_one_video() -> None:
         )
 
 
-def _seed_downloaded(save_base_folder: str) -> None:
-    video = _video()
-    paths = _paths_for(save_base_folder, video.sanitized_filename_base)
-    for part in (PART_VIDEO, PART_THUMB):
+def _seed_downloaded(
+    save_base_folder: str,
+    *,
+    mode: str = MODE_VIDEO_THUMB,
+    video=None,
+    stem: str | None = None,
+):
+    video = video or _video()
+    paths = _paths_for(save_base_folder, stem or video.sanitized_filename_base)
+    for part in required_parts(mode):
         state_store.update_video_part_state(
             CHANNEL_ID,
             CHANNEL_NAME,
@@ -168,8 +527,27 @@ def _seed_downloaded(save_base_folder: str) -> None:
             paths,
             part,
             state_store.STATUS_DOWNLOADED,
-            MODE_VIDEO_THUMB,
+            mode,
         )
+    return paths
+
+
+def _mark_audio_not_downloaded(
+    save_base_folder: str,
+    paths,
+    *,
+    mode: str = MODE_VIDEO_AUDIO_THUMB,
+) -> None:
+    state_store.update_video_part_state(
+        CHANNEL_ID,
+        CHANNEL_NAME,
+        save_base_folder,
+        _video(),
+        paths,
+        PART_AUDIO,
+        state_store.STATUS_NOT_DOWNLOADED,
+        mode,
+    )
 
 
 def _seed_duplicate_rows(db_path: Path) -> None:
@@ -327,10 +705,15 @@ def _count_items(db_path: Path) -> int:
 
 
 @contextmanager
-def _patched_downloader_transfers(calls: dict[str, int]):
+def _patched_downloader_transfers(calls: dict[str, object]):
     old_download_video = downloader._download_video
+    old_download_audio = downloader._download_audio
     old_download_thumbnail = downloader._download_thumbnail
-    old_log_runtime_tool_summary = downloader._log_runtime_tool_summary
+    old_extract_mp3_from_video = downloader._extract_mp3_from_video
+    old_video_attempt_state_for_batch = downloader._video_attempt_state_for_batch
+    old_call_runtime_tool_summary = downloader._call_runtime_tool_summary
+    old_prepare_media_downloader_runtime = downloader._prepare_media_downloader_runtime
+    old_premiere_safe_ready = downloader._premiere_safe_mp4_ready_for_download
     old_validate_download_environment = downloader.validate_download_environment
 
     def fake_download_video(
@@ -345,8 +728,35 @@ def _patched_downloader_transfers(calls: dict[str, int]):
         _aria2_validation=None,
     ):
         calls["video"] += 1
-        final_path.parent.mkdir(parents=True, exist_ok=True)
-        final_path.write_bytes(b"mp4")
+        staged_path = Path(_temp_dir) / "fixture-video.mp4"
+        staged_path.write_bytes(b"fixture mp4")
+        downloader._atomic_promote_with_retry(
+            staged_path,
+            final_path,
+            replace_existing=True,
+            cancel_controller=_cancel_controller,
+        )
+
+    def fake_download_audio(
+        _video_id,
+        _stem,
+        _temp_dir,
+        final_path,
+        _options,
+        _log,
+        _cancel_controller=None,
+        _cookie_retry_state=None,
+        _aria2_validation=None,
+    ):
+        calls["audio"] += 1
+        staged_path = Path(_temp_dir) / "fixture-direct-audio.mp3"
+        staged_path.write_bytes(b"fixture mp3")
+        downloader._atomic_promote_with_retry(
+            staged_path,
+            final_path,
+            replace_existing=True,
+            cancel_controller=_cancel_controller,
+        )
 
     def fake_download_thumbnail(
         _video,
@@ -362,17 +772,87 @@ def _patched_downloader_transfers(calls: dict[str, int]):
         final_path.parent.mkdir(parents=True, exist_ok=True)
         final_path.write_bytes(b"jpg")
 
+    def fake_extract_mp3_from_video(
+        _video_path,
+        _temp_dir,
+        final_path,
+        _log,
+        _cancel_controller=None,
+    ):
+        calls["audio"] += 1
+        calls["audio_sources"].append(Path(_video_path).read_bytes())
+        staged_path = Path(_temp_dir) / "fixture-extracted-audio.mp3"
+        staged_path.write_bytes(b"fixture mp3")
+        downloader._atomic_promote_with_retry(
+            staged_path,
+            final_path,
+            replace_existing=True,
+            cancel_controller=_cancel_controller,
+        )
+
+    def fake_video_attempt_state_for_batch(*_args, **_kwargs):
+        calls["metadata"] += 1
+        return downloader._YtdlpAttemptState(), None
+
+    def fake_call_runtime_tool_summary(*_args, **_kwargs):
+        calls["runtime"] += 1
+
+    def fake_prepare_media_downloader_runtime(options, _log, _cancel_controller=None):
+        calls["prepare"] += 1
+        enabled = options.download_engine == downloader.DOWNLOAD_ENGINE_ARIA2_FAST
+        return downloader._Aria2RuntimeValidation(enabled, enabled, Path("aria2c.exe"))
+
     try:
         downloader._download_video = fake_download_video
+        downloader._download_audio = fake_download_audio
         downloader._download_thumbnail = fake_download_thumbnail
-        downloader._log_runtime_tool_summary = lambda _log: None
+        downloader._extract_mp3_from_video = fake_extract_mp3_from_video
+        downloader._video_attempt_state_for_batch = fake_video_attempt_state_for_batch
+        downloader._call_runtime_tool_summary = fake_call_runtime_tool_summary
+        downloader._prepare_media_downloader_runtime = fake_prepare_media_downloader_runtime
+        downloader._premiere_safe_mp4_ready_for_download = lambda path, _cancel=None: path.exists()
         downloader.validate_download_environment = lambda _options: None
         yield
     finally:
         downloader._download_video = old_download_video
+        downloader._download_audio = old_download_audio
         downloader._download_thumbnail = old_download_thumbnail
-        downloader._log_runtime_tool_summary = old_log_runtime_tool_summary
+        downloader._extract_mp3_from_video = old_extract_mp3_from_video
+        downloader._video_attempt_state_for_batch = old_video_attempt_state_for_batch
+        downloader._call_runtime_tool_summary = old_call_runtime_tool_summary
+        downloader._prepare_media_downloader_runtime = old_prepare_media_downloader_runtime
+        downloader._premiere_safe_mp4_ready_for_download = old_premiere_safe_ready
         downloader.validate_download_environment = old_validate_download_environment
+
+
+@contextmanager
+def _capture_reservation_parts(captured: list[tuple[str, ...]]):
+    old_reserve_output_paths = downloader.reserve_output_paths
+
+    def capture(channel_dir, channel_id, video_id, part_paths, **kwargs):
+        captured.append(tuple(part_paths))
+        return old_reserve_output_paths(channel_dir, channel_id, video_id, part_paths, **kwargs)
+
+    try:
+        downloader.reserve_output_paths = capture
+        yield
+    finally:
+        downloader.reserve_output_paths = old_reserve_output_paths
+
+
+@contextmanager
+def _capture_missing_part_inputs(captured: list[tuple[str, ...]]):
+    old_missing_parts = downloader._missing_parts_for_current_paths
+
+    def capture(options, video, paths, requested_parts):
+        captured.append(tuple(requested_parts))
+        return old_missing_parts(options, video, paths, requested_parts)
+
+    try:
+        downloader._missing_parts_for_current_paths = capture
+        yield
+    finally:
+        downloader._missing_parts_for_current_paths = old_missing_parts
 
 
 @contextmanager
@@ -392,21 +872,31 @@ def _patched_db_file(db_path: Path):
 def _temp_runtime():
     with TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
+        folder_a = root / "Folder A"
         folder_b = root / "Folder B"
+        folder_a.mkdir(parents=True)
         folder_b.mkdir(parents=True)
         yield {
             "db_path": root / "download_state.sqlite3",
+            "folder_a": folder_a,
             "folder_b": folder_b,
         }
 
 
-def _download_options(base_folder: str) -> downloader.DownloadOptions:
+def _download_options(
+    base_folder: str,
+    *,
+    start_number: int = 1,
+    engine: str = downloader.DOWNLOAD_ENGINE_STABLE,
+    mode: str = MODE_VIDEO_THUMB,
+) -> downloader.DownloadOptions:
     return downloader.DownloadOptions(
         base_folder=base_folder,
         channel_id=CHANNEL_ID,
         channel_name=CHANNEL_NAME,
-        download_mode=MODE_VIDEO_THUMB,
-        file_start_number=1,
+        download_mode=mode,
+        download_engine=engine,
+        file_start_number=start_number,
     )
 
 
@@ -419,15 +909,65 @@ def _paths_for(base_folder: str, stem: str):
     )
 
 
-def _video():
+def _video(video_id: str = VIDEO_ID, title: str = "Same Video"):
     return SimpleNamespace(
-        video_id=VIDEO_ID,
-        title="Same Video",
-        sanitized_filename_base="same-video",
+        video_id=video_id,
+        title=title,
+        sanitized_filename_base=video_id,
         thumbnail_url="",
         display_order=1,
         status=state_store.STATUS_NOT_DOWNLOADED,
     )
+
+
+def _part_paths(paths, mode: str) -> tuple[Path, ...]:
+    path_by_part = {
+        PART_VIDEO: paths.video_path,
+        PART_AUDIO: paths.audio_path,
+        PART_THUMB: paths.thumb_path,
+    }
+    return tuple(path_by_part[part] for part in required_parts(mode))
+
+
+def _write_old_outputs(paths, mode: str) -> dict[str, bytes]:
+    contents = {
+        PART_VIDEO: b"old mp4",
+        PART_AUDIO: b"old mp3",
+        PART_THUMB: b"old jpg",
+    }
+    path_by_part = {
+        PART_VIDEO: paths.video_path,
+        PART_AUDIO: paths.audio_path,
+        PART_THUMB: paths.thumb_path,
+    }
+    written: dict[str, bytes] = {}
+    for part in required_parts(mode):
+        path = path_by_part[part]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents[part])
+        written[part] = contents[part]
+    return written
+
+
+def _read_outputs(paths, mode: str) -> dict[str, bytes]:
+    path_by_part = {
+        PART_VIDEO: paths.video_path,
+        PART_AUDIO: paths.audio_path,
+        PART_THUMB: paths.thumb_path,
+    }
+    return {part: path_by_part[part].read_bytes() for part in required_parts(mode)}
+
+
+def _empty_calls() -> dict[str, object]:
+    return {
+        "video": 0,
+        "audio": 0,
+        "audio_sources": [],
+        "thumb": 0,
+        "metadata": 0,
+        "runtime": 0,
+        "prepare": 0,
+    }
 
 
 def _norm(value: str) -> str:

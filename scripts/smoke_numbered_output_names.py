@@ -25,7 +25,7 @@ def main() -> int:
     _test_legitimate_numeric_title_is_preserved()
     _test_stable_and_fast_share_numbering_helper()
     _test_numbered_stem_and_shared_part_paths()
-    _test_path_aware_numbered_skip()
+    _test_downloaded_state_survives_number_change()
     print("numbered output names smoke passed")
     return 0
 
@@ -156,31 +156,30 @@ def _test_numbered_stem_and_shared_part_paths() -> None:
     _assert(video.sanitized_filename_base == stem, "video canonical stem was not updated")
 
 
-def _test_path_aware_numbered_skip() -> None:
+def _test_downloaded_state_survives_number_change() -> None:
     with TemporaryDirectory(prefix="numbered_skip_") as temp_dir:
-        root = Path(temp_dir)
-        options = _options(temp_dir, start_number=1)
+        options = _options(temp_dir, start_number=51)
         video = _video("video-old", "Title")
         _assigned, stem, paths = downloader._prepare_numbered_output_for_video(video, options, 0)
-        old_paths = build_output_paths(temp_dir, "Channel", "Title")
+        old_paths = build_output_paths(temp_dir, "Channel", "001 Title")
         old_paths.video_path.parent.mkdir(parents=True, exist_ok=True)
         old_paths.thumb_path.parent.mkdir(parents=True, exist_ok=True)
         old_paths.video_path.write_bytes(b"old video")
         old_paths.thumb_path.write_bytes(b"old thumb")
-        _assert(stem == "001 Title", "unexpected numbered stem")
+        _assert(stem == "051 Title", "unexpected new numbered stem")
 
         old_get = downloader.get_video_entry
-        old_part_status = downloader.part_status_from_entry
         old_update = downloader.update_video_part_state
         updates: list[tuple[str, str]] = []
-        legacy_video_exists = False
-        legacy_thumb_exists = False
+        old_video_exists = False
+        old_thumb_exists = False
+        new_video_exists = False
+        new_thumb_exists = False
         try:
             downloader.get_video_entry = lambda *_args, **_kwargs: {
                 "video_status": STATUS_DOWNLOADED,
                 "thumb_status": STATUS_DOWNLOADED,
             }
-            downloader.part_status_from_entry = lambda entry, part: entry[f"{part}_status"]
             downloader.update_video_part_state = lambda *_args, **_kwargs: updates.append((_args[5], _args[6]))
             missing = downloader._missing_parts_for_current_paths(
                 options,
@@ -188,17 +187,20 @@ def _test_path_aware_numbered_skip() -> None:
                 paths,
                 (PART_VIDEO, PART_THUMB),
             )
-            legacy_video_exists = old_paths.video_path.exists()
-            legacy_thumb_exists = old_paths.thumb_path.exists()
+            old_video_exists = old_paths.video_path.exists()
+            old_thumb_exists = old_paths.thumb_path.exists()
+            new_video_exists = paths.video_path.exists()
+            new_thumb_exists = paths.thumb_path.exists()
         finally:
             downloader.get_video_entry = old_get
-            downloader.part_status_from_entry = old_part_status
             downloader.update_video_part_state = old_update
 
-    _assert(missing == (PART_VIDEO, PART_THUMB), f"old unnumbered files satisfied numbered paths: {missing}")
-    _assert(updates == [(PART_VIDEO, downloader.STATUS_NOT_DOWNLOADED), (PART_THUMB, downloader.STATUS_NOT_DOWNLOADED)], "missing numbered files did not clear stale part states")
-    _assert(legacy_video_exists, "legacy video was renamed or deleted")
-    _assert(legacy_thumb_exists, "legacy thumb was renamed or deleted")
+    _assert(missing == (), f"new numbered paths overrode downloaded state: {missing}")
+    _assert(updates == [], f"downloaded state was downgraded after numbering changed: {updates}")
+    _assert(old_video_exists, "old numbered video was renamed or deleted")
+    _assert(old_thumb_exists, "old numbered thumbnail was renamed or deleted")
+    _assert(not new_video_exists, "new numbered video was created for a downloaded item")
+    _assert(not new_thumb_exists, "new numbered thumbnail was created for a downloaded item")
 
 
 def _options(
