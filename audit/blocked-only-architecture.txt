@@ -1,0 +1,35 @@
+Phase 6B2 blocked-only architecture audit
+Base commit: 32a2c04b11ef65178ce4c4ccedf1a78c84f11b92
+
+The line references below identify the pre-change files at the base commit.
+
+scripts/verify_release_legal_gate.py
+- main(), lines 68-85: a valid requested release always prints the blocked
+  reasons and returns exit code 1; there is no ready return path.
+- validate_policy_document(), lines 102-124: top-level legal, source, and
+  payload flags must all be false; every release status must be blocked and
+  every release must have non-empty reason codes.
+
+scripts/prepare_release_bundle.py
+- create_bundle(), lines 192-194: generated manifests hard-code
+  release_ready=false, legal_compliance_certified=false, and
+  source_availability_certified=false.
+- _load_control_state(), lines 385-409: control loading calls
+  _validate_blocked_control_state(), unions blocker lists, and rejects an empty
+  blocker set.
+- _validate_blocked_control_state(), lines 524-562: the policy must have all
+  certification flags false, the selected release must be blocked, the source
+  owner must prohibit reconsideration, and every source kit must be blocked.
+- _validate_manifest(), lines 602-646: verification requires all three release
+  readiness/certification fields to remain false.
+
+.github/workflows/release-v1.3.2.yml
+- lines 47-52: the build job invokes the fail-closed release legal gate before
+  dependency installation and building.
+- lines 559-569: the publish job later verifies the bundle with
+  --require-release-ready true.
+
+Conclusion
+The base architecture cannot publish v1.3.2 even if complete source assets are
+supplied. The gate and bundle must derive both blocked and ready states from
+validated evidence; simply inverting a boolean would be an unsafe bypass.

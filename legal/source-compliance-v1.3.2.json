@@ -1,0 +1,268 @@
+{
+  "schema_version": 2,
+  "target_phase": "6B2",
+  "release_tag": "v1.3.2",
+  "technical_compliance_not_legal_advice": true,
+  "release_gate_reconsideration_allowed": true,
+  "legal_compliance_certified": false,
+  "source_availability_certified": false,
+  "classification_model": [
+    "OPTIONAL_ASSURANCE",
+    "REQUIRED_FOR_CORRESPONDING_SOURCE",
+    "REQUIRED_FOR_REPRODUCIBILITY_ASSURANCE",
+    "SYSTEM_LIBRARY_CANDIDATE"
+  ],
+  "immutable_identity_types": [
+    "fossil-id",
+    "git-commit",
+    "mercurial-changeset",
+    "release-archive"
+  ],
+  "kits": [
+    {
+      "id": "aria2",
+      "binary_package": {
+        "filename": "aria2-1.37.0-win-64bit-build1.zip",
+        "size": 2475379,
+        "sha256": "67d015301eef0b612191212d564c5bb0a14b5b9c4796b76454276a4d28d9b288"
+      },
+      "required_outputs": [
+        "binary-to-source-manifest",
+        "complete-source-archive",
+        "independent-source-asset-checksums",
+        "source-asset-license-and-notice-set"
+      ],
+      "required_source_items": [
+        "configuration-options",
+        "core-and-external-source-archives",
+        "licenses-and-notices",
+        "local-modifications-or-explicit-no-modification-evidence",
+        "source-archive-manifest",
+        "windows-build-scripts"
+      ],
+      "required_build_evidence": [
+        "binary-to-source-mapping",
+        "complete-build-orchestration-script",
+        "exact-configuration-or-configure-command",
+        "local-modifications-or-explicit-no-modification-evidence"
+      ],
+      "required_distribution_controls": [
+        "binary-to-source-mapping-published",
+        "immutable-exact-source-refs",
+        "release-notes-identify-source-asset-names",
+        "release-verifier-checks-all-source-assets",
+        "retention-policy-requires-owner-legal-review",
+        "source-assets-independently-checksummed",
+        "source-downloadable-from-same-release-location-as-binary"
+      ],
+      "identities": [
+        {
+          "component_id": "aria2",
+          "classification": "REQUIRED_FOR_CORRESPONDING_SOURCE",
+          "identity_type": "git-commit",
+          "project": "aria2",
+          "version": "1.37.0",
+          "repository": "https://github.com/aria2/aria2",
+          "immutable_ref": "02f2d0d8472b3c38c29b4dba8c75ebd5fdd2899a",
+          "archive_url": "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0.tar.xz",
+          "archive_filename": "aria2-1.37.0.tar.xz",
+          "archive_size": 1705256,
+          "archive_sha256": "60a420ad7085eb616cb6e2bdf0a7206d68ff3d37fb5a956dc44242eb2f79b66b",
+          "resolved": true,
+          "evidence": "Official aria2 release archive and release-1.37.0 commit; archive contains the MinGW Dockerfile, configuration, release script, and build memo."
+        },
+        {
+          "component_id": "c-ares",
+          "classification": "REQUIRED_FOR_CORRESPONDING_SOURCE",
+          "identity_type": "release-archive",
+          "project": "c-ares",
+          "version": "1.19.1",
+          "repository": "https://github.com/c-ares/c-ares",
+          "immutable_ref": null,
+          "archive_url": "https://github.com/c-ares/c-ares/releases/download/cares-1_19_1/c-ares-1.19.1.tar.gz",
+          "archive_filename": "c-ares-1.19.1.tar.gz",
+          "archive_size": 1579100,
+          "archive_sha256": "321700399b72ed0e037d0074c629e7741f6b2ec2dda92956abe3e9671d3e268e",
+          "resolved": true,
+          "evidence": "Exact archive URL and version are pinned by aria2 Dockerfile.mingw and match the verified archive bytes."
+        },
+        {
+          "component_id": "expat",
+          "classification": "REQUIRED_FOR_CORRESPONDING_SOURCE",
+          "identity_type": "release-archive",
+          "project": "libexpat",
+          "version": "2.5.0",
+          "repository": "https://github.com/libexpat/libexpat",
+          "immutable_ref": null,
+          "archive_url": "https://github.com/libexpat/libexpat/releases/download/R_2_5_0/expat-2.5.0.tar.bz2",
+          "archive_filename": "expat-2.5.0.tar.bz2",
+          "archive_size": 569205,
+          "archive_sha256": "6f0e6e01f7b30025fa05c85fdad1e5d0ec7fd35d9f61b22f34998de11969ff67",
+          "resolved": true,
+          "evidence": "Exact archive URL and version are pinned by aria2 Dockerfile.mingw and match the verified archive bytes."
+        },
+        {
+          "component_id": "gmp",
+          "classification": "REQUIRED_FOR_CORRESPONDING_SOURCE",
+          "identity_type": "release-archive",
+          "project": "GNU MP",
+          "version": "6.3.0",
+          "repository": "https://gmplib.org",
+          "immutable_ref": null,
+          "archive_url": "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz",
+          "archive_filename": "gmp-6.3.0.tar.xz",
+          "archive_size": 2094196,
+          "archive_sha256": "a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898",
+          "resolved": true,
+          "evidence": "Authoritative GNU release archive identity replaces the prior Git-only schema requirement; no fabricated Git commit is used for the Mercurial-hosted project."
+        },
+        {
+          "component_id": "libssh2",
+          "classification": "REQUIRED_FOR_CORRESPONDING_SOURCE",
+          "identity_type": "release-archive",
+          "project": "libssh2",
+          "version": "1.11.0",
+          "repository": "https://github.com/libssh2/libssh2",
+          "immutable_ref": null,
+          "archive_url": "https://github.com/libssh2/libssh2/releases/download/libssh2-1.11.0/libssh2-1.11.0.tar.bz2",
+          "archive_filename": "libssh2-1.11.0.tar.bz2",
+          "archive_size": 846271,
+          "archive_sha256": "e56d81f01f090d3c6eaf5f56c645610fd1a90d92819541d0079ae363d1eed11e",
+          "resolved": true,
+          "evidence": "Exact archive URL and version are pinned by aria2 Dockerfile.mingw and match the verified archive bytes."
+        },
+        {
+          "component_id": "sqlite",
+          "classification": "REQUIRED_FOR_CORRESPONDING_SOURCE",
+          "identity_type": "release-archive",
+          "project": "SQLite",
+          "version": "3.43.1",
+          "repository": "https://www.sqlite.org",
+          "immutable_ref": null,
+          "archive_url": "https://www.sqlite.org/2023/sqlite-autoconf-3430100.tar.gz",
+          "archive_filename": "sqlite-autoconf-3430100.tar.gz",
+          "archive_size": 3175971,
+          "archive_sha256": "39116c94e76630f22d54cd82c3cea308565f1715f716d1b2527f1c9c969ba4d9",
+          "resolved": true,
+          "evidence": "Exact archive URL and autoconf version are pinned by aria2 Dockerfile.mingw and match the verified archive bytes."
+        },
+        {
+          "component_id": "zlib",
+          "classification": "REQUIRED_FOR_CORRESPONDING_SOURCE",
+          "identity_type": "release-archive",
+          "project": "zlib",
+          "version": "1.3",
+          "repository": "https://zlib.net",
+          "immutable_ref": null,
+          "archive_url": "https://zlib.net/fossils/zlib-1.3.tar.gz",
+          "archive_filename": "zlib-1.3.tar.gz",
+          "archive_size": 1495873,
+          "archive_sha256": "ff0ba4c292013dbc27530b3a81e1f9a813cd39de01ca5e0f8bf355702efa593e",
+          "resolved": true,
+          "evidence": "Exact archive URL and version are pinned by aria2 Dockerfile.mingw and match the verified archive bytes."
+        }
+      ],
+      "build_evidence": [
+        "64-bit binary README states Ubuntu MinGW-w64 cross-compilation and the exact six static external versions",
+        "Dockerfile.mingw pins Ubuntu 22.04, archive URLs, versions, build order, and x86_64-w64-mingw32 selection",
+        "mingw-config records the package-specific configuration",
+        "mingw-release and mingw-build-memo record package-specific release orchestration",
+        "provider README identifies the 32-bit-only --disable-ipv6 difference; no 64-bit source patch is claimed"
+      ],
+      "source_asset": {
+        "filename": "Youtube-Downloaderbs-v1.3.2-aria2-source.zip",
+        "size": 11477592,
+        "sha256": "bb609dca9589eea96676a3d608652ffc24ea381cbfc19476dd6e582a95f2fd15",
+        "entry_count": 14,
+        "manifest_sha256": "635e05572a0184e3668d14175f7a14f248112cabcf883ddf92f2f2c891572507"
+      },
+      "status": "ready",
+      "blockers": []
+    },
+    {
+      "id": "ffmpeg",
+      "binary_package": {
+        "filename": "ffmpeg-8.1.2-essentials_build.zip",
+        "size": 109728040,
+        "sha256": "db580001caa24ac104c8cb856cd113a87b0a443f7bdf47d8c12b1d740584a2ec"
+      },
+      "required_outputs": [
+        "binary-to-source-manifest",
+        "complete-source-archive",
+        "independent-source-asset-checksums",
+        "source-asset-license-and-notice-set"
+      ],
+      "required_source_items": [
+        "complete-direct-and-transitive-static-source-inventory",
+        "core-and-external-source-archives",
+        "exact-provider-build-snapshot-and-package-specific-scripts",
+        "licenses-and-notices",
+        "local-modifications-or-exact-patches",
+        "source-archive-manifest"
+      ],
+      "required_build_evidence": [
+        "binary-to-source-mapping",
+        "complete-build-orchestration-script",
+        "exact-configuration-or-configure-command",
+        "local-modifications-or-exact-patches"
+      ],
+      "required_distribution_controls": [
+        "binary-to-source-mapping-published",
+        "immutable-exact-source-refs",
+        "release-notes-identify-source-asset-names",
+        "release-verifier-checks-all-source-assets",
+        "retention-policy-requires-owner-legal-review",
+        "source-assets-independently-checksummed",
+        "source-downloadable-from-same-release-location-as-binary"
+      ],
+      "identities": [
+        {
+          "component_id": "ffmpeg",
+          "classification": "REQUIRED_FOR_CORRESPONDING_SOURCE",
+          "identity_type": "git-commit",
+          "project": "FFmpeg",
+          "version": "8.1.2 provider snapshot",
+          "repository": "https://github.com/FFmpeg/FFmpeg",
+          "immutable_ref": "38b88335f99e76ed89ff3c93f877fdefce736c13",
+          "archive_url": "https://github.com/FFmpeg/FFmpeg/archive/38b88335f99e76ed89ff3c93f877fdefce736c13.tar.gz",
+          "archive_filename": "ffmpeg-38b88335f99e76ed89ff3c93f877fdefce736c13.tar.gz",
+          "archive_size": 16894057,
+          "archive_sha256": "2ae7e42343cfffb811d15cfe98b6d005f082595fcdf034d30a4ff90cfed9f9c6",
+          "resolved": true,
+          "evidence": "The exact verified provider README publishes short source identity 38b88335f9; the upstream repository resolves it uniquely to this complete commit."
+        },
+        {
+          "component_id": "media-autobuild-suite",
+          "classification": "REQUIRED_FOR_CORRESPONDING_SOURCE",
+          "identity_type": "git-commit",
+          "project": "media-autobuild_suite",
+          "version": "nearest public pre-release snapshot",
+          "repository": "https://github.com/m-ab-s/media-autobuild_suite",
+          "immutable_ref": "d98c41b9386fc1e373d43888cc0203f8ff5f66f9",
+          "archive_url": "https://github.com/m-ab-s/media-autobuild_suite/archive/d98c41b9386fc1e373d43888cc0203f8ff5f66f9.tar.gz",
+          "archive_filename": "media-autobuild_suite-d98c41b9386fc1e373d43888cc0203f8ff5f66f9.tar.gz",
+          "archive_size": 111394,
+          "archive_sha256": "0ace60d3e44282ed2a64f913a6ce5cfc6767039403a3efa7eea178dd4077793a",
+          "resolved": false,
+          "evidence": "This upstream snapshot predates the provider release and matches UCRT64/build characteristics, but no provider evidence proves it is the exact snapshot used."
+        }
+      ],
+      "build_evidence": [
+        "32 of 50 external-version entries are published by the exact verified package README",
+        "4 Windows interfaces are classified as System Library candidates; VAAPI is reclassified as a source-required external input",
+        "exact configure command recovered from the verified ffmpeg.exe bytes without execution",
+        "provider README SHA-256 9172433fb251059a58d2ff11ba8c6132e04819136ed96e809563911ff0d13816",
+        "provider README identifies FFmpeg commit 38b88335f99e76ed89ff3c93f877fdefce736c13 and GPLv3 configuration",
+        "verified binary identifies GCC 16.1.0 Rev2 from MSYS2 and UCRT64 paths"
+      ],
+      "source_asset": null,
+      "status": "blocked",
+      "blockers": [
+        "18 of 50 direct external-version entries still lack exact provider-published identity",
+        "Exact provider media-autobuild_suite snapshot and package-specific patch set are not proven",
+        "Release source asset and binary-to-source mapping are not integrated",
+        "Statically embedded transitive source inventory and immutable revisions remain incomplete"
+      ]
+    }
+  ]
+}

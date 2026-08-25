@@ -74,7 +74,7 @@ def create_release_legal_payload(
 ) -> None:
     verifier.validate_identity(tag, source_commit, control_commit)
     control_root = verifier.require_regular_directory(control_root, "control root")
-    verifier.load_asset_contract(control_root / verifier.CONTRACT_PATH)
+    contract = verifier.load_asset_contract(control_root / verifier.CONTRACT_PATH)
     portable_zip = portable_zip.expanduser().resolve(strict=False)
     output_zip = output_zip.expanduser().resolve(strict=False)
     verifier.require_regular_file(portable_zip, portable_zip.parent, "portable ZIP")
@@ -95,6 +95,7 @@ def create_release_legal_payload(
         tag=tag,
         source_commit=source_commit,
         control_commit=control_commit,
+        contract=contract,
     )
     if set(original).intersection(payload):
         raise LegalPayloadBuildError("portable and legal payload paths collide")

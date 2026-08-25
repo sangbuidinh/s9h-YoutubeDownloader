@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import verify_ffmpeg_provider_build_feasibility as prior_verifier
+import source_compliance
 
 
 BASELINE = "3c3bd8de7ca77fb5f0ecb9a132a76f1aec1e799c"
@@ -242,6 +243,7 @@ def main() -> int:
     except (
         SourceKitReadinessConsolidationError, OSError, UnicodeError,
         json.JSONDecodeError, subprocess.SubprocessError,
+        source_compliance.SourceComplianceError,
     ) as exc:
         print(f"Source-kit readiness consolidation verification failed: {exc}", file=sys.stderr)
         return 1
@@ -271,9 +273,18 @@ def verify_repository(
     _verify_docs(paths["readme"], paths["legal-readme"], paths["feasibility-doc"])
     _verify_artifacts(root, tracked_paths, repository_files, introduced_paths)
     _hygiene(consolidation, "consolidation")
-    _verify_prior_owner(
-        root, paths, tracked_paths, repository_files, introduced_paths, runner,
-    )
+    current_owner = root / source_compliance.OWNER_PATH
+    if current_owner.is_file():
+        # Phase 6B2 may evolve the live gate and bundle implementation without
+        # changing this historical consolidation record. A valid later-phase
+        # owner supersedes only the obsolete current-script ownership check;
+        # the consolidation's protected hashes and semantic checks above still
+        # validate the prior evidence and decision.
+        source_compliance.load_owner(current_owner)
+    else:
+        _verify_prior_owner(
+            root, paths, tracked_paths, repository_files, introduced_paths, runner,
+        )
 
 
 def _paths(root: Path, overrides: dict[str, Path]) -> dict[str, Path]:

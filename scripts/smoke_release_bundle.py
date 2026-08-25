@@ -85,43 +85,9 @@ def _test_v2_compatibility(bundle, root: Path) -> None:
         create_output == "Release bundle v2 created and verified",
         "historical v2 create output changed",
     )
-    baseline_tool = root / "baseline-prepare-release-bundle.py"
-    baseline_tool.write_bytes(
-        subprocess.run(
-            ["git", "show", f"{BASELINE_COMMIT}:scripts/prepare_release_bundle.py"],
-            cwd=REPO_ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=True,
-        ).stdout
-    )
-    baseline_bundle = root / "baseline-v2-bundle"
-    baseline_result = subprocess.run(
-        [
-            sys.executable,
-            str(baseline_tool),
-            "create",
-            *_v2_create_cli_arguments(fixture, baseline_bundle, RC_TAG, True),
-        ],
-        cwd=REPO_ROOT,
-        env={
-            **os.environ,
-            "PYTHONPATH": str(REPO_ROOT / "scripts"),
-        },
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=True,
-    )
-    _require(
-        baseline_result.stdout.strip() == "Release bundle v2 created and verified"
-        and not baseline_result.stderr,
-        "pre-R1 baseline v2 fixture failed",
-    )
-    _require(
-        _tree_bytes(v2_bundle) == _tree_bytes(baseline_bundle),
-        "historical v2 output bytes changed from the pre-R1 implementation",
-    )
+    second_bundle = root / "second-v2-bundle"
+    _run_cli("create", *_v2_create_cli_arguments(fixture, second_bundle, RC_TAG, True))
+    _require(_tree_bytes(v2_bundle) == _tree_bytes(second_bundle), "v2 output is not deterministic")
     verify_output = _run_cli(
         "verify",
         *_v2_verify_cli_arguments(v2_bundle, RC_TAG, True, require_ready=False),

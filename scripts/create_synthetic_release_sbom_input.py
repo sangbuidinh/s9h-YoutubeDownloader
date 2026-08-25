@@ -96,7 +96,13 @@ def build_synthetic_input(
     asset_contract: Path,
 ) -> dict[str, Any]:
     release_bundle._validate_metadata(tag, source_commit, control_commit, prerelease)
-    control = release_bundle._load_control_state(policy, asset_contract, tag)
+    control = release_bundle._load_control_state(
+        policy,
+        asset_contract,
+        tag,
+        source_assets_root,
+        legal_payload_path,
+    )
     if not control["requires_sbom"] or control["bundle_format"] != release_bundle.V3_BUNDLE_FORMAT:
         raise SyntheticInputError("synthetic SBOM evidence requires the release assets v3 contract")
     release_root = release_bundle._require_directory_root(release_root, "release root")
