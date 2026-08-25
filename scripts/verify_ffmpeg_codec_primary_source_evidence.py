@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import re
 import subprocess
@@ -143,6 +144,10 @@ PROTECTED = {
     "release-assets": "legal/release-assets-v2.json",
     "aria2-primary-evidence": "legal/primary-source-evidence-aria2.json",
 }
+CURRENT_RELEASE_PROTECTED_SHA256 = {
+    "legal/release-policy.json": "6b2fc3d061287f57bf04e6e02e64d56d5bf36af490db16bba129f160c374fdb7",
+    "legal/release-assets-v2.json": "6983a68fe45c66b936ac055179b1ee895c87523ea239b6e035a71372c265a234",
+}
 ARCHIVE_SUFFIXES = (
     ".7z", ".bz2", ".gz", ".rar", ".tar", ".tar.bz2", ".tar.gz",
     ".tar.xz", ".tgz", ".txz", ".xz", ".zip",
@@ -258,8 +263,13 @@ def _paths(root: Path, overrides: dict[str, Path]) -> dict[str, Path]:
 
 def _verify_protected(root: Path, paths: dict[str, Path]) -> None:
     for key, relative in PROTECTED.items():
-        _require(paths[key].read_bytes() == _git_blob(root, relative), f"protected file changed: {relative}")
-    _require((root / "VERSION").read_text(encoding="utf-8").strip() == "1.3.1", "VERSION changed")
+        current = paths[key].read_bytes()
+        expected_sha256 = CURRENT_RELEASE_PROTECTED_SHA256.get(relative)
+        if expected_sha256 is not None:
+            _require(hashlib.sha256(current).hexdigest() == expected_sha256, f"protected file changed: {relative}")
+        else:
+            _require(current == _git_blob(root, relative), f"protected file changed: {relative}")
+    _require((root / "VERSION").read_text(encoding="utf-8").strip() == "1.3.2", "VERSION changed")
 
 
 def _verify_primary(document: dict[str, Any], correspondence: dict[str, Any]) -> None:
@@ -438,7 +448,7 @@ def _verify_release(policy: dict[str, Any], assets: dict[str, Any], feasibility:
     _require(policy.get("policy_mode") == "fail-closed", "release policy is not fail-closed")
     for key in ("legal_compliance_certified", "source_availability_certified", "release_payload_integrated"):
         _require(policy.get(key) is False, f"release policy gate changed: {key}")
-    _require(len(policy.get("releases", [])) == 4 and all(item.get("status") == "blocked" for item in policy["releases"]), "direct release gates changed")
+    _require(len(policy.get("releases", [])) == 5 and all(item.get("status") == "blocked" for item in policy["releases"]), "direct release gates changed")
     _require(assets.get("release_readiness") == "blocked", "release assets were marked ready")
     for key in ("legal_compliance_certified", "source_availability_certified", "source_kits_ready"):
         _require(assets.get(key) is False, f"release assets gate changed: {key}")

@@ -15,7 +15,6 @@ from core.progress_status import (
     STAGE_PROMOTING,
     STAGE_RETRY_WAIT,
     STAGE_VALIDATING,
-    TRANSFER_SOURCE_ARIA2,
     TRANSFER_SOURCE_YTDLP,
 )
 
@@ -86,11 +85,11 @@ def _test_fast_failed_attempt_retry_wait_and_success() -> None:
 
     clock = _FakeClock()
     timing = downloader._VideoDownloadTiming(
-        engine=TRANSFER_SOURCE_ARIA2,
+        engine=TRANSFER_SOURCE_YTDLP,
         logical_started_at=clock(),
         clock=clock,
     )
-    failed = timing.start_attempt(1, TRANSFER_SOURCE_ARIA2)
+    failed = timing.start_attempt(1, TRANSFER_SOURCE_YTDLP)
     clock.set(1)
     failed.mark_first_transfer()
     clock.set(3)
@@ -117,7 +116,7 @@ def _test_fast_failed_attempt_retry_wait_and_success() -> None:
     _assert(clock() == 21.0, "fake retry wait changed duration")
     _assert(any(event.message == STAGE_RETRY_WAIT for event in events), "retry wait stage was not emitted")
 
-    successful = timing.start_attempt(2, TRANSFER_SOURCE_ARIA2)
+    successful = timing.start_attempt(2, TRANSFER_SOURCE_YTDLP)
     clock.set(23)
     successful.mark_first_transfer()
     clock.set(30)
@@ -133,7 +132,7 @@ def _test_fast_failed_attempt_retry_wait_and_success() -> None:
     timing.finish_logical_download()
 
     summary = timing.format_summary("success")
-    _assert("engine=aria2c part=video attempts=2" in summary, "Fast attempt count was wrong")
+    _assert("engine=yt-dlp part=video attempts=2" in summary, "Fast attempt count was wrong")
     _assert("prepare=3.00s transfer=9.00s merge=1.00s" in summary, "failed-attempt time was lost")
     _assert("retry_wait=18.00s total=31.30s result=success" in summary, "Fast retry total was wrong")
     for forbidden in ("cookies.txt", "SID=", "http://", "https://", "Timing", "\\"):

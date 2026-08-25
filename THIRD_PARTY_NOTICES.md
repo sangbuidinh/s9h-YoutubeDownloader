@@ -6,13 +6,14 @@ This file covers known direct third-party components that current repository sou
 
 ## Distributed runtime tools
 
-### yt-dlp 2026.03.17
+### yt-dlp nightly 2026.08.18.122307
 
 - Role: external executable in the portable ZIP.
 - Distributed filename: `data/bin/yt-dlp.exe`.
-- Upstream: `yt-dlp/yt-dlp` at ref `2026.03.17`.
+- Binary distribution: `yt-dlp/yt-dlp-nightly-builds` release tag `2026.08.18.122307`, asset `yt-dlp.exe`, SHA-256 `652e154bce7170070d0f26415c9a3c35c121f5a7903cb8cde6d31c4577517fb9`.
+- Upstream source and license: `yt-dlp/yt-dlp` at commit `5d5b634d8e6b41dc2891847a5ea7a5a3f569a28c`.
 - License label: The Unlicense / public-domain dedication.
-- Local license: `legal/licenses/yt-dlp-2026.03.17-UNLICENSE.txt`.
+- Local license: `legal/licenses/yt-dlp-2026.08.18.122307-UNLICENSE.txt`.
 - Source-distribution status: not assessed in Phase 6A.
 - Inclusion does not imply endorsement by or affiliation with yt-dlp.
 
@@ -83,7 +84,7 @@ FFmpeg/ffprobe Corresponding Source remains unverified, and aria2 source-distrib
 
 The exact pinned FFmpeg and aria2 binary packages were audited without executing them. Exact core source refs were resolved where the package evidence permitted, but core source is not represented as the full source required for the distributed static packages. External static-component sources and build-recipe gaps remain explicit. The result is **source correspondence partially identified**, **source kit not ready**, and **no compliance certification**.
 
-`legal/source-correspondence.json` records the audit findings. `legal/source-kit-requirements.json` defines the prerequisites for Phase 6B2B. The audit confirms that all four workflows remain fail-closed; Phase 6B2A does not enable publishing, source kits and legal payloads remain absent, and existing releases are not retroactively certified.
+`legal/source-correspondence.json` records the audit findings. `legal/source-kit-requirements.json` defines the prerequisites for Phase 6B2B. The audit confirms that all five workflows remain fail-closed; Phase 6B2A does not enable publishing, source kits and legal payloads remain absent, and existing releases are not retroactively certified.
 
 ## Phase 6B2B1 release legal payload
 
@@ -104,4 +105,4 @@ Third-party names and marks belong to their respective owners. Inclusion of a co
 - `legal/licenses/PyInstaller-6.21.0-COPYING.txt`
 - `legal/licenses/Python-3.11.9-LICENSE.txt`
 - `legal/licenses/Tcl-Tk-license.terms`
-- `legal/licenses/yt-dlp-2026.03.17-UNLICENSE.txt`
+- `legal/licenses/yt-dlp-2026.08.18.122307-UNLICENSE.txt`

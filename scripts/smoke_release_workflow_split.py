@@ -77,7 +77,17 @@ CONTRACTS = (
         "false",
         True,
     ),
+    ReleaseContract(
+        ".github/workflows/release-v1.3.2.yml",
+        "v1.3.2",
+        "Youtube Downloaderbs v1.3.2",
+        r".\scripts\build_release_v1_3_2.ps1 -PreparePinnedRuntime",
+        "Build and validate checksum-pinned assets",
+        "false",
+        True,
+    ),
 )
+HISTORICAL_CONTRACTS = CONTRACTS[:-1]
 
 
 class WorkflowSplitError(AssertionError):
@@ -92,7 +102,7 @@ def main() -> int:
     validate_contracts(documents)
     _validate_historical_bundle_commands()
     _test_negative_mutations(documents)
-    print("release workflow split smoke tests passed: 4 historical v2 command paths exercised")
+    print("release workflow split smoke tests passed: 5 versioned v2 command paths exercised")
     return 0
 
 
@@ -479,7 +489,7 @@ def _validate_legal_gate(
 
 
 def _validate_historical_bundle_commands() -> None:
-    for contract in CONTRACTS:
+    for contract in HISTORICAL_CONTRACTS:
         current_blob = subprocess.run(
             ["git", "rev-parse", f"HEAD:{contract.path}"],
             cwd=REPO_ROOT,

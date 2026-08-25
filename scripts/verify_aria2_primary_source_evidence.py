@@ -404,7 +404,7 @@ def _verify_release(policy_path: Path, assets_path: Path) -> None:
     _require(policy.get("policy_mode") == "fail-closed", "release policy is not fail-closed")
     for key in ("legal_compliance_certified", "source_availability_certified", "release_payload_integrated"):
         _require(policy.get(key) is False, f"release policy flag must remain false: {key}")
-    _require(len(policy.get("releases", [])) == 4 and all(item.get("status") == "blocked" for item in policy["releases"]), "direct release gates changed")
+    _require(len(policy.get("releases", [])) == 5 and all(item.get("status") == "blocked" for item in policy["releases"]), "direct release gates changed")
     _require(assets.get("release_readiness") == "blocked", "release assets are not blocked")
     for key in ("legal_compliance_certified", "source_availability_certified", "source_kits_ready"):
         _require(assets.get(key) is False, f"release asset flag must remain false: {key}")

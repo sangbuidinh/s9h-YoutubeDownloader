@@ -188,6 +188,21 @@ CURRENT_OWNER_SMOKES = {
     ".github/build-dependencies.json": "scripts/smoke_build_dependency_lock.py",
     "scripts/prepare_release_bundle.py": "scripts/smoke_release_bundle.py",
 }
+CURRENT_RELEASE_PROTECTED_SHA256 = {
+    "THIRD_PARTY_NOTICES.md": "25be4042799989cdc3ebaa4b39447a1ed8ed1e941fcd5711f503655333d4fa92",
+    "legal/components.json": "3af6cbcebabd6a493f81248782707c878468f0661fb0ea06689d5f57177b536f",
+    "legal/release-assets-v2.json": "6983a68fe45c66b936ac055179b1ee895c87523ea239b6e035a71372c265a234",
+    "legal/release-policy.json": "6b2fc3d061287f57bf04e6e02e64d56d5bf36af490db16bba129f160c374fdb7",
+    "scripts/verify_aria2_primary_source_evidence.py": "6afb022d1ebda9081b385c22306b1abd0f0a4d6ffdde251df6fd8165fad302e1",
+    "scripts/verify_ffmpeg_codec_primary_source_evidence.py": "3e8754ee52ecde387392ffbc50ef414158d13c6246f7d08d20452b5d665063c5",
+    "scripts/verify_ffmpeg_hardware_system_evidence.py": "2bbf2a1f51071fa204fec4fa9eb5454710cdabad7f552caee4f43616e346140a",
+    "scripts/verify_ffmpeg_remaining_library_evidence.py": "4b5f10cddbb32c54479a2d041f2cb8c88b4c7f32eb465d28e1d1b1b15ac92e1c",
+    "scripts/verify_ffmpeg_support_primary_source_evidence.py": "f151033e50803d4b21dd5699051d6b95ddac901c1fe3d54933d508915d9278c5",
+    "scripts/verify_release_legal_gate.py": "a8eddf35333ba6cb10c60f4196e6ca556568bb5e18e54206e8c3ad6aa6786dd5",
+    "scripts/verify_release_legal_payload.py": "2667469e9c21b0177f4f34f32f4b15f602227c3a5082148adf377845fa29786e",
+    "scripts/verify_source_correspondence.py": "b3d3beb707430d02b7268803fac03c4a69f9081290126a404d42d1908391c185",
+    "scripts/verify_source_kit_feasibility.py": "2fe52d493f43064bab2889fbcdb6b39beb78c4738335f8057523b8183df33d97",
+}
 _CURRENT_OWNER_CACHE: set[tuple[str, str, str]] = set()
 UNSUPPORTED_RES = (
     re.compile(r"(?i)\bexact toolchain (?:is )?complete\b(?!\s*[:=]\s*(?:false|no)\b)"),
@@ -275,6 +290,13 @@ def _verify_protected(root: Path, paths: dict[str, Path]) -> None:
         if current_owner is not None:
             _verify_current_owner(root, relative, current_owner)
             continue
+        expected_sha256 = CURRENT_RELEASE_PROTECTED_SHA256.get(relative)
+        if expected_sha256 is not None:
+            _require(
+                hashlib.sha256((root / relative).read_bytes()).hexdigest() == expected_sha256,
+                f"protected file changed: {relative}",
+            )
+            continue
         if relative == ".gitattributes":
             try:
                 legal_notices_verifier.verify_checkout_policy(root)
@@ -307,7 +329,7 @@ def _verify_protected(root: Path, paths: dict[str, Path]) -> None:
                 check=False,
             )
             _require(result.returncode == 0, f"protected file changed: {relative}")
-    _require((root / "VERSION").read_text(encoding="utf-8").strip() == "1.3.1", "VERSION changed")
+    _require((root / "VERSION").read_text(encoding="utf-8").strip() == "1.3.2", "VERSION changed")
 
 
 def _verify_current_owner(root: Path, relative: str, smoke_relative: str) -> None:
@@ -589,7 +611,7 @@ def _verify_gates(
 ) -> None:
     _require(all(item.get("status") == "blocked" for item in requirements.get("kits", [])), "requirements gate opened")
     _require(policy.get("policy_mode") == "fail-closed", "release policy opened")
-    _require(len(policy.get("releases", [])) == 4 and all(item.get("status") == "blocked" for item in policy["releases"]), "release gate opened")
+    _require(len(policy.get("releases", [])) == 5 and all(item.get("status") == "blocked" for item in policy["releases"]), "release gate opened")
     _require(assets.get("release_readiness") == "blocked", "assets gate opened")
     _require(feasibility.get("overall_status") == "blocked-inventory-recorded", "feasibility gate opened")
     for source in (requirements, policy, assets, feasibility, inventory):

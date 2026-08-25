@@ -268,7 +268,7 @@ def _component_evidence(version: str) -> tuple[list[dict[str, Any]], list[dict[s
         ("deno", "Deno synthetic runtime", "2.7.14", "MIT"),
         ("ffmpeg", "FFmpeg synthetic runtime", "8.1.2", "NOASSERTION"),
         ("ffprobe", "ffprobe synthetic runtime", "8.1.2", "NOASSERTION"),
-        ("yt-dlp", "yt-dlp synthetic runtime", "2026.03.17", "Unlicense"),
+        ("yt-dlp", "yt-dlp synthetic runtime", "2026.08.18.122307", "Unlicense"),
     ]
     components = []
     unresolved = []

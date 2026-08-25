@@ -60,7 +60,7 @@ def _verify_positive_repository() -> None:
     )
     release_policy = verifier.release_gate.load_policy(REPO_ROOT / "legal/release-policy.json")
     _assert(bool(artifact_inventory["unresolved_native_members"]), "unresolved native members disappeared")
-    _assert(len(release_policy["releases"]) == 4, "release policy tag count changed")
+    _assert(len(release_policy["releases"]) == 5, "release policy tag count changed")
     correspondence, source_kits = verifier.source_correspondence.verify_repository(REPO_ROOT)
     _assert(correspondence["corresponding_source_complete"] is False, "source completion changed")
     _assert(all(kit["status"] == "blocked" for kit in source_kits["kits"]), "source kit is not blocked")
@@ -429,7 +429,11 @@ def _copy_fixture(root: Path) -> None:
     shutil.copytree(REPO_ROOT / ".github/workflows", root / ".github/workflows")
 
     (root / "scripts").mkdir()
-    for name in ("build_release_v1_3_0.ps1", "build_release_v1_3_1.ps1"):
+    for name in (
+        "build_release_v1_3_0.ps1",
+        "build_release_v1_3_1.ps1",
+        "build_release_v1_3_2.ps1",
+    ):
         shutil.copy2(REPO_ROOT / "scripts" / name, root / "scripts" / name)
 
 

@@ -54,13 +54,13 @@
     {
       "path": "legal/release-assets-v2.json",
       "role": "release-asset-contract",
-      "sha256": "f47281a9bc1acd04633e7e93852f2abe2fba2c0e5341d0a3ce978c79a858df2b",
+      "sha256": "6983a68fe45c66b936ac055179b1ee895c87523ea239b6e035a71372c265a234",
       "status": "accepted-input"
     },
     {
       "path": "legal/release-policy.json",
       "role": "release-policy",
-      "sha256": "0b9db38340bced9137e45fe88af59bd1691faa12d042adc488dccde6043efeb1",
+      "sha256": "6b2fc3d061287f57bf04e6e02e64d56d5bf36af490db16bba129f160c374fdb7",
       "status": "accepted-input"
     },
     {

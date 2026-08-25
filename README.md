@@ -2,7 +2,7 @@
 
 Youtube Downloaderbs is a Windows desktop application for selecting and batch-downloading videos from YouTube channels. It is distributed as a portable application and produces Premiere-oriented MP4 H.264/AAC media up to 1080p, with optional MP3 audio and thumbnail output.
 
-Current stable version: `v1.3.1`
+Current stable version: `v1.3.2`
 
 The application uses the YouTube Data API to list channel uploads and yt-dlp plus external runtime tools to download, process, and validate selected media.
 
@@ -31,7 +31,7 @@ Download current assets from the [latest GitHub release](https://github.com/sang
 
 New installations should use:
 
-`Youtube-Downloaderbs-v1.3.1.zip`
+`Youtube-Downloaderbs-v1.3.2.zip`
 
 The portable package contains this exact runtime layout:
 
@@ -66,7 +66,7 @@ Administrator privileges are not required by the application design. No minimum 
 
 ## First-Run Guide
 
-1. Download and extract `Youtube-Downloaderbs-v1.3.1.zip`.
+1. Download and extract `Youtube-Downloaderbs-v1.3.2.zip`.
 2. Run `Youtube.Downloaderbs.exe`.
 3. Enter a YouTube Data API key.
 4. Enter a channel URL, handle, username, or channel ID.
@@ -263,7 +263,7 @@ GitHub release notes list the SHA-256 values generated for that release. On Wind
 ```powershell
 Get-FileHash `
   -Algorithm SHA256 `
-  -LiteralPath ".\Youtube-Downloaderbs-v1.3.1.zip"
+  -LiteralPath ".\Youtube-Downloaderbs-v1.3.2.zip"
 ```
 
 Compare the output with the checksum in the corresponding GitHub release body. This repository does not document an independent signature for the release assets.
@@ -333,6 +333,7 @@ VERSION      Current application version
 ## Documentation and History
 
 - [UI logic contract](docs/ui_logic_contract.md)
+- [Release notes for v1.3.2](docs/release_notes_v1.3.2.md)
 - [Release notes for v1.3.1](docs/release_notes_v1.3.1.md)
 - [Historical Phase 3H.8 one-video lookahead note](docs/history/phase-3h8-one-video-lookahead.md)
 
@@ -358,7 +359,7 @@ FFmpeg/ffprobe Corresponding Source remains unverified, and aria2 source-distrib
 
 The exact pinned FFmpeg and aria2 binary packages were audited without executing them. Exact core source refs were resolved where the package evidence permitted, but core source is not represented as the full source required for the distributed static packages. External static-component sources and build-recipe gaps remain explicit. The result is **source correspondence partially identified**, **source kit not ready**, and **no compliance certification**.
 
-[`legal/source-correspondence.json`](legal/source-correspondence.json) records the audit findings. [`legal/source-kit-requirements.json`](legal/source-kit-requirements.json) defines the prerequisites for Phase 6B2B. The audit confirms that all four workflows remain fail-closed; Phase 6B2A does not enable publishing, source kits and legal payloads remain absent, and existing releases are not retroactively certified.
+[`legal/source-correspondence.json`](legal/source-correspondence.json) records the audit findings. [`legal/source-kit-requirements.json`](legal/source-kit-requirements.json) defines the prerequisites for Phase 6B2B. The audit confirms that all five workflows remain fail-closed; Phase 6B2A does not enable publishing, source kits and legal payloads remain absent, and existing releases are not retroactively certified.
 
 ## Phase 6B2B1 release legal payload
 

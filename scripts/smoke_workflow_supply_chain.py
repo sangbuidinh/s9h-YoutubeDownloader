@@ -21,6 +21,7 @@ EXPECTED_WORKFLOWS = (
     ".github/workflows/prerelease-v1.3.0-rc.1.yml",
     ".github/workflows/release-v1.3.0.yml",
     ".github/workflows/release-v1.3.1.yml",
+    ".github/workflows/release-v1.3.2.yml",
 )
 SANDBOX_WORKFLOW = ".github/workflows/authenticode-sandbox.yml"
 CI_WORKFLOW = ".github/workflows/ci.yml"
@@ -105,7 +106,7 @@ HISTORICAL_ACTIONS = {
         "official_repository": True,
         "action_yml_blob": "6842eb843b7258993656f41f9c358f5c5331fbe7",
         "lifecycle": "frozen-historical",
-        "occurrence_count": 11,
+        "occurrence_count": 14,
     },
     "actions/setup-python": {
         "repository": "actions/setup-python",
@@ -116,7 +117,7 @@ HISTORICAL_ACTIONS = {
         "official_repository": True,
         "action_yml_blob": "efa8de904209196588db1453bdb44079b3c393d7",
         "lifecycle": "frozen-historical",
-        "occurrence_count": 8,
+        "occurrence_count": 10,
     },
     "actions/upload-artifact": {
         "repository": "actions/upload-artifact",
@@ -127,7 +128,7 @@ HISTORICAL_ACTIONS = {
         "official_repository": True,
         "action_yml_blob": "2a0ecf19e8d0087dd2e5d1785dcf764811e79fae",
         "lifecycle": "frozen-historical",
-        "occurrence_count": 4,
+        "occurrence_count": 5,
     },
     "actions/download-artifact": {
         "repository": "actions/download-artifact",
@@ -138,7 +139,7 @@ HISTORICAL_ACTIONS = {
         "official_repository": True,
         "action_yml_blob": "7fc4fb55c7d0c7b198b1c7466e1efd7c7d05fb26",
         "lifecycle": "frozen-historical",
-        "occurrence_count": 4,
+        "occurrence_count": 5,
     },
     "softprops/action-gh-release": {
         "repository": "softprops/action-gh-release",
@@ -149,7 +150,7 @@ HISTORICAL_ACTIONS = {
         "official_repository": False,
         "action_yml_blob": "b471d236bc28052c1d78c3d6b57ee480d192da6a",
         "lifecycle": "frozen-historical",
-        "occurrence_count": 4,
+        "occurrence_count": 5,
     },
 }
 EXPECTED_WORKFLOW_PROFILES = {
@@ -158,6 +159,7 @@ EXPECTED_WORKFLOW_PROFILES = {
     ".github/workflows/prerelease-v1.3.0-rc.1.yml": HISTORICAL_PROFILE,
     ".github/workflows/release-v1.3.0.yml": HISTORICAL_PROFILE,
     ".github/workflows/release-v1.3.1.yml": HISTORICAL_PROFILE,
+    ".github/workflows/release-v1.3.2.yml": HISTORICAL_PROFILE,
 }
 EXPECTED_WORKFLOW_ACTION_COUNTS = {
     CI_WORKFLOW: {
@@ -195,6 +197,13 @@ EXPECTED_WORKFLOW_ACTION_COUNTS = {
         "actions/download-artifact": 1,
         "softprops/action-gh-release": 1,
     },
+    ".github/workflows/release-v1.3.2.yml": {
+        "actions/checkout": 3,
+        "actions/setup-python": 2,
+        "actions/upload-artifact": 1,
+        "actions/download-artifact": 1,
+        "softprops/action-gh-release": 1,
+    },
 }
 UPSTREAM_REPOSITORY = "sangbuidinh/s9h-YoutubeDownloader"
 UPSTREAM_ATTESTATION_CONDITION = (
@@ -218,6 +227,7 @@ FIXED_TAG_WORKFLOWS = {
     ".github/workflows/prerelease-v1.3.0-rc.1.yml": "v1.3.0-rc.1",
     ".github/workflows/release-v1.3.0.yml": "v1.3.0",
     ".github/workflows/release-v1.3.1.yml": "v1.3.1",
+    ".github/workflows/release-v1.3.2.yml": "v1.3.2",
 }
 RELEASE_POLICY = {
     ".github/workflows/prerelease-v1.2.7-rc.1.yml": (
@@ -235,6 +245,10 @@ RELEASE_POLICY = {
     ".github/workflows/release-v1.3.1.yml": (
         "v1.3.1",
         r".\scripts\build_release_v1_3_1.ps1 -PreparePinnedRuntime",
+    ),
+    ".github/workflows/release-v1.3.2.yml": (
+        "v1.3.2",
+        r".\scripts\build_release_v1_3_2.ps1 -PreparePinnedRuntime",
     ),
 }
 FULL_SHA = re.compile(r"[0-9a-f]{40}\Z")
@@ -286,7 +300,7 @@ def main() -> int:
 def validate_supply_chain(documents: dict[str, str], inventory: dict) -> None:
     _require(
         tuple(sorted(documents)) == EXPECTED_WORKFLOWS,
-        "workflow file inventory differs from the expected six files",
+        "workflow file inventory differs from the expected seven files",
     )
     profiles = _validate_inventory(inventory)
     workflow_profiles = inventory["workflow_profiles"]
@@ -371,7 +385,7 @@ def validate_supply_chain(documents: dict[str, str], inventory: dict) -> None:
         )
 
     total_count = sum(len(rows) for rows in uses_by_profile_action.values())
-    _require(total_count == 37, "total immutable action count must be 37")
+    _require(total_count == 45, "total immutable action count must be 45")
     for profile_name, profile in profiles.items():
         for repository, entry in profile["actions"].items():
             rows = uses_by_profile_action[(profile_name, repository)]

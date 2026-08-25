@@ -1,3 +1,4 @@
+import json
 import sys
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
@@ -33,13 +34,15 @@ from core.state_store import STATUS_DOWNLOADED, STATUS_ERROR, STATUS_NOT_DOWNLOA
 
 CHANNEL_ID = "channel"
 CHANNEL_NAME = "Channel"
+HYBRID_VIDEO_FORMAT_ID = "137"
+HYBRID_AUDIO_FORMAT_ID = "140"
 
 
 def main() -> int:
     _test_sequential_order_for_stable_and_fast()
     _test_video_audio_thumb_order_is_sequential()
     _test_audio_only_order_is_sequential()
-    _test_fast_invokes_aria2_and_stable_excludes_it()
+    _test_fast_video_is_native_while_separate_audio_retains_aria2()
     _test_fast_has_no_convert_phase_or_source_queue()
     _test_fast_uses_cookie_lookahead_state()
     _test_same_validation_and_promotion_surface()
@@ -96,15 +99,20 @@ def _test_audio_only_order_is_sequential() -> None:
     _assert(fast.part_calls == expected, f"Fast audio-only order changed: {fast.part_calls}")
 
 
-def _test_fast_invokes_aria2_and_stable_excludes_it() -> None:
+def _test_fast_video_is_native_while_separate_audio_retains_aria2() -> None:
     stable = _run_batch(DOWNLOAD_ENGINE_STABLE, MODE_VIDEO_THUMB, ("A",))
     fast = _run_batch(DOWNLOAD_ENGINE_ARIA2_FAST, MODE_VIDEO_THUMB, ("A",))
     stable_video = _commands_for_part(stable, PART_VIDEO)[0]
-    fast_video = _commands_for_part(fast, PART_VIDEO)[0]
+    fast_video = next(
+        command
+        for command in _commands_for_part(fast, PART_VIDEO)
+        if "--load-info-json" in command and _option_value(command, "-f") == HYBRID_VIDEO_FORMAT_ID
+    )
     fast_thumb = _commands_for_part(fast, PART_THUMB)[0]
     _assert("--downloader" not in stable_video, "Stable video command unexpectedly used aria2")
-    _assert("--downloader" in fast_video, "Fast video command missed aria2")
-    _assert("--downloader-args" in fast_video, "Fast video command missed aria2 args")
+    _assert("--downloader" not in fast_video, "Fast video command retained aria2")
+    _assert("--downloader-args" not in fast_video, "Fast video command retained aria2 args")
+    _assert(_option_value(fast_video, "-N") == "1", "Fast video command did not use native -N 1")
     _assert("--downloader" not in fast_thumb, "Fast thumbnail command inherited aria2")
 
     fast_audio = _run_batch(DOWNLOAD_ENGINE_ARIA2_FAST, MODE_AUDIO_THUMB, ("A",))
@@ -223,6 +231,7 @@ def _run_batch(
             stems={},
             lookahead_calls=[],
         )
+        snapshot_video_ids: dict[str, str] = {}
         cookie_path = root / "cookies.txt"
         if cookies_enabled:
             cookie_path.write_text("cookie-data", encoding="utf-8")
@@ -265,7 +274,7 @@ def _run_batch(
             return Path(path).exists()
 
         def fake_validate(path, log, delete_invalid, cancel_controller):
-            video_id = _video_id_from_staged_path(path)
+            video_id = _video_id_from_hybrid_path(path, snapshot_video_ids)
             result.validations.append(video_id)
 
         def fake_promote(source_path, final_path, log, replace_existing=False, cancel_controller=None):
@@ -284,9 +293,14 @@ def _run_batch(
 
         def fake_run_ytdlp(command, current_options, log, cancel_controller=None, cookie_retry_state=None):
             part = downloader._current_ytdlp_part()
-            video_id = _video_id_from_command(command)
+            load_info_json = _option_value(command, "--load-info-json")
+            video_id = snapshot_video_ids.get(load_info_json) or _video_id_from_command(command)
             result.commands.append((part, video_id, list(command)))
-            if part in {PART_VIDEO, PART_AUDIO, PART_THUMB}:
+            is_hybrid_metadata = "--write-info-json" in command
+            if part in {PART_AUDIO, PART_THUMB} or (
+                part == PART_VIDEO
+                and (is_hybrid_metadata or not load_info_json)
+            ):
                 result.part_calls.append(f"{part}:{video_id}")
             if part == PART_VIDEO and video_id in skip_video_ids:
                 raise SkipCurrentVideo("skip requested")
@@ -300,7 +314,26 @@ def _run_batch(
                     part=PART_VIDEO,
                     command=command,
                 )
+            if is_hybrid_metadata:
+                output_template = _option_value(command, "-o")
+                info_path = Path(output_template.replace("%(ext)s", "info.json"))
+                info_path.parent.mkdir(parents=True, exist_ok=True)
+                info_path.write_text(json.dumps(_hybrid_info(video_id)), encoding="utf-8")
+                snapshot_video_ids[str(info_path)] = video_id
+                return
+            if load_info_json:
+                output_template = _option_value(command, "-o")
+                format_id = _option_value(command, "-f")
+                suffix = "mp4" if format_id == HYBRID_VIDEO_FORMAT_ID else "m4a"
+                output_path = Path(output_template.replace("%(ext)s", suffix))
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(format_id.encode("ascii"))
+                return
             _write_staged_output(command, part, video_id)
+
+        def fake_ffmpeg(command, *, operation, cancel_controller=None, progress_duration_seconds=None):
+            Path(command[-1]).write_bytes(b"merged")
+            return ""
 
         original_attempt_state = downloader._video_attempt_state_for_batch
 
@@ -330,6 +363,7 @@ def _run_batch(
             stack.enter_context(_patched_attr(downloader, "_atomic_promote_with_retry", fake_promote))
             stack.enter_context(_patched_attr(downloader, "_extract_mp3_from_video", fake_extract_mp3))
             stack.enter_context(_patched_attr(downloader, "_run_ytdlp_with_retries", fake_run_ytdlp))
+            stack.enter_context(_patched_attr(downloader, "_run_ffmpeg_command", fake_ffmpeg))
             stack.enter_context(_patched_attr(downloader, "_video_attempt_state_for_batch", wrapped_attempt_state))
             downloader.download_items(
                 videos,
@@ -449,6 +483,38 @@ def _write_staged_output(command: list[str], part: str, video_id: str) -> None:
 
 def _video_id_from_staged_path(path: Path) -> str:
     return Path(path).stem
+
+
+def _video_id_from_hybrid_path(path: Path, snapshot_video_ids: dict[str, str]) -> str:
+    candidate = Path(path).resolve(strict=False)
+    for info_path, video_id in snapshot_video_ids.items():
+        if Path(info_path).parent.resolve(strict=False) == candidate.parent:
+            return video_id
+    return _video_id_from_staged_path(path)
+
+
+def _hybrid_info(video_id: str) -> dict:
+    return {
+        "id": video_id,
+        "duration": 60.0,
+        "requested_formats": [
+            {
+                "format_id": HYBRID_VIDEO_FORMAT_ID,
+                "ext": "mp4",
+                "vcodec": "avc1.640028",
+                "acodec": "none",
+                "height": 1080,
+                "filesize": 9_000_000,
+            },
+            {
+                "format_id": HYBRID_AUDIO_FORMAT_ID,
+                "ext": "m4a",
+                "vcodec": "none",
+                "acodec": "mp4a.40.2",
+                "filesize": 1_000_000,
+            },
+        ],
+    }
 
 
 def _video_id_from_final(path: Path, stems: dict[str, str]) -> str:

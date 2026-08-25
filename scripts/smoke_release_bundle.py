@@ -27,6 +27,8 @@ CONTROL_COMMIT = "2" * 40
 RC_TAG = "v1.3.0-rc.1"
 STABLE_TAG = "v1.3.1"
 CI_TAG = "v0.0.0-ci"
+HISTORICAL_YTDLP_LICENSE = "legal/licenses/yt-dlp-2026.03.17-UNLICENSE.txt"
+ACTIVE_YTDLP_LICENSE = "legal/licenses/yt-dlp-2026.08.18.122307-UNLICENSE.txt"
 
 
 def main() -> int:
@@ -60,9 +62,17 @@ def _test_v2_compatibility(bundle, root: Path) -> None:
         stderr=subprocess.PIPE,
         check=True,
     ).stdout
+    baseline_document = json.loads(baseline_contract.decode("utf-8"))
+    baseline_licenses = baseline_document["legal_payload_files"]
     _require(
-        V2_CONTRACT_PATH.read_bytes() == baseline_contract,
-        "release assets v2 contract changed from the pre-R1 baseline",
+        baseline_licenses.count(HISTORICAL_YTDLP_LICENSE) == 1,
+        "pre-R1 release assets v2 yt-dlp license baseline changed",
+    )
+    baseline_licenses[baseline_licenses.index(HISTORICAL_YTDLP_LICENSE)] = ACTIVE_YTDLP_LICENSE
+    current_document = json.loads(V2_CONTRACT_PATH.read_text(encoding="utf-8"))
+    _require(
+        current_document == baseline_document,
+        "release assets v2 differs beyond the authorized active yt-dlp license projection",
     )
 
     fixture = _release_fixture(root / "v2-fixture", RC_TAG)
