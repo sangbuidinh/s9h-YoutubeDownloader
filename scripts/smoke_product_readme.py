@@ -29,8 +29,34 @@ def main() -> int:
 
     for mode in ("Video + Thumb", "Audio MP3 + Thumb", "Video + Audio MP3 + Thumb"):
         _assert(mode in readme, f"download mode is missing: {mode}")
-    for required in ("Stable - yt-dlp internal", "Fast - aria2c experimental", "1080p", "H.264", "AAC"):
+    for required in (
+        "Stable - yt-dlp internal",
+        "Fast - optimized transport (experimental)",
+        "native yt-dlp",
+        "-N 1",
+        "Split selection",
+        "Combined fallback",
+        "Separate Fast MP3",
+        "-x 16 -s 16 -j 16 -k 1M",
+        "1080p",
+        "H.264",
+        "AAC",
+    ):
         _assert(required in readme, f"required product wording is missing: {required}")
+    for obsolete in (
+        "Fast - aria2c experimental",
+        "Fast supplies aria2c to yt-dlp for media transfer",
+        "The percentage reported from aria2c represents transfer progress",
+    ):
+        _assert(obsolete not in readme, f"obsolete Fast video wording remains: {obsolete}")
+    _assert(
+        re.search(r"Fast video.{0,900}saved metadata.{0,900}native yt-dlp", readme, re.IGNORECASE | re.DOTALL),
+        "Fast video native transport and saved-metadata contract are incomplete",
+    )
+    _assert(
+        re.search(r"Separate Fast MP3.{0,500}-x 16 -s 16 -j 16 -k 1M", readme, re.IGNORECASE | re.DOTALL),
+        "separate Fast MP3 aria2 profile is missing",
+    )
 
     _assert(re.search(r"File start number.{0,220}session-only", readme, re.IGNORECASE | re.DOTALL), "session-only numbering is missing")
     _assert(re.search(r"API key.{0,500}(sensitive|Never commit)", readme, re.IGNORECASE | re.DOTALL), "API key safety is missing")

@@ -1,3 +1,5 @@
+import json
+import re
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -21,6 +23,8 @@ from core.progress_status import (
 
 def main() -> int:
     _test_stable_stage_calculation()
+    _test_fast_metadata_is_not_a_media_attempt()
+    _test_metadata_prepare_time_without_media_attempt()
     _test_fast_failed_attempt_retry_wait_and_success()
     _test_no_merge_and_no_progress_attempts()
     _test_cancelled_summary()
@@ -28,6 +32,152 @@ def main() -> int:
     _test_download_video_failure_emits_one_summary()
     print("download stage timing smoke passed")
     return 0
+
+
+def _test_fast_metadata_is_not_a_media_attempt() -> None:
+    split_summary = _run_fast_attempt_accounting_case("split")
+    combined_summary = _run_fast_attempt_accounting_case("combined")
+    split_attempts = _summary_attempts(split_summary)
+    combined_attempts = _summary_attempts(combined_summary)
+    _assert(
+        split_attempts == 2 and combined_attempts == 1,
+        "metadata extraction counted as a media attempt: "
+        f"split={split_attempts} expected=2; combined={combined_attempts} expected=1",
+    )
+
+
+def _run_fast_attempt_accounting_case(selection_kind: str) -> str:
+    logs: list[str] = []
+    with TemporaryDirectory(prefix=f"timing_fast_{selection_kind}_") as temp_dir:
+        root = Path(temp_dir)
+        final_path = root / "final.mp4"
+        options = downloader.DownloadOptions(
+            str(root),
+            "channel",
+            "Channel",
+            download_engine=downloader.DOWNLOAD_ENGINE_ARIA2_FAST,
+        )
+
+        def fake_ytdlp(command, _cancel_controller=None):
+            output_template = _option_value(command, "-o")
+            if "--write-info-json" in command:
+                payload = (
+                    {
+                        "id": "video-id",
+                        "duration": 60.0,
+                        "requested_formats": [
+                            {
+                                "format_id": "137",
+                                "ext": "mp4",
+                                "vcodec": "avc1.640028",
+                                "acodec": "none",
+                                "height": 1080,
+                                "filesize": 90_000_000,
+                            },
+                            {
+                                "format_id": "140",
+                                "ext": "m4a",
+                                "vcodec": "none",
+                                "acodec": "mp4a.40.2",
+                                "filesize": 10_000_000,
+                            },
+                        ],
+                    }
+                    if selection_kind == "split"
+                    else {
+                        "id": "video-id",
+                        "format_id": "22",
+                        "ext": "mp4",
+                        "vcodec": "avc1.64001F",
+                        "acodec": "mp4a.40.2",
+                        "height": 720,
+                        "filesize": 25_000_000,
+                        "duration": 60.0,
+                    }
+                )
+                info_path = Path(output_template.replace("%(ext)s", "info.json"))
+                info_path.parent.mkdir(parents=True, exist_ok=True)
+                info_path.write_text(json.dumps(payload), encoding="utf-8")
+                return ""
+
+            attempt = downloader._current_ytdlp_attempt_timing()
+            _assert(attempt is not None, "media subprocess did not receive attempt timing")
+            attempt.mark_first_transfer()
+            format_id = _option_value(command, "-f")
+            extension = "m4a" if format_id == "140" else "mp4"
+            media_path = Path(output_template.replace("%(ext)s", extension))
+            media_path.parent.mkdir(parents=True, exist_ok=True)
+            media_path.write_bytes(format_id.encode("ascii"))
+            return ""
+
+        def fake_ffmpeg(command, **_kwargs):
+            Path(command[-1]).write_bytes(b"merged")
+            return ""
+
+        def fake_promote(source, final, _log, **_kwargs):
+            Path(final).write_bytes(Path(source).read_bytes())
+
+        with (
+            _patched_attr(downloader, "_run_ytdlp", fake_ytdlp),
+            _patched_attr(downloader, "_run_ffmpeg_command", fake_ffmpeg),
+            _patched_attr(
+                downloader,
+                "_validate_premiere_safe_mp4_for_download",
+                lambda *_args, **_kwargs: None,
+            ),
+            _patched_attr(downloader, "_atomic_promote_with_retry", fake_promote),
+        ):
+            downloader._download_video(
+                "video-id",
+                "001 Timing",
+                root,
+                final_path,
+                options,
+                logs.append,
+                aria2_validation=downloader._Aria2RuntimeValidation(
+                    requested=True,
+                    available=True,
+                    path=Path("aria2c.exe"),
+                ),
+            )
+
+    summaries = [line for line in logs if line.startswith("[PERF]")]
+    _assert(len(summaries) == 1, f"Fast {selection_kind} emitted {len(summaries)} PERF lines")
+    return summaries[0]
+
+
+def _summary_attempts(summary: str) -> int:
+    match = re.search(r"\battempts=(\d+)\b", summary)
+    _assert(match is not None, f"PERF summary omitted attempts: {summary}")
+    return int(match.group(1))
+
+
+def _test_metadata_prepare_time_without_media_attempt() -> None:
+    clock = _FakeClock()
+    timing = downloader._VideoDownloadTiming(
+        engine=TRANSFER_SOURCE_YTDLP,
+        logical_started_at=clock(),
+        clock=clock,
+    )
+    options = downloader.DownloadOptions("", "", "")
+
+    def fake_metadata(_command, _cancel_controller=None):
+        clock.advance(2)
+        return ""
+
+    with downloader._video_download_timing_scope(timing), _patched_attr(
+        downloader,
+        "_run_ytdlp",
+        fake_metadata,
+    ):
+        downloader._run_ytdlp_with_retries(
+            ["yt-dlp", "--write-info-json", "--skip-download", "video-id"],
+            options,
+            lambda _message: None,
+        )
+
+    _assert(len(timing.attempts) == 0, "metadata-only subprocess appended a media attempt")
+    _assert(timing.stage_totals() == (2.0, 0.0, 0.0), "metadata prepare time was lost")
 
 
 def _test_stable_stage_calculation() -> None:
@@ -310,6 +460,13 @@ def _patched_attr(target, name: str, value):
         yield
     finally:
         setattr(target, name, previous)
+
+
+def _option_value(command: list[str], option: str) -> str:
+    try:
+        return str(command[command.index(option) + 1])
+    except (ValueError, IndexError) as exc:
+        raise AssertionError(f"Missing {option} in command: {command}") from exc
 
 
 def _assert(condition: bool, message: str) -> None:
