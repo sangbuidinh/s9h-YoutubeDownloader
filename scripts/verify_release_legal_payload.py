@@ -314,6 +314,8 @@ def load_asset_contract(path: Path) -> dict[str, Any]:
         valid_state = flags == (False, False, False) and all(item["status"] == "not-ready" for item in templates) and isinstance(blockers, list) and len(blockers) == len(set(blockers)) and bool(blockers)
     elif contract["release_readiness"] == "ready":
         valid_state = flags == (True, True, True) and all(item["status"] == "ready" for item in templates) and blockers == []
+    elif contract["release_readiness"] == "technical-ready":
+        valid_state = flags == (False, True, True) and all(item["status"] == "ready" for item in templates) and blockers == ["legal-release-authorization-required"]
     else:
         valid_state = False
     if not valid_state:

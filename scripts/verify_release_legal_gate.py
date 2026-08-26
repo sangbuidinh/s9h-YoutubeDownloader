@@ -4,10 +4,14 @@ import argparse
 import json
 import re
 import sys
+import zipfile
 from pathlib import Path
 from typing import Any
 
 import source_compliance
+import ffmpeg_correspondence
+import release_authorization
+import verify_release_legal_payload as payload_verifier
 
 
 TOP_LEVEL_KEYS = (
@@ -74,26 +78,40 @@ def main() -> int:
     parser.add_argument("--source-owner", type=Path)
     parser.add_argument("--source-assets-root", type=Path)
     parser.add_argument("--legal-payload", type=Path)
+    parser.add_argument("--stage", choices=("prebuild", "final"), default="final")
+    parser.add_argument("--control-root", type=Path)
+    parser.add_argument("--portable-zip", type=Path)
+    parser.add_argument("--release-notes", type=Path)
+    parser.add_argument("--source-commit")
+    parser.add_argument("--control-commit")
     args = parser.parse_args()
     try:
         policy = load_policy(args.policy)
         release = release_for_tag(policy, args.tag)
         owner_path = args.source_owner or args.policy.resolve().parent / "source-compliance-v1.3.2.json"
         owner = source_compliance.load_owner(owner_path)
-        state = validate_release_evidence(
-            policy,
-            release,
-            owner,
-            source_assets_root=args.source_assets_root,
-            legal_payload=args.legal_payload,
-        )
-    except (ReleaseLegalGateError, source_compliance.SourceComplianceError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+        control_root = args.control_root or args.policy.resolve().parent.parent
+        if args.stage == "prebuild":
+            state = validate_prebuild_control(policy, release, owner, control_root=control_root)
+            if state["technical_source_ready"]:
+                print(f"Prebuild technical control gate passed for {release['tag']}; release_payload_integrated=false")
+                return 0
+        else:
+            state = validate_release_evidence(
+                policy, release, owner, source_assets_root=args.source_assets_root,
+                legal_payload=args.legal_payload, control_root=control_root,
+                portable_zip=args.portable_zip, release_notes=args.release_notes,
+                source_commit=args.source_commit, control_commit=args.control_commit,
+            )
+    except (ReleaseLegalGateError, source_compliance.SourceComplianceError,
+            release_authorization.AuthorizationError, payload_verifier.LegalPayloadError,
+            OSError, UnicodeError, json.JSONDecodeError, zipfile.BadZipFile) as exc:
         print(f"Release legal gate error: {exc}", file=sys.stderr)
         return 2
     if state["release_ready"]:
         print(f"Release legal gate ready for {release['tag']}")
         return 0
-    reasons = ", ".join(release["reason_codes"])
+    reasons = ", ".join(state["release_blockers"])
     print(f"Release legal gate blocked for {release['tag']}: {reasons}")
     return 1
 
@@ -127,7 +145,7 @@ def validate_policy_document(policy: Any) -> dict[str, Any]:
         policy["release_payload_integrated"],
     )
     _require(all(type(flag) is bool for flag in flags), "release certification flags are invalid")
-    _require(flags in ((False, False, False), (True, True, True)), "release certification flags are inconsistent")
+    _require(flags in ((False, False, False), (False, True, False), (True, True, False)), "release certification flags are inconsistent or prematurely claim payload integration")
 
     releases = policy["releases"]
     _require(isinstance(releases, list) and len(releases) == len(EXPECTED_TAGS), "policy must contain exactly five releases")
@@ -136,7 +154,9 @@ def validate_policy_document(policy: Any) -> dict[str, Any]:
         _require(isinstance(release, dict) and tuple(release) == RELEASE_KEYS, "release policy record schema is invalid")
         tag = release["tag"]
         _require(isinstance(tag, str), "release tag is invalid")
-        _require(release["status"] in {"blocked", "ready"}, f"release status must be blocked or ready: {tag}")
+        if tag != "v1.3.2":
+            _require(release["status"] == "blocked", f"historical release must remain blocked: {tag}")
+        _require(release["status"] in {"blocked", "technical-ready", "authorized-ready"}, f"release status is invalid: {tag}")
         reasons = release["reason_codes"]
         _require(isinstance(reasons, list), f"release reasons are invalid: {tag}")
         _require(all(isinstance(reason, str) and re.fullmatch(r"[a-z0-9-]+", reason) for reason in reasons), f"release reason is invalid: {tag}")
@@ -157,7 +177,12 @@ def validate_policy_document(policy: Any) -> dict[str, Any]:
         else:
             _require(release["reason_codes"] == [], "ready v1.3.2 has blockers")
     current = next(release for release in releases if release["tag"] == "v1.3.2")
-    _require((current["status"] == "ready") == all(flags), "v1.3.2 state and certification flags disagree")
+    expected_flags = {
+        "blocked": (False, False, False),
+        "technical-ready": (False, True, False),
+        "authorized-ready": (True, True, False),
+    }
+    _require(flags == expected_flags[current["status"]], "v1.3.2 state and certification flags disagree")
     _verify_hygiene(policy)
     return policy
 
@@ -170,13 +195,12 @@ def release_for_tag(policy: dict[str, Any], tag: str) -> dict[str, Any]:
     return matches[0]
 
 
-def validate_release_evidence(
+def validate_prebuild_control(
     policy: dict[str, Any],
     release: dict[str, Any],
     owner: dict[str, Any],
     *,
-    source_assets_root: Path | None,
-    legal_payload: Path | None,
+    control_root: Path | None,
 ) -> dict[str, Any]:
     validate_policy_document(policy)
     source_compliance.validate_owner(owner)
@@ -184,6 +208,9 @@ def validate_release_evidence(
     if release["status"] == "blocked":
         _require(bool(release["reason_codes"]), "blocked release has no reasons")
         return {
+            "state": "BLOCKED",
+            "technical_source_ready": False,
+            "legal_release_authorized": False,
             "release_ready": False,
             "legal_compliance_certified": False,
             "source_availability_certified": False,
@@ -191,23 +218,75 @@ def validate_release_evidence(
             "release_blockers": list(release["reason_codes"]),
         }
     _require(release["tag"] == "v1.3.2", "only v1.3.2 may enter ready state")
-    _require(owner["legal_compliance_certified"] is True, "source checklist is not certified")
+    _require(owner["legal_compliance_certified"] is False, "technical source owner cannot authorize legal release")
     _require(owner["source_availability_certified"] is True, "source availability is not certified")
     _require(all(kit["status"] == "ready" and not kit["blockers"] for kit in owner["kits"]), "required source kits are not ready")
-    _require(source_assets_root is not None, "ready source assets root is required")
-    source_assets_root = source_assets_root.resolve(strict=False)
-    _require(source_assets_root.is_dir(), "ready source assets root is unavailable")
-    for kit in owner["kits"]:
-        source_compliance.verify_source_asset(owner, kit["id"], source_assets_root / kit["source_asset"]["filename"])
-    _require(legal_payload is not None, "ready legal payload evidence is required")
-    legal_payload = legal_payload.resolve(strict=False)
-    _require(legal_payload.is_file() and legal_payload.suffix.casefold() == ".zip" and legal_payload.stat().st_size > 0, "ready legal payload evidence is unavailable")
+    _require(control_root is not None, "ready workflow control root is required")
+    control_root = payload_verifier.require_regular_directory(control_root, "workflow control root")
+    _require(load_policy(control_root / "legal/release-policy.json") == policy, "control policy mismatch")
+    _require(source_compliance.load_owner(control_root / source_compliance.OWNER_PATH) == owner, "control source owner mismatch")
+    correspondence = ffmpeg_correspondence.load_record(control_root / ffmpeg_correspondence.RECORD_PATH)
+    ffmpeg_correspondence.require_ready_owner(correspondence, owner)
+    contract = payload_verifier.load_asset_contract(control_root / payload_verifier.CONTRACT_PATH)
+    declared_authorized = release["status"] == "authorized-ready"
+    expected_contract_state = "ready" if declared_authorized else "technical-ready"
+    _require(contract["release_readiness"] == expected_contract_state, "asset contract and prebuild policy disagree")
+    authorization = release_authorization.load_authorization(control_root / release_authorization.AUTHORIZATION_PATH)
+    authorized = release_authorization.verify_authorization(authorization, policy=policy, owner=owner, contract=contract, correspondence=correspondence)
+    _require(authorized == declared_authorized, "explicit legal authorization and policy disagree")
     return {
-        "release_ready": True,
-        "legal_compliance_certified": True,
+        "state": "TECHNICAL_READY",
+        "technical_source_ready": True,
+        "legal_release_authorized": authorized,
+        "release_ready": False,
+        "legal_compliance_certified": False,
+        "source_availability_certified": False,
+        "release_payload_integrated": False,
+        "release_blockers": ["final-release-evidence-not-verified"] + ([] if authorized else ["legal-release-authorization-required"]),
+    }
+
+
+def validate_release_evidence(
+    policy: dict[str, Any], release: dict[str, Any], owner: dict[str, Any], *,
+    source_assets_root: Path | None, legal_payload: Path | None,
+    control_root: Path | None = None, portable_zip: Path | None = None,
+    release_notes: Path | None = None, source_commit: str | None = None,
+    control_commit: str | None = None,
+) -> dict[str, Any]:
+    state = validate_prebuild_control(policy, release, owner, control_root=control_root)
+    if not state["technical_source_ready"]:
+        return state
+    _require(source_assets_root is not None, "ready source assets root is required")
+    source_assets_root = payload_verifier.require_regular_directory(source_assets_root, "source assets root")
+    for kit in owner["kits"]:
+        name = f"Youtube-Downloaderbs-{release['tag']}-{kit['id']}-source.zip"
+        _require(kit["source_asset"]["filename"] == name, "source asset filename is not exact")
+        payload_verifier.require_regular_file(source_assets_root / name, source_assets_root, name)
+        source_compliance.verify_source_asset(owner, kit["id"], source_assets_root / name)
+    _require(legal_payload is not None and portable_zip is not None and release_notes is not None, "complete legal payload evidence is required")
+    _require(source_commit is not None and control_commit is not None, "final release commit identities are required")
+    _require(legal_payload.name == f"Youtube-Downloaderbs-{release['tag']}-legal.zip", "legal payload filename is invalid")
+    _require(portable_zip.name == f"Youtube-Downloaderbs-{release['tag']}.zip", "portable ZIP filename is invalid")
+    payload_verifier.verify_release_legal_payload(
+        control_root=control_root, portable_zip=portable_zip, legal_zip=legal_payload,
+        release_notes=release_notes, tag=release["tag"], source_commit=source_commit,
+        control_commit=control_commit,
+    )
+    authorization = release_authorization.load_authorization(control_root / release_authorization.AUTHORIZATION_PATH)
+    contract = payload_verifier.load_asset_contract(control_root / payload_verifier.CONTRACT_PATH)
+    authorized = release_authorization.verify_authorization(
+        authorization, policy=policy, owner=owner, contract=contract, source_commit=source_commit,
+        correspondence=ffmpeg_correspondence.load_record(control_root / ffmpeg_correspondence.RECORD_PATH),
+    )
+    return {
+        "state": "AUTHORIZED_READY" if authorized else "TECHNICAL_READY",
+        "technical_source_ready": True,
+        "legal_release_authorized": authorized,
+        "release_ready": authorized,
+        "legal_compliance_certified": authorized,
         "source_availability_certified": True,
         "release_payload_integrated": True,
-        "release_blockers": [],
+        "release_blockers": [] if authorized else ["legal-release-authorization-required"],
     }
 
 

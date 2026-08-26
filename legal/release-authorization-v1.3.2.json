@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "release_tag": "v1.3.2",
+  "state": "LEGAL_REVIEW_REQUIRED",
+  "decision_reference": null,
+  "reviewed_source_commit": null,
+  "reviewed_policy_sha256": null,
+  "reviewed_source_owner_sha256": null,
+  "reviewed_asset_contract_sha256": null,
+  "reviewed_ffmpeg_correspondence_sha256": null
+}

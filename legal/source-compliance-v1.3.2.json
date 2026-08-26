@@ -248,7 +248,7 @@
         }
       ],
       "build_evidence": [
-        "32 of 50 external-version entries are published by the exact verified package README",
+        "24 of 48 enabled source-required direct inputs have immutable upstream archive and license-file evidence; see legal/ffmpeg-correspondence-v1.3.2.json",
         "4 Windows interfaces are classified as System Library candidates; VAAPI is reclassified as a source-required external input",
         "exact configure command recovered from the verified ffmpeg.exe bytes without execution",
         "provider README SHA-256 9172433fb251059a58d2ff11ba8c6132e04819136ed96e809563911ff0d13816",
@@ -258,10 +258,11 @@
       "source_asset": null,
       "status": "blocked",
       "blockers": [
-        "18 of 50 direct external-version entries still lack exact provider-published identity",
+        "24 of 48 enabled source-required direct inputs still lack verified immutable source identity",
         "Exact provider media-autobuild_suite snapshot and package-specific patch set are not proven",
         "Release source asset and binary-to-source mapping are not integrated",
-        "Statically embedded transitive source inventory and immutable revisions remain incomplete"
+        "Statically embedded transitive source inventory and immutable revisions remain incomplete",
+        "Windows System Library candidate exclusions and exact SDK/header boundaries remain uncertified"
       ]
     }
   ]

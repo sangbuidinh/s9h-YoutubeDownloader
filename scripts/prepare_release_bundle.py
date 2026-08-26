@@ -120,7 +120,12 @@ def create_bundle(
     sbom_input: Path | None = None,
 ) -> None:
     _validate_metadata(tag, source_commit, control_commit, prerelease)
-    control = _load_control_state(policy, asset_contract, tag, source_assets_root, legal_payload_path)
+    control = _load_control_state(
+        policy, asset_contract, tag, source_assets_root, legal_payload_path,
+        portable_zip=release_root / "assets" / f"Youtube-Downloaderbs-{tag}.zip",
+        release_notes=release_root / NOTES_NAME,
+        source_commit=source_commit, control_commit=control_commit,
+    )
     evidence = _load_contract_sbom_evidence(
         control,
         sbom_input,
@@ -258,7 +263,12 @@ def verify_bundle(
     _validate_metadata(tag, source_commit, control_commit, prerelease)
     if type(require_release_ready) is not bool:
         raise BundleError("require-release-ready flag is invalid")
-    control = _load_control_state(policy, asset_contract, tag, source_assets_root, legal_payload_path)
+    control = _load_control_state(
+        policy, asset_contract, tag, source_assets_root, legal_payload_path,
+        portable_zip=bundle_root / "assets" / f"Youtube-Downloaderbs-{tag}.zip",
+        release_notes=bundle_root / NOTES_NAME,
+        source_commit=source_commit, control_commit=control_commit,
+    )
     evidence = _load_contract_sbom_evidence(
         control,
         sbom_input,
@@ -393,6 +403,11 @@ def _load_control_state(
     tag: str,
     source_assets_root: Path,
     legal_payload_path: Path,
+    *,
+    portable_zip: Path | None = None,
+    release_notes: Path | None = None,
+    source_commit: str | None = None,
+    control_commit: str | None = None,
 ) -> dict[str, Any]:
     asset_contract_path = asset_contract_path.expanduser().resolve(strict=False)
     control_root = asset_contract_path.parent.parent
@@ -411,8 +426,14 @@ def _load_control_state(
             source_kits,
             source_assets_root=source_assets_root,
             legal_payload=legal_payload_path,
+            control_root=control_root,
+            portable_zip=portable_zip,
+            release_notes=release_notes,
+            source_commit=source_commit,
+            control_commit=control_commit,
         )
-    except (release_gate.ReleaseLegalGateError, source_compliance.SourceComplianceError) as exc:
+    except (release_gate.ReleaseLegalGateError, source_compliance.SourceComplianceError,
+            release_gate.release_authorization.AuthorizationError, legal_payload.LegalPayloadError) as exc:
         raise BundleError(str(exc)) from exc
     contract_ready = contract["release_readiness"] == "ready"
     if contract_ready != state["release_ready"]:

@@ -116,7 +116,7 @@ def validate_owner(value: Any, *, allow_unsealed_asset: bool = False) -> dict[st
     _require(value["release_tag"] == "v1.3.2", "source owner tag is invalid")
     _require(value["technical_compliance_not_legal_advice"] is True, "source owner disclaimer is missing")
     _require(value["release_gate_reconsideration_allowed"] is True, "ready-state review is disabled")
-    _require(type(value["legal_compliance_certified"]) is bool, "legal certification flag is invalid")
+    _require(value["legal_compliance_certified"] is False, "technical source owner cannot authorize legal release")
     _require(type(value["source_availability_certified"]) is bool, "source certification flag is invalid")
     _require(value["classification_model"] == sorted(CLASSIFICATIONS), "classification model is invalid")
     _require(value["immutable_identity_types"] == sorted(IMMUTABLE_TYPES), "identity type model is invalid")
@@ -127,7 +127,6 @@ def validate_owner(value: Any, *, allow_unsealed_asset: bool = False) -> dict[st
     all_ready = all(kit["status"] == "ready" for kit in kits)
     if all_ready:
         _require(value["source_availability_certified"] is True, "ready source kits are not certified")
-        _require(value["legal_compliance_certified"] is True, "ready source checklist is not certified")
     else:
         _require(value["source_availability_certified"] is False, "incomplete source kits were certified")
         _require(value["legal_compliance_certified"] is False, "incomplete source checklist was certified")
@@ -177,7 +176,10 @@ def _validate_kit(kit: Any, *, allow_unsealed_asset: bool) -> None:
         _validate_source_identity(identity)
     identity_ids = [identity["component_id"] for identity in identities]
     _require(identity_ids == sorted(set(identity_ids)), f"{package_id} identities are not sorted and unique")
-    _require(set(identity_ids) == EXPECTED_COMPONENTS[package_id], f"{package_id} identity set is incomplete")
+    if package_id == "aria2":
+        _require(set(identity_ids) == EXPECTED_COMPONENTS[package_id], "aria2 identity set is incomplete")
+    else:
+        _require(EXPECTED_COMPONENTS[package_id] <= set(identity_ids), "ffmpeg core/build identity set is incomplete")
     status = kit["status"]
     _require(status in {"blocked", "ready"}, f"{package_id} source status is invalid")
     if status == "ready":
@@ -285,6 +287,15 @@ def _validate_embedded_manifest(value: Any, entries: dict[str, bytes], kit: dict
         data = entries[record["name"]]
         _require(record["size"] == len(data) and record["sha256"] == hashlib.sha256(data).hexdigest(), f"source manifest record does not match: {record['name']}")
         _require(record["role"] in {"build-script", "license", "notice", "source-archive"}, f"source manifest role is invalid: {record['name']}")
+    # A correctly hashed notice-only ZIP is not a source asset. Bind each
+    # declared source identity to its actual embedded archive bytes.
+    by_name = {record["name"]: record for record in records}
+    for identity in kit["identities"]:
+        name = f"sources/{identity['archive_filename']}"
+        record = by_name.get(name)
+        _require(record is not None and record["role"] == "source-archive", f"embedded source archive is missing: {identity['component_id']}")
+        _require(record["size"] == identity["archive_size"] and record["sha256"] == identity["archive_sha256"], f"embedded source archive identity mismatch: {identity['component_id']}")
+    _require({"build-script", "license", "notice"} <= {record["role"] for record in records}, "source asset build/license/notice evidence is missing")
 
 
 def _read_deterministic_zip(path: Path, label: str) -> dict[str, bytes]:
