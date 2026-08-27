@@ -199,6 +199,11 @@ def _write_ready_control(control: Path, sources: Path, *, authorized: bool = Tru
                              reviewed_source_owner_sha256=release_authorization.document_sha256(owner),
                              reviewed_asset_contract_sha256=release_authorization.document_sha256(contract),
                              reviewed_ffmpeg_correspondence_sha256=release_authorization.document_sha256(correspondence))
+    else:
+        authorization.update(state="LEGAL_REVIEW_REQUIRED", decision_reference=None,
+                             reviewed_source_commit=None, reviewed_policy_sha256=None,
+                             reviewed_source_owner_sha256=None, reviewed_asset_contract_sha256=None,
+                             reviewed_ffmpeg_correspondence_sha256=None)
     (control / release_authorization.AUTHORIZATION_PATH).write_bytes(release_authorization.canonical_bytes(authorization))
 
 
