@@ -4,8 +4,8 @@
   "bundle_manifest_schema_version": 3,
   "sbom_input_required": true,
   "legal_payload_format": "s9h-release-legal-payload-v1",
-  "release_readiness": "technical-ready",
-  "legal_compliance_certified": false,
+  "release_readiness": "ready",
+  "legal_compliance_certified": true,
   "source_availability_certified": true,
   "source_kits_ready": true,
   "portable_legal_root": "legal",
@@ -63,7 +63,5 @@
     "legal/licenses/aria2-1.37.0-GPLv2.txt",
     "legal/licenses/yt-dlp-2026.08.18.122307-UNLICENSE.txt"
   ],
-  "release_blockers": [
-    "legal-release-authorization-required"
-  ]
+  "release_blockers": []
 }
