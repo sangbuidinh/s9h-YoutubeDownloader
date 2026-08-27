@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "policy_mode": "fail-closed",
-  "legal_compliance_certified": false,
+  "legal_compliance_certified": true,
   "source_availability_certified": true,
   "release_payload_integrated": false,
   "releases": [
@@ -47,7 +47,7 @@
     },
     {
       "tag": "v1.3.2",
-      "status": "technical-ready",
+      "status": "authorized-ready",
       "reason_codes": [],
       "required_phase": "6B2"
     }
