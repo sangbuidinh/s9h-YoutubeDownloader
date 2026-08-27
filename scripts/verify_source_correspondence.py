@@ -233,7 +233,8 @@ def verify_repository(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     kits = load_kit_requirements(root / KIT_PATH, correspondence)
     policy = release_gate.load_policy(root / "legal/release-policy.json")
     _require(policy["policy_mode"] == "fail-closed", "release policy is not fail-closed")
-    _require(all(item["status"] == "blocked" for item in policy["releases"]), "a release policy entry is not blocked")
+    _require(all(item["status"] == "blocked" for item in policy["releases"] if item["tag"] != "v1.3.2"), "a historical release policy entry is not blocked")
+    release_gate.validate_repository_control(root)
     _verify_documentation(root)
     _verify_repository_hygiene(root, correspondence, kits)
     return correspondence, kits
@@ -471,8 +472,8 @@ def _verify_repository_hygiene(root: Path, correspondence: dict[str, Any], kits:
     _verify_hygiene(correspondence, CORRESPONDENCE_PATH)
     _verify_hygiene(kits, KIT_PATH)
     policy = json.loads((root / "legal/release-policy.json").read_text(encoding="utf-8"))
-    _require(policy["legal_compliance_certified"] is False, "release policy compliance certification changed")
-    _require(policy["source_availability_certified"] is False, "release policy source certification changed")
+    import verify_release_legal_gate
+    verify_release_legal_gate.validate_repository_control(root)
     _require(policy["release_payload_integrated"] is False, "release policy payload status changed")
 
 

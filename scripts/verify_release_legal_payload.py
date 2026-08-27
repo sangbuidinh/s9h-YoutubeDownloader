@@ -58,6 +58,11 @@ LEGAL_PAYLOAD_FILES = (
     "legal/licenses/Apache-2.0.txt",
     "legal/licenses/Deno-2.7.14-MIT.txt",
     "legal/licenses/FFmpeg-8.1.2-GPLv3.txt",
+    "legal/licenses/FFmpeg-8.1.2-LGPLv2.1.txt",
+    "legal/licenses/FFmpeg-8.1.2-LICENSE.md",
+    "legal/licenses/LAME-3.100-COPYING.txt",
+    "legal/licenses/LAME-3.100-LICENSE.txt",
+    "legal/licenses/MinGW-w64-14.0.0-COPYING.txt",
     "legal/licenses/PyInstaller-6.21.0-COPYING.txt",
     "legal/licenses/Python-3.11.9-LICENSE.txt",
     "legal/licenses/Tcl-Tk-license.terms",
@@ -75,6 +80,11 @@ PAYLOAD_PATHS = (
     "legal/licenses/Apache-2.0.txt",
     "legal/licenses/Deno-2.7.14-MIT.txt",
     "legal/licenses/FFmpeg-8.1.2-GPLv3.txt",
+    "legal/licenses/FFmpeg-8.1.2-LGPLv2.1.txt",
+    "legal/licenses/FFmpeg-8.1.2-LICENSE.md",
+    "legal/licenses/LAME-3.100-COPYING.txt",
+    "legal/licenses/LAME-3.100-LICENSE.txt",
+    "legal/licenses/MinGW-w64-14.0.0-COPYING.txt",
     "legal/licenses/PyInstaller-6.21.0-COPYING.txt",
     "legal/licenses/Python-3.11.9-LICENSE.txt",
     "legal/licenses/Tcl-Tk-license.terms",
@@ -223,8 +233,9 @@ def parse_release_notes_checksum(raw: bytes, portable_name: str) -> tuple[str, i
     for line in content.splitlines(keepends=True):
         body = line.rstrip(b"\r\n")
         filename_matches = list(filename_pattern.finditer(body))
-        if filename_matches:
-            if len(filename_matches) != 1:
+        hash_matches = list(hash_pattern.finditer(body))
+        if filename_matches and hash_matches:
+            if len(filename_matches) != 1 or len(hash_matches) != 1:
                 raise LegalPayloadError("release notes portable checksum line is malformed")
             candidates.append((offset, body))
         offset += len(line)
@@ -360,9 +371,9 @@ def build_manifest_bytes(
         "source_commit": source_commit,
         "control_commit": control_commit,
         "project_license_status": "not-selected",
-        "legal_compliance_certified": contract["legal_compliance_certified"],
-        "source_availability_certified": contract["source_availability_certified"],
-        "source_kits_ready": contract["source_kits_ready"],
+        "legal_compliance_certified": contract["legal_compliance_certified"] if tag == "v1.3.2" else False,
+        "source_availability_certified": contract["source_availability_certified"] if tag == "v1.3.2" else False,
+        "source_kits_ready": contract["source_kits_ready"] if tag == "v1.3.2" else False,
         "files": records,
     }
     return (json.dumps(manifest, indent=2, ensure_ascii=True) + "\n").encode("utf-8")
@@ -461,9 +472,9 @@ def _verify_manifest(
         (manifest["source_commit"] == source_commit, "legal manifest source commit is invalid"),
         (manifest["control_commit"] == control_commit, "legal manifest control commit is invalid"),
         (manifest["project_license_status"] == "not-selected", "project license status changed"),
-        (manifest["legal_compliance_certified"] is contract["legal_compliance_certified"], "legal compliance state does not match contract"),
-        (manifest["source_availability_certified"] is contract["source_availability_certified"], "source availability state does not match contract"),
-        (manifest["source_kits_ready"] is contract["source_kits_ready"], "source kit state does not match contract"),
+        (manifest["legal_compliance_certified"] is (contract["legal_compliance_certified"] if tag == "v1.3.2" else False), "legal compliance state does not match contract"),
+        (manifest["source_availability_certified"] is (contract["source_availability_certified"] if tag == "v1.3.2" else False), "source availability state does not match contract"),
+        (manifest["source_kits_ready"] is (contract["source_kits_ready"] if tag == "v1.3.2" else False), "source kit state does not match contract"),
     )
     for condition, message in checks:
         _require(condition, message)
@@ -585,7 +596,7 @@ def _validate_zip_info(info: zipfile.ZipInfo, label: str, *, deterministic: bool
 def _verify_legal_paths(names: set[str]) -> None:
     license_names = {name for name in names if name.startswith("legal/licenses/")}
     expected_licenses = {name for name in PAYLOAD_PATHS if name.startswith("legal/licenses/")}
-    if license_names != expected_licenses or len(license_names) != 8:
+    if license_names != expected_licenses or len(license_names) != 13:
         raise LegalPayloadError("legal payload license set is not exact")
     for name in names:
         folded = name.casefold()

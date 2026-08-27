@@ -416,6 +416,11 @@ def _load_control_state(
     if policy_path.expanduser().resolve(strict=False) != expected_policy.resolve(strict=False):
         raise BundleError("release policy path is invalid")
     contract = _load_bundle_contract(asset_contract_path, control_root)
+    if tag != "v1.3.2":
+        # Current technical readiness never retroactively certifies another tag.
+        contract = dict(contract, release_readiness="blocked", legal_compliance_certified=False,
+                        source_availability_certified=False, source_kits_ready=False,
+                        release_blockers=list(legal_payload.RELEASE_BLOCKERS))
     try:
         policy = release_gate.load_policy(expected_policy)
         source_kits = source_compliance.load_owner(expected_source_kits)

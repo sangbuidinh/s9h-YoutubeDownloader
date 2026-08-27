@@ -6,6 +6,8 @@ import shutil
 import tempfile
 import subprocess
 import sys
+import hashlib
+from unittest import mock
 from pathlib import Path
 
 import prepare_release_bundle as bundle
@@ -16,6 +18,7 @@ import verify_release_legal_gate as gate
 import verify_release_legal_payload as legal_verifier
 import ffmpeg_correspondence
 import release_authorization
+import project_ffmpeg
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -25,8 +28,9 @@ CONTROL_COMMIT = "2" * 40
 
 
 def main() -> int:
-    _exercise_ready_state(authorized=True)
-    _exercise_ready_state(authorized=False)
+    for authorized in (True, False):
+        with mock.patch.dict(project_ffmpeg.INPUTS, copy.deepcopy(project_ffmpeg.INPUTS)):
+            _exercise_ready_state(authorized=authorized)
     print("release ready-state full-content gate, authorization, and bundle smoke tests passed")
     return 0
 
@@ -51,9 +55,13 @@ def _exercise_ready_state(*, authorized: bool) -> None:
         exe = assets / bundle.EXE_NAME
         exe.write_bytes(b"MZsynthetic ready-state fixture\n")
         portable = assets / f"Youtube-Downloaderbs-{TAG}.zip"
+        portable_entries = {"app/SYNTHETIC.txt": b"synthetic ready-state fixture; not for distribution\n"}
+        if "runtime_build" in owner["kits"][1]:
+            portable_entries.update({"data/bin/" + binary["filename"]: _synthetic_binary(binary["filename"])
+                                     for binary in owner["kits"][1]["runtime_build"]["binaries"]})
         legal_builder._write_deterministic_zip(
             portable,
-            {"app/SYNTHETIC.txt": b"synthetic ready-state fixture; not for distribution\n"},
+            portable_entries,
             exclusive=True,
         )
         notes = release / bundle.NOTES_NAME
@@ -139,7 +147,12 @@ def _write_ready_control(control: Path, sources: Path, *, authorized: bool = Tru
     owner = copy.deepcopy(source_compliance.load_owner(REPO_ROOT / source_compliance.OWNER_PATH))
     owner["legal_compliance_certified"] = False
     owner["source_availability_certified"] = True
-    correspondence = _synthetic_correspondence(owner)
+    runtime = owner["kits"][1].get("runtime_build")
+    if runtime is not None:
+        for binary in runtime["binaries"]:
+            data = _synthetic_binary(binary["filename"])
+            binary.update(size=len(data), sha256=hashlib.sha256(data).hexdigest())
+    correspondence = runtime if runtime is not None else _synthetic_correspondence(owner)
     for kit in owner["kits"]:
         kit["status"] = "ready"
         kit["blockers"] = []
@@ -147,7 +160,7 @@ def _write_ready_control(control: Path, sources: Path, *, authorized: bool = Tru
             identity["resolved"] = True
         kit["source_asset"] = source_fixture._write_synthetic_source_asset(sources, kit)
     by_id = {item["component_id"]: item for item in owner["kits"][1]["identities"]}
-    for row in correspondence["direct_components"] + correspondence["transitive_components"]:
+    for row in correspondence.get("direct_components", []) + correspondence.get("transitive_components", []):
         if row["id"] in by_id:
             row["source_archive_size"] = by_id[row["id"]]["archive_size"]
             row["source_archive_sha256"] = by_id[row["id"]]["archive_sha256"]
@@ -170,7 +183,14 @@ def _write_ready_control(control: Path, sources: Path, *, authorized: bool = Tru
     (control / "legal/release-assets-v2.json").write_bytes(source_compliance.canonical_json_bytes(contract))
     (control / "legal/release-policy.json").write_bytes(gate.canonical_policy_bytes(policy))
     (control / source_compliance.OWNER_PATH).write_bytes(source_compliance.canonical_json_bytes(owner))
-    (control / ffmpeg_correspondence.RECORD_PATH).write_bytes(source_compliance.canonical_json_bytes(correspondence))
+    if runtime is None:
+        (control / ffmpeg_correspondence.RECORD_PATH).write_bytes(source_compliance.canonical_json_bytes(correspondence))
+    else:
+        shutil.copyfile(REPO_ROOT / ffmpeg_correspondence.RECORD_PATH, control / ffmpeg_correspondence.RECORD_PATH)
+        for recipe in runtime["recipe_files"]:
+            target = control / recipe["name"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(REPO_ROOT / recipe["name"], target)
     authorization = json.loads((REPO_ROOT / release_authorization.AUTHORIZATION_PATH).read_text(encoding="utf-8"))
     if authorized:
         authorization.update(state="LEGAL_RELEASE_AUTHORIZED", decision_reference="synthetic-external-review-only",
@@ -180,6 +200,10 @@ def _write_ready_control(control: Path, sources: Path, *, authorized: bool = Tru
                              reviewed_asset_contract_sha256=release_authorization.document_sha256(contract),
                              reviewed_ffmpeg_correspondence_sha256=release_authorization.document_sha256(correspondence))
     (control / release_authorization.AUTHORIZATION_PATH).write_bytes(release_authorization.canonical_bytes(authorization))
+
+
+def _synthetic_binary(name: str) -> bytes:
+    return ("MZsynthetic " + name + "; not executable, not for distribution\n").encode()
 
 
 def _synthetic_correspondence(owner: dict) -> dict:
@@ -226,6 +250,39 @@ def _negative_matrix(policy: dict, current: dict, owner: dict, context: dict) ->
     source_fixture._write_zip(legal, {"arbitrary.txt": b"nonempty ZIP is not legal evidence\n"})
     _expect_error(final)
     legal.write_bytes(original)
+
+    runtime = owner["kits"][1].get("runtime_build")
+    if runtime is not None:
+        # A fully valid legal payload must not mask altered portable runtime bytes.
+        portable = context["portable_zip"]
+        notes = context["release_notes"]
+        original_portable, original_notes = portable.read_bytes(), notes.read_bytes()
+        entries = legal_verifier.read_zip_entries(portable, "fixture", deterministic=True)
+        name = "data/bin/" + runtime["binaries"][0]["filename"]
+        data = entries[name]
+        entries[name] = bytes([data[0] ^ 1]) + data[1:]
+        legal_builder._write_deterministic_zip(portable, entries, exclusive=False)
+        notes.write_bytes(legal_verifier.replace_release_notes_checksum(original_notes, portable.name, hashlib.sha256(original_portable).hexdigest(), legal_verifier.sha256_file(portable)))
+        _expect_error(final, "portable runtime binary/source-owner mismatch")
+        portable.write_bytes(original_portable)
+        notes.write_bytes(original_notes)
+        recipe = context["control_root"] / runtime["recipe_files"][0]["name"]
+        original_recipe = recipe.read_bytes()
+        recipe.write_bytes(original_recipe + b"# unreviewed recipe\n")
+        _expect_error(final, "active runtime recipe/source-owner mismatch")
+        recipe.write_bytes(original_recipe)
+
+        relative = "data/bin/" + runtime["binaries"][0]["filename"]
+        staged = context["control_root"] / relative
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        staged.write_bytes(_synthetic_binary(staged.name))
+        with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0)):
+            _assert(gate.exclude_verified_release_inputs(context["control_root"], [relative, "release/unreviewed.zip"]) == ["release/unreviewed.zip"], "unproven generated archive was exempted")
+            staged.write_bytes(b"MZ unreviewed runtime")
+            _expect_error(lambda: gate.exclude_verified_release_inputs(context["control_root"], [relative]), "current runtime input hash mismatch")
+        staged.write_bytes(_synthetic_binary(staged.name))
+        with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 1)):
+            _expect_error(lambda: gate.exclude_verified_release_inputs(context["control_root"], [relative]), "tracked or not ignored")
 
     for kit in owner["kits"]:
         manifest = source_compliance.verify_source_asset(owner, kit["id"], context["source_assets_root"] / kit["source_asset"]["filename"])
@@ -274,6 +331,15 @@ def _negative_matrix(policy: dict, current: dict, owner: dict, context: dict) ->
 
     cli = [sys.executable, str(REPO_ROOT / "scripts/verify_release_legal_gate.py"),
            "--policy", str(context["control_root"] / "legal/release-policy.json"), "--tag", TAG]
+    if "runtime_build" in owner["kits"][1]:
+        # The child exercises the real CLI with explicitly synthetic input pins
+        # in process memory. Production CLI exposes no such option or override.
+        code = (f"import sys; sys.path.insert(0, {str(REPO_ROOT / 'scripts')!r}); "
+                "from unittest import mock; import project_ffmpeg, verify_release_legal_gate; "
+                f"sys.argv = {cli[1:]!r} + sys.argv[1:]; "
+                f"patcher = mock.patch.dict(project_ffmpeg.INPUTS, {project_ffmpeg.INPUTS!r}); "
+                "patcher.start(); raise SystemExit(verify_release_legal_gate.main())")
+        cli = [sys.executable, "-c", code]
     prebuild = subprocess.run(cli + ["--stage", "prebuild"], capture_output=True, text=True, check=False)
     _assert(prebuild.returncode == 0 and "release_payload_integrated=false" in prebuild.stdout, "prebuild CLI integration claim invalid")
     missing = subprocess.run(cli, capture_output=True, text=True, check=False)

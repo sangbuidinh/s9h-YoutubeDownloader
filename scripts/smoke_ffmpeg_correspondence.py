@@ -19,9 +19,16 @@ def main() -> int:
     assert next(row for row in required if row["id"] == "openal")["resolved"] is False
     assert value["source_asset_created"] is False
     authorization = release_authorization.load_authorization(ROOT / release_authorization.AUTHORIZATION_PATH)
-    assert authorization["state"] == "LEGAL_REVIEW_REQUIRED"
+    assert authorization["state"] in {"LEGAL_REVIEW_REQUIRED", "LEGAL_RELEASE_AUTHORIZED"}
+    import verify_release_legal_gate
+    verify_release_legal_gate.validate_repository_control(ROOT)
     owner = source_compliance.load_owner(ROOT / source_compliance.OWNER_PATH)
-    assert value["binary_package"] == owner["kits"][1]["binary_package"]
+    active = owner["kits"][1]
+    if "runtime_build" in active:
+        assert value["binary_package"] != active["binary_package"]
+        assert active["runtime_build"]["historical_gyan_status"] == "retired-from-active-release-target"
+    else:
+        assert value["binary_package"] == active["binary_package"]
     assert owner["kits"][0]["source_asset"]["sha256"] == "bb609dca9589eea96676a3d608652ffc24ea381cbfc19476dd6e582a95f2fd15"
     mutations = (
         lambda v: v.__setitem__("verdict", "COMPLETE"),

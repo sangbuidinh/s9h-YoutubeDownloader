@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [switch]$PreparePinnedRuntime
+    [switch]$PreparePinnedRuntime,
+    [string]$ProjectRuntimeRoot
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,11 +24,12 @@ $VerifyRoot = Join-Path $ReleaseRoot "verify"
 $YtDlpUrl = "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/download/2026.08.18.122307/yt-dlp.exe"
 $YtDlpSha256 = "652E154BCE7170070D0F26415C9A3C35C121F5A7903CB8CDE6D31C4577517FB9"
 
-$FfmpegArchiveUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.2-essentials_build.zip"
-$FfmpegArchiveSha256 = "DB580001CAA24AC104C8CB856CD113A87B0A443F7BDF47D8C12B1D740584A2EC"
-$FfmpegBundleIdentity = "8.1.2-essentials_build-www.gyan.dev"
-$FfmpegSha256 = "1326DDE4C84FF1F96FE6B8916C5BED29E163E9B5DCCF995F6F3DB069D143EC5E"
-$FfprobeSha256 = "B49CCC7C6547B141AD5A2F6EC69CC04323D7133D7704D70B331B904C63EECB07"
+$FfmpegBundleIdentity = "8.1.2-s9h-minimal-1"
+# Runtime bytes are built from source first; never acquire an unversioned prebuilt.
+$SourceOwner = Get-Content -LiteralPath (Join-Path $RepoRoot "legal/source-compliance-v1.3.2.json") -Raw | ConvertFrom-Json
+$ProjectBinaries = @($SourceOwner.kits | Where-Object id -EQ "ffmpeg")[0].runtime_build.binaries
+$FfmpegSha256 = (@($ProjectBinaries | Where-Object filename -EQ "ffmpeg.exe")[0].sha256).ToUpperInvariant()
+$FfprobeSha256 = (@($ProjectBinaries | Where-Object filename -EQ "ffprobe.exe")[0].sha256).ToUpperInvariant()
 
 $Aria2ArchiveUrl = "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip"
 $Aria2ArchiveSha256 = "67D015301EEF0B612191212D564C5BB0A14B5B9C4796B76454276A4D28D9B288"
@@ -155,13 +157,8 @@ function Prepare-PinnedRuntimeFiles {
     Invoke-CheckedDownload -Uri $YtDlpUrl -Destination $DownloadedYtDlp `
         -ExpectedSha256 $YtDlpSha256 -Description "yt-dlp 2026.08.18.122307"
 
-    $FfmpegArchive = Join-Path $DownloadRoot "ffmpeg-8.1.2-essentials_build.zip"
-    Invoke-CheckedDownload -Uri $FfmpegArchiveUrl -Destination $FfmpegArchive `
-        -ExpectedSha256 $FfmpegArchiveSha256 -Description "Gyan FFmpeg 8.1.2 Essentials archive"
-    $FfmpegExtract = Join-Path $ExtractRoot "ffmpeg"
-    Expand-Archive -LiteralPath $FfmpegArchive -DestinationPath $FfmpegExtract
-    $DownloadedFfmpeg = Get-SingleExtractedFile -Root $FfmpegExtract -Name "ffmpeg.exe" -Description "FFmpeg"
-    $DownloadedFfprobe = Get-SingleExtractedFile -Root $FfmpegExtract -Name "ffprobe.exe" -Description "ffprobe"
+    $DownloadedFfmpeg = Join-Path $ProjectRuntimeRoot "ffmpeg.exe"
+    $DownloadedFfprobe = Join-Path $ProjectRuntimeRoot "ffprobe.exe"
     [void](Assert-Sha256 -Path $DownloadedFfmpeg -Expected $FfmpegSha256 -Description "ffmpeg.exe")
     [void](Assert-Sha256 -Path $DownloadedFfprobe -Expected $FfprobeSha256 -Description "ffprobe.exe")
 
@@ -200,7 +197,27 @@ if ($ActiveVersion -ne $ReleaseVersion) {
     throw "VERSION must be $ReleaseVersion"
 }
 
-Remove-Item -LiteralPath $ReleaseRoot -Recurse -Force -ErrorAction SilentlyContinue
+if ([string]::IsNullOrWhiteSpace($ProjectRuntimeRoot)) {
+    if ($PreparePinnedRuntime) { throw "ProjectRuntimeRoot from the verified source build is required" }
+    $ProjectRuntimeRoot = $RuntimeSourceBin
+}
+python scripts\prepare_source_kit.py verify-runtime --owner legal/source-compliance-v1.3.2.json `
+    --runtime-root $ProjectRuntimeRoot --repo-root $RepoRoot
+if ($LASTEXITCODE -ne 0) { throw "Project runtime source-owner validation failed" }
+
+# Preserve source-assets created and verified before the application build.
+# Only these named generated directories may be removed; never a workspace root.
+foreach ($GeneratedName in @("assets", "runtime", "temp", "verify", "publish-bundle")) {
+    $GeneratedPath = [IO.Path]::GetFullPath((Join-Path $ReleaseRoot $GeneratedName))
+    $ExpectedPath = [IO.Path]::GetFullPath((Join-Path $RepoRoot "release\$GeneratedName"))
+    if ($GeneratedPath -ne $ExpectedPath -or -not $GeneratedPath.StartsWith($ReleaseRoot + [IO.Path]::DirectorySeparatorChar)) {
+        throw "Generated release cleanup escaped the intended directory"
+    }
+    if (Test-Path -LiteralPath $GeneratedPath) {
+        if ((Get-Item -LiteralPath $GeneratedPath).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Generated release directory is a reparse point" }
+        Remove-Item -LiteralPath $GeneratedPath -Recurse -Force
+    }
+}
 New-Item -ItemType Directory -Force -Path $AssetsRoot, $BinRoot, $TempRoot | Out-Null
 
 if ($PreparePinnedRuntime) {
@@ -257,9 +274,13 @@ if ($LASTEXITCODE -ne 0) { throw "packaging preflight failed" }
 $SmokeTests = @(git ls-files "scripts/smoke_*.py" | Sort-Object)
 if ($LASTEXITCODE -ne 0 -or $SmokeTests.Count -lt 1) { throw "Could not enumerate smoke tests" }
 foreach ($Test in $SmokeTests) {
+    Write-Host "SMOKE_TEST=$Test"
     python $Test
     if ($LASTEXITCODE -ne 0) { throw "Smoke test failed: $Test" }
+    Write-Host "SMOKE_PASS=$Test"
 }
+Write-Host "SMOKE_TOTAL=$($SmokeTests.Count)"
+Write-Host "SMOKE_FAIL=0"
 
 Write-Host "== Build Windows executable =="
 python scripts\package_windows.py
@@ -346,7 +367,19 @@ $BuildCommit = (git rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw "Could not determine build commit" }
 
 $NotesPath = Join-Path $ReleaseRoot "RELEASE_NOTES.md"
-Copy-Item -LiteralPath (Join-Path $RepoRoot "docs\release_notes_v1.3.2.md") -Destination $NotesPath
+$NotesSourcePath = Join-Path $RepoRoot "docs\release_notes_v1.3.2.md"
+$NotesBytes = [IO.File]::ReadAllBytes($NotesSourcePath)
+$Utf8Strict = [Text.UTF8Encoding]::new($false, $true)
+if (
+    $NotesBytes.Length -eq 0 -or
+    ($NotesBytes.Length -ge 3 -and $NotesBytes[0] -eq 0xEF -and $NotesBytes[1] -eq 0xBB -and $NotesBytes[2] -eq 0xBF)
+) {
+    throw "Release notes source is empty or contains a UTF-8 BOM"
+}
+$NotesText = $Utf8Strict.GetString($NotesBytes)
+if ($NotesText.Contains("`r") -or -not $NotesText.EndsWith("`n") -or $NotesText.EndsWith("`n`n")) {
+    throw "Release notes source must be LF-only with exactly one final newline"
+}
 $ChecksumLines = @(
     "",
     "## Build checksums",
@@ -354,7 +387,8 @@ $ChecksumLines = @(
     ('- `{0}`: `{1}`' -f "Youtube.Downloaderbs.exe", $ExeHashValue),
     ('- `{0}`: `{1}`' -f $ZipName, $ZipHashValue)
 )
-$ChecksumLines | Add-Content -LiteralPath $NotesPath -Encoding utf8
+$ChecksumText = $ChecksumLines -join "`n"
+[IO.File]::WriteAllText($NotesPath, $NotesText + $ChecksumText + "`n", [Text.UTF8Encoding]::new($false))
 
 $ManifestPath = Join-Path $ReleaseRoot "BUILD_MANIFEST.txt"
 @"

@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 import verify_ffmpeg_provider_build_feasibility as prior_verifier
 import source_compliance
+import verify_release_legal_gate
 
 
 BASELINE = "3c3bd8de7ca77fb5f0ecb9a132a76f1aec1e799c"
@@ -265,6 +266,20 @@ def verify_repository(
         if key in {"readme", "legal-readme", "feasibility-doc"}:
             continue
         documents[key], raw[key] = _load_json(paths[key], key)
+    if (root / source_compliance.OWNER_PATH).is_file():
+        # Validate live controls separately, then verify the historical record
+        # against its exact preserved pre-migration documents. No research data
+        # or authoritative hash inside the consolidation record is rewritten.
+        verify_release_legal_gate.validate_repository_control(root)
+        for key, relative in (("release-policy", "legal/release-policy.json"),
+                              ("release-assets", "legal/release-assets-v2.json")):
+            _require(raw[key] == (root / relative).read_bytes(), "live control override is not the current owner")
+            snapshot = subprocess.run(["git", "show", f"a9b3282d1e41539ee650fbe24b0801254613ada4:{relative}"],
+                                      cwd=root, check=True, stdout=subprocess.PIPE).stdout
+            _require(hashlib.sha256(snapshot).hexdigest() == CURRENT_RELEASE_PROTECTED_SHA256[relative],
+                     "historical control snapshot hash mismatch")
+            raw[key] = snapshot
+            documents[key] = json.loads(snapshot)
     _verify_protected(root, paths, raw)
     consolidation = documents["consolidation"]
     _verify_document(consolidation, documents, raw)
@@ -572,6 +587,7 @@ def _verify_artifacts(
             if path.is_file() and ".git" not in path.parts
             and "__pycache__" not in path.parts and path.name not in OLD_REPORTS
         ]
+    repository_files = verify_release_legal_gate.exclude_verified_release_inputs(root, repository_files)
     _require(not any(_suffix(path.casefold(), ARCHIVE_SUFFIXES + INSTALLER_SUFFIXES) for path in repository_files), "archive or installer in repository")
 
 

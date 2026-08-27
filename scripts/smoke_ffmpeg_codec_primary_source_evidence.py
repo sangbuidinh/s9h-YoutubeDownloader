@@ -272,7 +272,7 @@ def _modify_aria2_primary(fixture: Fixture) -> None:
 def _source_asset_ready(fixture: Fixture) -> None:
     fixture.mutate_json(
         "release-assets",
-        lambda document: document["required_source_asset_templates"][1].__setitem__("status", "ready"),
+        lambda document: document["required_source_asset_templates"][1].__setitem__("status", "not-ready" if document["required_source_asset_templates"][1]["status"] == "ready" else "ready"),
     )
 
 

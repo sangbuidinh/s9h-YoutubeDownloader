@@ -18,10 +18,16 @@ GATE_SCRIPT = REPO_ROOT / "scripts" / "verify_release_legal_gate.py"
 def main() -> int:
     policy = gate.load_policy(POLICY_PATH)
     _assert(tuple(release["tag"] for release in policy["releases"]) == gate.EXPECTED_TAGS, "tag set changed")
-    _assert(all(release["status"] == "blocked" for release in policy["releases"]), "a tag is not blocked")
+    _assert(all(release["status"] == "blocked" for release in policy["releases"][:-1]), "a historical tag is not blocked")
     _assert("bypass" not in json.dumps(policy).casefold(), "bypass field exists")
     for tag in gate.EXPECTED_TAGS:
         release = gate.release_for_tag(policy, tag)
+        if release["status"] in {"technical-ready", "authorized-ready"}:
+            state = gate.validate_repository_control(REPO_ROOT)
+            _assert(state["technical_source_ready"] and not state["release_ready"], "technical state is not fail-closed")
+            result = subprocess.run([sys.executable, str(GATE_SCRIPT), "--policy", str(POLICY_PATH), "--tag", tag], capture_output=True, text=True)
+            _assert(result.returncode == 2 and "ready source assets root is required" in result.stderr, "final gate accepted missing evidence")
+            continue
         expected = f"Release legal gate blocked for {tag}: {', '.join(release['reason_codes'])}"
         result = subprocess.run(
             [sys.executable, str(GATE_SCRIPT), "--policy", str(POLICY_PATH), "--tag", tag],
@@ -47,8 +53,8 @@ def _run_semantic_mutations(source: dict) -> None:
         ("unsorted tags", _unsort_tags),
         ("status allow", lambda value: value["releases"][0].__setitem__("status", "allow")),
         ("status ready", lambda value: value["releases"][0].__setitem__("status", "ready")),
-        ("legal compliance true", lambda value: value.__setitem__("legal_compliance_certified", True)),
-        ("source availability true", lambda value: value.__setitem__("source_availability_certified", True)),
+        ("legal compliance mismatch", lambda value: value.__setitem__("legal_compliance_certified", not value["legal_compliance_certified"])),
+        ("source availability mismatch", lambda value: value.__setitem__("source_availability_certified", not value["source_availability_certified"])),
         ("release payload integrated true", lambda value: value.__setitem__("release_payload_integrated", True)),
         ("missing FFmpeg reason", lambda value: _remove_reason(value, "v1.3.1", "ffmpeg-corresponding-source-not-certified")),
         ("missing aria2 reason", lambda value: _remove_reason(value, "v1.3.0", "aria2-source-availability-not-integrated")),

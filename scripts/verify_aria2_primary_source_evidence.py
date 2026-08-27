@@ -161,7 +161,7 @@ def verify_repository(
     _verify_feasibility(
         primary, feasibility, feasibility_raw, correspondence, requirements, inventory
     )
-    _verify_release(paths["release-policy"], paths["release-assets"])
+    _verify_release(paths["release-policy"], paths["release-assets"], root=root)
     _verify_docs(paths["readme"], paths["legal-readme"], paths["feasibility-doc"])
     _verify_artifacts(root, tracked_paths)
 
@@ -398,9 +398,15 @@ def _verify_feasibility(
     _require(aria2["source_kit_status"] == "not-ready", "aria2 source kit must remain not ready")
 
 
-def _verify_release(policy_path: Path, assets_path: Path) -> None:
+def _verify_release(policy_path: Path, assets_path: Path, *, root: Path) -> None:
     policy, _ = _load_json(policy_path, "release policy")
     assets, _ = _load_json(assets_path, "release assets")
+    import verify_release_legal_gate as live_gate
+    try:
+        policy = json.loads(live_gate.historical_control_bytes(root, "legal/release-policy.json", policy_path))
+        assets = json.loads(live_gate.historical_control_bytes(root, "legal/release-assets-v2.json", assets_path))
+    except live_gate.ReleaseLegalGateError as exc:
+        raise Aria2PrimarySourceEvidenceError(str(exc)) from exc
     _require(policy.get("policy_mode") == "fail-closed", "release policy is not fail-closed")
     for key in ("legal_compliance_certified", "source_availability_certified", "release_payload_integrated"):
         _require(policy.get(key) is False, f"release policy flag must remain false: {key}")
@@ -431,10 +437,10 @@ def _verify_artifacts(root: Path, tracked_paths: list[str] | None) -> None:
     _require(not any(_suffix(item.casefold(), ARCHIVE_SUFFIXES) for item in tracked_paths), "source archive is tracked in Git")
     changed = subprocess.run(["git", "diff", "--name-only", BASELINE, "--"], cwd=root, check=True, text=True, stdout=subprocess.PIPE).stdout.splitlines()
     _require(not any(_suffix(item.casefold(), BINARY_SUFFIXES) for item in changed), "binary or runtime was introduced")
-    for path in root.rglob("*"):
-        if path.is_file() and ".git" not in path.parts:
-            rel = path.relative_to(root).as_posix().casefold()
-            _require(not _suffix(rel, ARCHIVE_SUFFIXES), f"source archive is present under repository: {rel}")
+    import verify_release_legal_gate as live_gate
+    paths = [path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file() and ".git" not in path.parts]
+    for rel in live_gate.exclude_verified_release_inputs(root, paths):
+        _require(not _suffix(rel.casefold(), ARCHIVE_SUFFIXES), f"source archive is present under repository: {rel}")
 
 
 def _load_json(path: Path, label: str) -> tuple[dict[str, Any], bytes]:

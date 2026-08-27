@@ -4,10 +4,10 @@
   "bundle_manifest_schema_version": 3,
   "sbom_input_required": true,
   "legal_payload_format": "s9h-release-legal-payload-v1",
-  "release_readiness": "blocked",
+  "release_readiness": "technical-ready",
   "legal_compliance_certified": false,
-  "source_availability_certified": false,
-  "source_kits_ready": false,
+  "source_availability_certified": true,
+  "source_kits_ready": true,
   "portable_legal_root": "legal",
   "release_assets": [
     {
@@ -52,6 +52,11 @@
     "legal/licenses/Apache-2.0.txt",
     "legal/licenses/Deno-2.7.14-MIT.txt",
     "legal/licenses/FFmpeg-8.1.2-GPLv3.txt",
+    "legal/licenses/FFmpeg-8.1.2-LGPLv2.1.txt",
+    "legal/licenses/FFmpeg-8.1.2-LICENSE.md",
+    "legal/licenses/LAME-3.100-COPYING.txt",
+    "legal/licenses/LAME-3.100-LICENSE.txt",
+    "legal/licenses/MinGW-w64-14.0.0-COPYING.txt",
     "legal/licenses/PyInstaller-6.21.0-COPYING.txt",
     "legal/licenses/Python-3.11.9-LICENSE.txt",
     "legal/licenses/Tcl-Tk-license.terms",
@@ -59,9 +64,6 @@
     "legal/licenses/yt-dlp-2026.08.18.122307-UNLICENSE.txt"
   ],
   "release_blockers": [
-    "aria2-source-kit-not-ready",
-    "ffmpeg-source-kit-not-ready",
-    "source-assets-not-integrated",
-    "release-policy-fail-closed"
+    "legal-release-authorization-required"
   ]
 }

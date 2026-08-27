@@ -13,6 +13,9 @@ build.
 - Records the nightly binary distribution tag separately from upstream source
   commit `5d5b634d8e6b41dc2891847a5ea7a5a3f569a28c`.
 - Synchronizes the active third-party notice and license payload.
+- Keeps FFmpeg at 8.1.2 while moving to a project-controlled minimal build
+  with the native media components and LAME needed by the application.
+  This runtime change makes no media-quality or performance improvement claim.
 - Resolves the existing Premiere-safe selector once for Fast video. Split
   selections download the exact H.264 MP4 video stream and exact AAC/M4A
   companion stream through native yt-dlp with one fragment worker, then
@@ -76,8 +79,8 @@ contains the required runtime files.
 ## Runtime components
 
 - yt-dlp nightly 2026.08.18.122307
-- FFmpeg 8.1.2 Essentials
-- ffprobe 8.1.2 Essentials
+- FFmpeg 8.1.2 project-controlled minimal build
+- ffprobe 8.1.2 project-controlled minimal build
 - aria2c 1.37.0
 - Deno 2.7.14
 

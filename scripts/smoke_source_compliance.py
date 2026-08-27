@@ -67,6 +67,25 @@ def _write_synthetic_source_asset(root: Path, kit: dict) -> dict[str, object]:
         identity["archive_size"] = len(data)
         identity["archive_sha256"] = hashlib.sha256(data).hexdigest()
         files["sources/" + identity["archive_filename"]] = (data, "source-archive")
+        if "runtime_build" in kit:
+            # Caller scopes this mutation with mock.patch.dict. Never a CLI
+            # bypass: synthetic bytes cannot satisfy the production input pins.
+            import project_ffmpeg
+            project_ffmpeg.INPUTS[identity["component_id"]] = {
+                **project_ffmpeg.INPUTS[identity["component_id"]],
+                "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+            }
+    if "runtime_build" in kit:
+        runtime = kit["runtime_build"]
+        for recipe in runtime["recipe_files"]:
+            data = (REPO_ROOT / recipe["name"]).read_bytes()
+            recipe.update(size=len(data), sha256=hashlib.sha256(data).hexdigest())
+            files["build/" + recipe["name"]] = (data, "build-script")
+        for name in ("FFmpeg-COPYING.LGPLv2.1", "FFmpeg-LICENSE.md", "LAME-COPYING", "LAME-LICENSE"):
+            files["licenses/" + name] = (notice, "license")
+        files["licenses/MinGW-w64-14.0.0-COPYING.txt"] = (
+            (REPO_ROOT / "legal/licenses/MinGW-w64-14.0.0-COPYING.txt").read_bytes(), "license")
+        files["BINARY_SOURCE_MAPPING.json"] = (compliance.canonical_json_bytes(runtime), "notice")
     records = [{"name": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "role": role}
                for name, (data, role) in sorted(files.items())]
     manifest = {

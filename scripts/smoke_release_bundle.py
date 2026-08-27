@@ -69,10 +69,23 @@ def _test_v2_compatibility(bundle, root: Path) -> None:
         "pre-R1 release assets v2 yt-dlp license baseline changed",
     )
     baseline_licenses[baseline_licenses.index(HISTORICAL_YTDLP_LICENSE)] = ACTIVE_YTDLP_LICENSE
+    index = baseline_licenses.index("legal/licenses/FFmpeg-8.1.2-GPLv3.txt")
+    baseline_licenses[index + 1:index + 1] = [
+        "legal/licenses/FFmpeg-8.1.2-LGPLv2.1.txt", "legal/licenses/FFmpeg-8.1.2-LICENSE.md",
+        "legal/licenses/LAME-3.100-COPYING.txt", "legal/licenses/LAME-3.100-LICENSE.txt",
+        "legal/licenses/MinGW-w64-14.0.0-COPYING.txt",
+    ]
     current_document = json.loads(V2_CONTRACT_PATH.read_text(encoding="utf-8"))
+    if current_document["release_readiness"] in {"technical-ready", "ready"}:
+        authorized = current_document["release_readiness"] == "ready"
+        baseline_document.update(release_readiness=current_document["release_readiness"], source_availability_certified=True,
+                                 legal_compliance_certified=authorized, source_kits_ready=True,
+                                 release_blockers=[] if authorized else ["legal-release-authorization-required"])
+        for template in baseline_document["required_source_asset_templates"]:
+            template["status"] = "ready"
     _require(
         current_document == baseline_document,
-        "release assets v2 differs beyond the authorized active yt-dlp license projection",
+        "release assets v2 differs beyond the authorized current runtime/legal projection",
     )
 
     fixture = _release_fixture(root / "v2-fixture", RC_TAG)

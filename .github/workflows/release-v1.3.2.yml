@@ -244,16 +244,55 @@ jobs:
           Write-Host "Canonical Windows temporary root validated successfully."
           $global:LASTEXITCODE = 0
           exit 0
+      - name: Build project FFmpeg from exact source inputs
+        shell: pwsh
+        working-directory: source
+        run: |
+          $projectBuildRoot = Join-Path $env:RUNNER_TEMP "s9h-project-ffmpeg"
+          $sourceDownloads = Join-Path $env:RUNNER_TEMP "s9h-project-source-downloads"
+          python ..\control\scripts\build_project_ffmpeg.py `
+            --work-root $projectBuildRoot --downloads-root $sourceDownloads --jobs 4
+          if ($LASTEXITCODE -ne 0) { throw "Project FFmpeg source build failed" }
+          python ..\control\scripts\prepare_source_kit.py verify-runtime `
+            --owner ..\control\legal\source-compliance-v1.3.2.json `
+            --runtime-root (Join-Path $projectBuildRoot "runtime") --repo-root ..\control
+          if ($LASTEXITCODE -ne 0) { throw "Built runtime differs from reviewed source owner" }
+      - name: Create and verify project FFmpeg source asset
+        shell: pwsh
+        working-directory: source
+        run: |
+          python ..\control\scripts\prepare_source_kit.py create-ffmpeg `
+            --owner ..\control\legal\source-compliance-v1.3.2.json `
+            --downloads-root (Join-Path $env:RUNNER_TEMP "s9h-project-source-downloads") `
+            --repo-root ..\control `
+            --runtime-root (Join-Path $env:RUNNER_TEMP "s9h-project-ffmpeg/runtime") `
+            --output release/source-assets/Youtube-Downloaderbs-v1.3.2-ffmpeg-source.zip
+          if ($LASTEXITCODE -ne 0) { throw "Project FFmpeg source assembly failed" }
+          python ..\control\scripts\prepare_source_kit.py verify `
+            --owner ..\control\legal\source-compliance-v1.3.2.json --package ffmpeg `
+            --asset release/source-assets/Youtube-Downloaderbs-v1.3.2-ffmpeg-source.zip
+          if ($LASTEXITCODE -ne 0) { throw "Project FFmpeg source asset verification failed" }
+      - name: Acquire and verify accepted aria2 source asset
+        shell: pwsh
+        working-directory: source
+        run: |
+          $ariaDownloads = Join-Path $env:RUNNER_TEMP "s9h-aria2-source-downloads"
+          python ..\control\scripts\prepare_source_kit.py acquire-aria2 `
+            --owner ..\control\legal\source-compliance-v1.3.2.json --downloads-root $ariaDownloads
+          if ($LASTEXITCODE -ne 0) { throw "aria2 source acquisition failed" }
+          python ..\control\scripts\prepare_source_kit.py create `
+            --owner ..\control\legal\source-compliance-v1.3.2.json --downloads-root $ariaDownloads `
+            --license ..\control\legal\licenses\aria2-1.37.0-GPLv2.txt `
+            --output release/source-assets/Youtube-Downloaderbs-v1.3.2-aria2-source.zip
+          if ($LASTEXITCODE -ne 0) { throw "aria2 source assembly failed" }
+          python ..\control\scripts\prepare_source_kit.py verify `
+            --owner ..\control\legal\source-compliance-v1.3.2.json --package aria2 `
+            --asset release/source-assets/Youtube-Downloaderbs-v1.3.2-aria2-source.zip
+          if ($LASTEXITCODE -ne 0) { throw "Accepted aria2 source asset verification failed" }
       - name: Build and validate checksum-pinned assets
         shell: pwsh
         working-directory: source
-        run: .\scripts\build_release_v1_3_2.ps1 -PreparePinnedRuntime
-      - name: Block unavailable FFmpeg source assembly
-        shell: pwsh
-        run: |
-          # No placeholder, developer-local input, or speculative assembler.
-          # Remove only with a reviewed complete correspondence/acquisition path.
-          throw "FFmpeg correspondence is incomplete; pinned source acquisition and deterministic assembly are not authorized or implemented"
+        run: .\scripts\build_release_v1_3_2.ps1 -PreparePinnedRuntime -ProjectRuntimeRoot (Join-Path $env:RUNNER_TEMP "s9h-project-ffmpeg/runtime")
       - name: Verify both source assets against current owner
         shell: pwsh
         working-directory: source
@@ -539,12 +578,9 @@ jobs:
           if ($manifest.source_commit -cne $env:EXPECTED_SOURCE_COMMIT -or $manifest.control_commit -cne $env:EXPECTED_CONTROL_COMMIT) {
               throw "Release manifest commit metadata is invalid"
           }
-          if ([bool]$manifest.release_ready -or [bool]$manifest.legal_compliance_certified -or [bool]$manifest.source_availability_certified) {
-              throw "Release manifest readiness is invalid"
-          }
-          if (@($manifest.release_blockers).Count -le 0) {
-              throw "Release manifest blockers are missing"
-          }
+          # Readiness and explicit authorization belong exclusively to the
+          # canonical Python verifier in Enforce publish-ready release bundle.
+          # This step validates layout, metadata, asset roles, sizes and hashes.
           $assets = @($manifest.assets)
           if ($assets.Count -ne 5) {
               throw "Release manifest asset count is invalid"

@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 
 OWNER_PATH = "legal/source-compliance-v1.3.2.json"
+MINGW_NOTICE_SHA256 = "ecff91ddb5799c8b79a4bdb576921b9c3e2989783fd1944527e8eb9b41a5ff5f"
 FIXED_ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 FIXED_FILE_MODE = 0o100644 << 16
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -149,6 +150,10 @@ def _validate_kit(kit: Any, *, allow_unsealed_asset: bool) -> None:
         "status",
         "blockers",
     }
+    if "runtime_build" in kit:
+        _require(kit.get("id") == "ffmpeg", "only project FFmpeg declares a runtime build")
+        required.add("runtime_build")
+        _validate_project_runtime_build(kit["runtime_build"])
     _require(set(kit) == required, f"source kit record fields are invalid: {kit.get('id')}")
     package_id = kit["id"]
     _validate_file_identity(kit["binary_package"], f"{package_id} binary package")
@@ -178,6 +183,15 @@ def _validate_kit(kit: Any, *, allow_unsealed_asset: bool) -> None:
     _require(identity_ids == sorted(set(identity_ids)), f"{package_id} identities are not sorted and unique")
     if package_id == "aria2":
         _require(set(identity_ids) == EXPECTED_COMPONENTS[package_id], "aria2 identity set is incomplete")
+    elif "runtime_build" in kit:
+        _require(set(identity_ids) == {"ffmpeg", "lame"}, "project FFmpeg source identity set is invalid")
+        import project_ffmpeg
+        for identity in identities:
+            pin = project_ffmpeg.INPUTS[identity["component_id"]]
+            for field, pin_field in (("archive_filename", "filename"), ("archive_size", "size"),
+                                     ("archive_sha256", "sha256"), ("archive_url", "url")):
+                _require(identity[field] == pin[pin_field], "project FFmpeg source pin mismatch")
+        _require(identities[0]["immutable_ref"] == project_ffmpeg.FFMPEG_COMMIT, "project FFmpeg commit mismatch")
     else:
         _require(EXPECTED_COMPONENTS[package_id] <= set(identity_ids), "ffmpeg core/build identity set is incomplete")
     status = kit["status"]
@@ -189,6 +203,30 @@ def _validate_kit(kit: Any, *, allow_unsealed_asset: bool) -> None:
     else:
         _require(bool(kit["blockers"]), f"{package_id} blocked source kit has no blockers")
         _require(kit["source_asset"] is None, f"{package_id} blocked source kit claims an asset")
+
+
+def _validate_project_runtime_build(value: Any) -> None:
+    import project_ffmpeg
+    _require(isinstance(value, dict) and set(value) == {
+        "strategy", "historical_gyan_status", "version", "configure", "external_libraries",
+        "source_patches", "binaries", "recipe_files", "toolchain_inputs", "legal_release_authorized",
+    }, "project runtime build fields are invalid")
+    _require(value["strategy"] == "project-controlled" and value["historical_gyan_status"] == "retired-from-active-release-target",
+             "active/historical runtime distinction is invalid")
+    _require(value["version"] == "8.1.2" and value["legal_release_authorized"] is False, "project runtime identity or authorization is invalid")
+    try:
+        project_ffmpeg.validate_configuration(value["configure"])
+    except project_ffmpeg.ProjectFFmpegError as exc:
+        raise SourceComplianceError(str(exc)) from exc
+    _require(value["external_libraries"] == project_ffmpeg.EXTERNAL_LIBRARIES and value["source_patches"] == [], "project source/library scope mismatch")
+    _require(value["toolchain_inputs"] == {k: project_ffmpeg.INPUTS[k] for k in ("w64devkit", "nasm")}, "project toolchain pin mismatch")
+    _require([r.get("filename") for r in value["binaries"]] == ["ffmpeg.exe", "ffprobe.exe"], "both runtime binary mappings are required")
+    for item in value["binaries"]:
+        _validate_file_identity(item, "project runtime")
+    _require([r.get("name") for r in value["recipe_files"]] == ["scripts/build_project_ffmpeg.py", "scripts/project_ffmpeg.py"], "project recipe file set mismatch")
+    for item in value["recipe_files"]:
+        _require(set(item) == {"name", "size", "sha256"}, "project recipe fields invalid")
+        _validate_file_identity({"filename": Path(item["name"]).name, "size": item["size"], "sha256": item["sha256"]}, "project recipe")
 
 
 def _validate_file_identity(value: Any, label: str) -> None:
@@ -296,6 +334,18 @@ def _validate_embedded_manifest(value: Any, entries: dict[str, bytes], kit: dict
         _require(record is not None and record["role"] == "source-archive", f"embedded source archive is missing: {identity['component_id']}")
         _require(record["size"] == identity["archive_size"] and record["sha256"] == identity["archive_sha256"], f"embedded source archive identity mismatch: {identity['component_id']}")
     _require({"build-script", "license", "notice"} <= {record["role"] for record in records}, "source asset build/license/notice evidence is missing")
+    if "runtime_build" in kit:
+        runtime = kit["runtime_build"]
+        _require(entries.get("BINARY_SOURCE_MAPPING.json") == canonical_json_bytes(runtime), "project runtime binary/source mapping mismatch")
+        for recipe in runtime["recipe_files"]:
+            record = by_name.get("build/" + recipe["name"])
+            _require(record is not None and record["role"] == "build-script"
+                     and record["size"] == recipe["size"] and record["sha256"] == recipe["sha256"], "project source-kit recipe mismatch")
+        for name in ("licenses/FFmpeg-COPYING.LGPLv2.1", "licenses/FFmpeg-LICENSE.md", "licenses/LAME-COPYING", "licenses/LAME-LICENSE"):
+            _require(name in by_name and by_name[name]["role"] == "license", "project source-kit license missing")
+        name = "licenses/MinGW-w64-14.0.0-COPYING.txt"
+        _require(name in by_name and by_name[name]["sha256"] == MINGW_NOTICE_SHA256
+                 and by_name[name]["role"] == "license", "project MinGW runtime notice mismatch")
 
 
 def _read_deterministic_zip(path: Path, label: str) -> dict[str, bytes]:

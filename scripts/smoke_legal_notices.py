@@ -20,6 +20,7 @@ Mutation = Callable[[Path], None]
 def main() -> int:
     _verify_positive_repository()
     _run_checkout_policy_tests()
+    _verify_explicit_authorized_control_fixture()
     _run_inventory_mutations()
     _run_phase6b1_mutations()
     _run_phase6b2a_mutations()
@@ -48,7 +49,7 @@ def _verify_positive_repository() -> None:
     )
     _assert_effective_attributes(REPO_ROOT)
     components = inventory["components"]
-    _assert(len(components) == 7, "known direct component count changed")
+    _assert(len(components) == 9, "known direct component count changed")
     _assert(
         [component["id"] for component in components] == sorted(verifier.EXPECTED_COMPONENTS),
         "component ordering changed",
@@ -67,8 +68,9 @@ def _verify_positive_repository() -> None:
     release_assets = verifier.release_payload.load_asset_contract(
         REPO_ROOT / verifier.release_payload.CONTRACT_PATH
     )
-    _assert(release_assets["release_readiness"] == "blocked", "release readiness changed")
-    _assert(release_assets["source_kits_ready"] is False, "source kits were marked ready")
+    _assert(release_assets["release_readiness"] in {"technical-ready", "ready"}, "current technical readiness changed")
+    _assert(release_assets["source_kits_ready"] is True, "current source kits are not ready")
+    _assert(release_assets["legal_compliance_certified"] is release_policy["legal_compliance_certified"], "current authorization states disagree")
 
     for component in components:
         data = (REPO_ROOT / component["local_license_path"]).read_bytes()
@@ -146,6 +148,42 @@ def _run_checkout_policy_tests() -> None:
     )
     for label, mutation, expected_message in mutations:
         _expect_failure(label, mutation, expected_message, initialize_git=True)
+
+
+def _verify_explicit_authorized_control_fixture() -> None:
+    import release_authorization as authorization
+    import source_compliance
+    with tempfile.TemporaryDirectory(prefix="legal-authorized-synthetic-") as temporary:
+        root = Path(temporary) / "control"
+        _copy_fixture(root)
+        policy = verifier.release_gate.load_policy(root / "legal/release-policy.json")
+        policy["legal_compliance_certified"] = True
+        policy["releases"][-1]["status"] = "authorized-ready"
+        contract = verifier.release_payload.load_asset_contract(root / "legal/release-assets-v2.json")
+        contract.update(release_readiness="ready", legal_compliance_certified=True, release_blockers=[])
+        (root / "legal/release-policy.json").write_bytes(verifier.release_gate.canonical_policy_bytes(policy))
+        (root / "legal/release-assets-v2.json").write_bytes(source_compliance.canonical_json_bytes(contract))
+        v3_path = root / "legal/release-assets-v3.json"
+        v3 = json.loads(v3_path.read_bytes())
+        v3.update(release_readiness="ready", legal_compliance_certified=True, release_blockers=[])
+        v3_path.write_bytes(source_compliance.canonical_json_bytes(v3))
+        owner = source_compliance.load_owner(root / source_compliance.OWNER_PATH)
+        auth = authorization.load_authorization(root / authorization.AUTHORIZATION_PATH)
+        auth.update(state="LEGAL_RELEASE_AUTHORIZED", decision_reference="synthetic-legal-control-test-not-for-distribution",
+                    reviewed_source_commit="1" * 40, reviewed_policy_sha256=authorization.document_sha256(policy),
+                    reviewed_source_owner_sha256=authorization.document_sha256(owner),
+                    reviewed_asset_contract_sha256=authorization.document_sha256(contract),
+                    reviewed_ffmpeg_correspondence_sha256=authorization.document_sha256(owner["kits"][1]["runtime_build"]))
+        (root / authorization.AUTHORIZATION_PATH).write_bytes(authorization.canonical_bytes(auth))
+        verifier.verify_repository(root)
+        auth["reviewed_asset_contract_sha256"] = "0" * 64
+        (root / authorization.AUTHORIZATION_PATH).write_bytes(authorization.canonical_bytes(auth))
+        try:
+            verifier.verify_repository(root)
+        except authorization.AuthorizationError:
+            pass
+        else:
+            raise AssertionError("legal notices accepted unbound synthetic authorization")
 
 
 def _verify_temporary_git_worktree() -> None:
@@ -241,7 +279,7 @@ def _verify_windows_checkout_simulation() -> None:
             data = (checkout / relative).read_bytes()
             _assert(data == _git_blob(source, commit, relative), f"license checkout changed bytes: {relative}")
             preserved += 1
-        _assert(preserved == 8, "license checkout preservation count changed")
+        _assert(preserved == 13, "license checkout preservation count changed")
         _assert_effective_attributes(checkout)
         (checkout / json_probe_relative).unlink()
         verifier.verify_repository(checkout)
@@ -433,6 +471,8 @@ def _copy_fixture(root: Path) -> None:
         "build_release_v1_3_0.ps1",
         "build_release_v1_3_1.ps1",
         "build_release_v1_3_2.ps1",
+        "build_project_ffmpeg.py",
+        "project_ffmpeg.py",
     ):
         shutil.copy2(REPO_ROOT / "scripts" / name, root / "scripts" / name)
 
@@ -667,11 +707,11 @@ def _wrong_legal_payload_format(root: Path) -> None:
 
 
 def _release_readiness_ready(root: Path) -> None:
-    _mutate_release_assets(root, lambda document: document.update(release_readiness="ready"))
+    _mutate_release_assets(root, lambda document: document.update(release_readiness="technical-ready" if document["release_readiness"] == "ready" else "ready"))
 
 
 def _source_kits_ready(root: Path) -> None:
-    _mutate_release_assets(root, lambda document: document.update(source_kits_ready=True))
+    _mutate_release_assets(root, lambda document: document.update(source_kits_ready=not document["source_kits_ready"]))
 
 
 def _missing_source_asset_template(root: Path) -> None:
@@ -681,7 +721,7 @@ def _missing_source_asset_template(root: Path) -> None:
 def _source_asset_status_ready(root: Path) -> None:
     _mutate_release_assets(
         root,
-        lambda document: document["required_source_asset_templates"][0].update(status="ready"),
+        lambda document: document["required_source_asset_templates"][0].update(status="not-ready" if document["required_source_asset_templates"][0]["status"] == "ready" else "ready"),
     )
 
 

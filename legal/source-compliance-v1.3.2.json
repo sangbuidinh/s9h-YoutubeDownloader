@@ -5,7 +5,7 @@
   "technical_compliance_not_legal_advice": true,
   "release_gate_reconsideration_allowed": true,
   "legal_compliance_certified": false,
-  "source_availability_certified": false,
+  "source_availability_certified": true,
   "classification_model": [
     "OPTIONAL_ASSURANCE",
     "REQUIRED_FOR_CORRESPONDING_SOURCE",
@@ -182,9 +182,9 @@
     {
       "id": "ffmpeg",
       "binary_package": {
-        "filename": "ffmpeg-8.1.2-essentials_build.zip",
-        "size": 109728040,
-        "sha256": "db580001caa24ac104c8cb856cd113a87b0a443f7bdf47d8c12b1d740584a2ec"
+        "filename": "ffmpeg-8.1.2-s9h-minimal-1-win64.zip",
+        "size": 25666227,
+        "sha256": "69a15381b25715ea25207bf7b19eb37085a6a5aa8c5d9fd099b7cda96a3ae786"
       },
       "required_outputs": [
         "binary-to-source-manifest",
@@ -193,12 +193,12 @@
         "source-asset-license-and-notice-set"
       ],
       "required_source_items": [
-        "complete-direct-and-transitive-static-source-inventory",
+        "build-and-configuration-scripts",
         "core-and-external-source-archives",
-        "exact-provider-build-snapshot-and-package-specific-scripts",
         "licenses-and-notices",
-        "local-modifications-or-exact-patches",
-        "source-archive-manifest"
+        "local-modifications-or-explicit-no-modification-evidence",
+        "source-archive-manifest",
+        "toolchain-and-package-information"
       ],
       "required_build_evidence": [
         "binary-to-source-mapping",
@@ -221,7 +221,7 @@
           "classification": "REQUIRED_FOR_CORRESPONDING_SOURCE",
           "identity_type": "git-commit",
           "project": "FFmpeg",
-          "version": "8.1.2 provider snapshot",
+          "version": "8.1.2",
           "repository": "https://github.com/FFmpeg/FFmpeg",
           "immutable_ref": "38b88335f99e76ed89ff3c93f877fdefce736c13",
           "archive_url": "https://github.com/FFmpeg/FFmpeg/archive/38b88335f99e76ed89ff3c93f877fdefce736c13.tar.gz",
@@ -229,41 +229,107 @@
           "archive_size": 16894057,
           "archive_sha256": "2ae7e42343cfffb811d15cfe98b6d005f082595fcdf034d30a4ff90cfed9f9c6",
           "resolved": true,
-          "evidence": "The exact verified provider README publishes short source identity 38b88335f9; the upstream repository resolves it uniquely to this complete commit."
+          "evidence": "Official upstream n8.1.2 tag resolves to the exact pinned commit; source RELEASE is 8.1.2. No Gyan recipe or patch is used."
         },
         {
-          "component_id": "media-autobuild-suite",
+          "component_id": "lame",
           "classification": "REQUIRED_FOR_CORRESPONDING_SOURCE",
-          "identity_type": "git-commit",
-          "project": "media-autobuild_suite",
-          "version": "nearest public pre-release snapshot",
-          "repository": "https://github.com/m-ab-s/media-autobuild_suite",
-          "immutable_ref": "d98c41b9386fc1e373d43888cc0203f8ff5f66f9",
-          "archive_url": "https://github.com/m-ab-s/media-autobuild_suite/archive/d98c41b9386fc1e373d43888cc0203f8ff5f66f9.tar.gz",
-          "archive_filename": "media-autobuild_suite-d98c41b9386fc1e373d43888cc0203f8ff5f66f9.tar.gz",
-          "archive_size": 111394,
-          "archive_sha256": "0ace60d3e44282ed2a64f913a6ce5cfc6767039403a3efa7eea178dd4077793a",
-          "resolved": false,
-          "evidence": "This upstream snapshot predates the provider release and matches UCRT64/build characteristics, but no provider evidence proves it is the exact snapshot used."
+          "identity_type": "release-archive",
+          "project": "LAME",
+          "version": "3.100",
+          "repository": "https://lame.sourceforge.io/",
+          "immutable_ref": null,
+          "archive_url": "https://zenlayer.dl.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz",
+          "archive_filename": "lame-3.100.tar.gz",
+          "archive_size": 1524133,
+          "archive_sha256": "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e",
+          "resolved": true,
+          "evidence": "Exact LAME 3.100 official SourceForge release archive; COPYING and LICENSE preserved in the source kit; LGPL-2.0-or-later code."
         }
       ],
       "build_evidence": [
-        "24 of 48 enabled source-required direct inputs have immutable upstream archive and license-file evidence; see legal/ffmpeg-correspondence-v1.3.2.json",
-        "4 Windows interfaces are classified as System Library candidates; VAAPI is reclassified as a source-required external input",
-        "exact configure command recovered from the verified ffmpeg.exe bytes without execution",
-        "provider README SHA-256 9172433fb251059a58d2ff11ba8c6132e04819136ed96e809563911ff0d13816",
-        "provider README identifies FFmpeg commit 38b88335f99e76ed89ff3c93f877fdefce736c13 and GPLv3 configuration",
-        "verified binary identifies GCC 16.1.0 Rev2 from MSYS2 and UCRT64 paths"
+        "Both project executables built with pinned w64devkit 2.9.1 and NASM 2.16.03; Windows system DLL imports only",
+        "Exact FFmpeg and LAME source archives are included; no upstream source patch applied",
+        "Project recipe and compiler path normalization executed in two distinct local build directories",
+        "Synthetic old-versus-new media and pinned yt-dlp postprocessing tested; no media behavior changes claimed"
       ],
-      "source_asset": null,
-      "status": "blocked",
-      "blockers": [
-        "24 of 48 enabled source-required direct inputs still lack verified immutable source identity",
-        "Exact provider media-autobuild_suite snapshot and package-specific patch set are not proven",
-        "Release source asset and binary-to-source mapping are not integrated",
-        "Statically embedded transitive source inventory and immutable revisions remain incomplete",
-        "Windows System Library candidate exclusions and exact SDK/header boundaries remain uncertified"
-      ]
+      "source_asset": {
+        "filename": "Youtube-Downloaderbs-v1.3.2-ffmpeg-source.zip",
+        "size": 18333688,
+        "sha256": "778c9a2233a49c5b5ea204111f6dd66d8c3c721eda121750d23ed87d776c8ed1",
+        "entry_count": 13,
+        "manifest_sha256": "dff7f1decd7871eb1f619e4122c1246ec4ae2d61c34b086b97c5ccf96cb089dd"
+      },
+      "status": "ready",
+      "blockers": [],
+      "runtime_build": {
+        "strategy": "project-controlled",
+        "historical_gyan_status": "retired-from-active-release-target",
+        "version": "8.1.2",
+        "configure": [
+          "--target-os=mingw32",
+          "--arch=x86_64",
+          "--disable-autodetect",
+          "--enable-libmp3lame",
+          "--enable-schannel",
+          "--disable-shared",
+          "--enable-static",
+          "--disable-ffplay",
+          "--disable-doc",
+          "--disable-debug",
+          "--extra-version=s9h-minimal-1",
+          "--extra-cflags=-I../../prefix/include",
+          "--extra-ldflags=-L../../prefix/lib -static -Wl,--no-insert-timestamp"
+        ],
+        "external_libraries": [
+          "libmp3lame",
+          "schannel"
+        ],
+        "source_patches": [],
+        "binaries": [
+          {
+            "filename": "ffmpeg.exe",
+            "size": 30332416,
+            "sha256": "65a2713cabbc1199de34daebd8bf330aff44fc7a1e67140556f8b8bb427b03d9"
+          },
+          {
+            "filename": "ffprobe.exe",
+            "size": 30123520,
+            "sha256": "b9201b8799e2267683a4e05bee79bbe80e4dd2645729a46ce16c54e4f1cb1271"
+          }
+        ],
+        "recipe_files": [
+          {
+            "name": "scripts/build_project_ffmpeg.py",
+            "size": 8106,
+            "sha256": "14b3be54ccfdd8ddf55613d8f563384ef59c27c13915fac913e3cddd1e67b32d"
+          },
+          {
+            "name": "scripts/project_ffmpeg.py",
+            "size": 9083,
+            "sha256": "73941cb243d2f832f25652e77fb8add63f50f2e474b09d53de198bce38118cff"
+          }
+        ],
+        "toolchain_inputs": {
+          "w64devkit": {
+            "filename": "w64devkit-x64-2.9.1.7z.exe",
+            "url": "https://github.com/skeeto/w64devkit/releases/download/v2.9.1/w64devkit-x64-2.9.1.7z.exe",
+            "size": 61462208,
+            "sha256": "9208c19755cd4964b7915b9afcf02c66d493a4c870c4b3e83f6c538d9c1237a5",
+            "redirect_hosts": [
+              "release-assets.githubusercontent.com"
+            ]
+          },
+          "nasm": {
+            "filename": "nasm-2.16.03-win64.zip",
+            "url": "https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/win64/nasm-2.16.03-win64.zip",
+            "size": 513543,
+            "sha256": "3ee4782247bcb874378d02f7eab4e294a84d3d15f3f6ee2de2f47a46aa7226e6",
+            "redirect_hosts": []
+          }
+        },
+        "legal_release_authorized": false
+      }
     }
   ]
 }

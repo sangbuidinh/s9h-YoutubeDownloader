@@ -102,7 +102,7 @@ def main() -> int:
     validate_contracts(documents)
     _validate_historical_bundle_commands()
     _test_negative_mutations(documents)
-    print("release workflow split smoke tests passed: 5 versioned v2 command paths exercised")
+    print("release workflow split smoke tests passed: 4 historical v2 command paths and current source-build/ready-state wiring")
     return 0
 
 
@@ -373,6 +373,9 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
             f"{contract.path} publish-ready verifier contains a bypass: {forbidden}",
         )
 
+    if contract.tag == "v1.3.2":
+        _validate_current_publish_readiness_owner("\n".join(verifier))
+
     absence = _named_step(publish_steps, "Confirm release absence immediately before publishing")
     release = _single_action_step(publish_steps, "softprops/action-gh-release")
     output_validation_step = _named_step(publish_steps, "Validate immutable build outputs")
@@ -494,10 +497,20 @@ def _validate_legal_gate(
         _require(forbidden not in gate_text, f"{contract.path} legal gate contains a bypass: {forbidden}")
 
 
+def _validate_current_publish_readiness_owner(text: str) -> None:
+    # Exact-key names remain in the structural schema. Evaluating their values
+    # here would duplicate the canonical bundle/authorization state machine.
+    _require(
+        re.search(r"(?i)\$manifest\.(?:release_ready|legal_compliance_certified|source_availability_certified|release_blockers)\b", text) is None,
+        "current inline publish verifier duplicates canonical readiness or rejects READY bundles",
+    )
+
+
 def _validate_current_evidence_order(steps: list[list[str]]) -> None:
     names = ["Install locked build dependencies", "Validate prebuild technical control gate",
              "Check out release tag", "Verify annotated tag and release absence",
-             "Build and validate checksum-pinned assets", "Block unavailable FFmpeg source assembly",
+             "Build project FFmpeg from exact source inputs", "Create and verify project FFmpeg source asset",
+             "Acquire and verify accepted aria2 source asset", "Build and validate checksum-pinned assets",
              "Verify both source assets against current owner", "Prepare and verify release legal payload",
              "Validate final release evidence gate", "Create and verify release bundle"]
     positions = [steps.index(_named_step(steps, name)) for name in names]
@@ -510,13 +523,25 @@ def _validate_current_evidence_order(steps: list[list[str]]) -> None:
                      'if ($LASTEXITCODE -ne 0) { throw "Final release evidence validation failed" }'):
         _require(required in final, f"final evidence gate lacks {required}")
     _require(re.search(r"(?m)^          python \.\.\\control\\scripts\\verify_release_legal_gate.py `\s*$", final) is not None, "final gate must execute the verifier")
-    guard = "\n".join(_named_step(steps, names[5]))
-    _require('          throw "FFmpeg correspondence is incomplete; pinned source acquisition and deterministic assembly are not authorized or implemented"' in guard, "incomplete source assembly guard is absent")
-    source_step = "\n".join(_named_step(steps, names[6]))
+    all_text = "\n".join("\n".join(step) for step in steps)
+    _require("Block unavailable FFmpeg source assembly" not in all_text, "obsolete incomplete assembly guard remains")
+    required_commands = {
+        names[4]: ("python ..\\control\\scripts\\build_project_ffmpeg.py `", "prepare_source_kit.py verify-runtime", "--work-root $projectBuildRoot", "--downloads-root $sourceDownloads", "--runtime-root (Join-Path $projectBuildRoot \"runtime\")"),
+        names[5]: ("prepare_source_kit.py create-ffmpeg", "--repo-root ..\\control", "--runtime-root (Join-Path $env:RUNNER_TEMP \"s9h-project-ffmpeg/runtime\")", "--output release/source-assets/Youtube-Downloaderbs-v1.3.2-ffmpeg-source.zip", "prepare_source_kit.py verify"),
+        names[6]: ("prepare_source_kit.py acquire-aria2", "prepare_source_kit.py create", "prepare_source_kit.py verify", "--output release/source-assets/Youtube-Downloaderbs-v1.3.2-aria2-source.zip"),
+        names[7]: ('-PreparePinnedRuntime -ProjectRuntimeRoot (Join-Path $env:RUNNER_TEMP "s9h-project-ffmpeg/runtime")',),
+    }
+    for name, commands in required_commands.items():
+        step = "\n".join(_named_step(steps, name))
+        for command in commands:
+            _require(command in step and ("# " + command) not in step, f"source-build step lacks executable {command}")
+        if name != names[7]:
+            _require(step.count("if ($LASTEXITCODE -ne 0)") >= step.count("          python "), "source-build command lacks exit gate")
+    source_step = "\n".join(_named_step(steps, names[8]))
     _require(source_step.count("prepare_source_kit.py verify") == 2, "both sources must be verified")
     for package in ("aria2", "ffmpeg"):
         _require(f"--package {package}" in source_step and f"--asset release/source-assets/Youtube-Downloaderbs-v1.3.2-{package}-source.zip" in source_step, "source verifier identity missing")
-    for name in (names[1], names[5], names[6], names[8]):
+    for name in (names[1], *names[4:]):
         text = "\n".join(_named_step(steps, name))
         _require(re.search(r"(?m)^\s+(?:continue-on-error|if|env)\s*:", text) is None, "evidence step has YAML bypass")
         for forbidden in ("||", "; exit 0", "SilentlyContinue", "2>$null", "--allow"):
@@ -556,7 +581,7 @@ def _validate_historical_bundle_commands() -> None:
 
     with tempfile.TemporaryDirectory(prefix="s9h-historical-workflow-v2-") as temp:
         root = Path(temp)
-        for index, contract in enumerate(CONTRACTS):
+        for index, contract in enumerate(HISTORICAL_CONTRACTS):
             fixture = bundle_smoke._release_fixture(
                 root / f"fixture-{index}",
                 contract.tag,
@@ -614,12 +639,22 @@ def _test_negative_mutations(documents: dict[str, str]) -> None:
     current_path = CONTRACTS[-1].path
     current_document = documents[current_path]
     current_mutations = [
+        ("obsolete blocked-only READY rejection", current_document.replace(
+            '          $assets = @($manifest.assets)',
+            '          if ([bool]$manifest.release_ready) { throw "obsolete blocked-only check" }\n          $assets = @($manifest.assets)', 1)),
+        ("obsolete nonempty blocker requirement", current_document.replace(
+            '          $assets = @($manifest.assets)',
+            '          if (@($manifest.release_blockers).Count -le 0) { throw "obsolete blockers" }\n          $assets = @($manifest.assets)', 1)),
         ("final gate after bundle", _move_named_step_after(current_document, "Validate final release evidence gate", "Create and verify release bundle")),
         ("payload after final gate", _move_named_step_after(current_document, "Prepare and verify release legal payload", "Validate final release evidence gate")),
         ("sources after legal payload", _move_named_step_after(current_document, "Verify both source assets against current owner", "Prepare and verify release legal payload")),
         ("prebuild after build", _move_named_step_after(current_document, "Validate prebuild technical control gate", CONTRACTS[-1].build_step)),
         ("final gate removed", current_document.replace(_named_step_text(current_document, "Validate final release evidence gate"), "", 1)),
-        ("incomplete assembly guard removed", current_document.replace(_named_step_text(current_document, "Block unavailable FFmpeg source assembly"), "", 1)),
+        ("source build removed", current_document.replace(_named_step_text(current_document, "Build project FFmpeg from exact source inputs"), "", 1)),
+        ("source kit assembly removed", current_document.replace("prepare_source_kit.py create-ffmpeg", "prepare_source_kit.py verify", 1)),
+        ("runtime source verification absent", current_document.replace("prepare_source_kit.py verify-runtime", "prepare_source_kit.py verify", 1)),
+        ("runtime path absent", current_document.replace('-PreparePinnedRuntime -ProjectRuntimeRoot', '-PreparePinnedRuntime -WrongRoot', 1)),
+        ("runtime build after application", _move_named_step_after(current_document, "Build project FFmpeg from exact source inputs", CONTRACTS[-1].build_step)),
         ("bundle ready not required", current_document.replace("--require-release-ready true", "--require-release-ready false", 1)),
         ("comment-only final gate", current_document.replace("          python ..\\control\\scripts\\verify_release_legal_gate.py", "          # python ..\\control\\scripts\\verify_release_legal_gate.py", 1)),
         ("final gate ignored", current_document.replace("      - name: Validate final release evidence gate\n", "      - name: Validate final release evidence gate\n        continue-on-error: true\n", 1)),

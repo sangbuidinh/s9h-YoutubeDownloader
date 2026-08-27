@@ -251,6 +251,8 @@ def verify_repository(
         root, paths, feasibility, feasibility_raw,
         feasibility_runner or _generate_feasibility,
     )
+    policy = json.loads(_historical_control_bytes(root, "legal/release-policy.json", paths["release-policy"]))
+    assets = json.loads(_historical_control_bytes(root, "legal/release-assets-v2.json", paths["release-assets"]))
     _verify_release(policy, assets, feasibility)
     _verify_docs(paths["readme"], paths["legal-readme"], paths["feasibility-doc"])
     _verify_artifacts(root, tracked_paths, repository_files, introduced_paths)
@@ -276,9 +278,20 @@ def _paths(root: Path, overrides: dict[str, Path]) -> dict[str, Path]:
     return paths
 
 
+def _historical_control_bytes(root: Path, relative: str, candidate: Path) -> bytes:
+    import verify_release_legal_gate as live_gate
+    try:
+        return live_gate.historical_control_bytes(root, relative, candidate)
+    except live_gate.ReleaseLegalGateError as exc:
+        _require(False, str(exc))
+        raise AssertionError("unreachable") from exc
+
+
 def _verify_protected(root: Path, paths: dict[str, Path]) -> None:
     for key, relative in PROTECTED.items():
         current = paths[key].read_bytes()
+        if key in {"release-policy", "release-assets"}:
+            current = _historical_control_bytes(root, relative, paths[key])
         expected_sha256 = CURRENT_RELEASE_PROTECTED_SHA256.get(relative)
         if expected_sha256 is not None:
             _require(hashlib.sha256(current).hexdigest() == expected_sha256, f"protected file changed: {relative}")
@@ -651,6 +664,8 @@ def _verify_artifacts(
             if path.is_file() and ".git" not in path.parts
             and "__pycache__" not in path.parts
         ]
+    import verify_release_legal_gate as live_gate
+    repository_files = live_gate.exclude_verified_release_inputs(root, repository_files)
     _require(not any(_suffix(item.casefold(), ARCHIVE_SUFFIXES) for item in repository_files), "source archive exists inside repository")
 
 

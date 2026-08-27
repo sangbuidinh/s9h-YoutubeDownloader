@@ -25,12 +25,26 @@ EXE_CHECKSUM = "a" * 64
 
 
 def main() -> int:
+    _test_build_script_release_notes_bytes()
     _test_positive_contract()
     _test_release_notes_rejections()
     _test_transactional_rollback()
     _run_negative_mutations()
     print("release legal payload smoke tests passed")
     return 0
+
+
+def _test_build_script_release_notes_bytes() -> None:
+    script = (REPO_ROOT / "scripts/build_release_v1_3_2.ps1").read_text(encoding="utf-8")
+    required = (
+        "$NotesBytes = [IO.File]::ReadAllBytes($NotesSourcePath)",
+        "$Utf8Strict = [Text.UTF8Encoding]::new($false, $true)",
+        '$NotesText.Contains("`r")',
+        '$ChecksumText = $ChecksumLines -join "`n"',
+        "[IO.File]::WriteAllText($NotesPath, $NotesText + $ChecksumText + \"`n\", [Text.UTF8Encoding]::new($false))",
+    )
+    _require(all(fragment in script for fragment in required), "release build does not preserve canonical release-note bytes")
+    _require("Add-Content -LiteralPath $NotesPath" not in script, "release build still mixes checkout and host line endings")
 
 
 def _test_positive_contract() -> None:
@@ -81,14 +95,14 @@ def _test_positive_contract() -> None:
             name: data for name, data in portable_entries.items() if name.startswith("legal/")
         }
         _require(legal_entries == portable_legal, "companion and portable payload bytes differ")
-        _require(len(legal_entries) == 16, "generated legal payload count changed")
-        _require(len(manifest["files"]) == 15, "manifest file count changed")
+        _require(len(legal_entries) == 21, "generated legal payload count changed")
+        _require(len(manifest["files"]) == 20, "manifest file count changed")
         _require(manifest["project_license_status"] == "not-selected", "project license status changed")
         _require(manifest["legal_compliance_certified"] is False, "compliance status changed")
         _require(manifest["source_availability_certified"] is False, "source status changed")
         _require(manifest["source_kits_ready"] is False, "source kit status changed")
         license_names = [name for name in legal_entries if name.startswith("legal/licenses/")]
-        _require(len(license_names) == 8, "license payload count changed")
+        _require(len(license_names) == 13, "license payload count changed")
         source_kits = json.loads((first["control"] / "legal/source-kit-requirements.json").read_text("utf-8"))
         _require(all(kit["status"] == "blocked" for kit in source_kits["kits"]), "source kit is not blocked")
 
@@ -125,6 +139,7 @@ def _test_release_notes_rejections() -> None:
         ("duplicate hash", lambda raw, portable: raw + _portable_checksum_line(verifier.sha256_file(portable), b"\n")),
         ("malformed hash", lambda raw, portable: _replace_hash(raw, "f" * 63)),
         ("wrong filename", lambda raw, portable: raw.replace(PORTABLE_NAME.encode("ascii"), b"wrong-portable.zip")),
+        ("mixed line endings", lambda raw, portable: raw.replace(b"\n", b"\r\n", 1)),
         ("local absolute path", lambda raw, portable: raw + b"- Path: C:\\private\\release.zip\n"),
         ("secret-like addition", lambda raw, portable: raw + b"- Cookie: SID=synthetic-secret-value\n"),
     )
@@ -309,6 +324,10 @@ def _write_release_notes(
 ) -> None:
     lines = (
         "# Synthetic release fixture",
+        "",
+        "## Download",
+        "",
+        f"`{portable.name}`",
         "",
         heading,
         "",

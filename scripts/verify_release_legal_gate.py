@@ -225,8 +225,7 @@ def validate_prebuild_control(
     control_root = payload_verifier.require_regular_directory(control_root, "workflow control root")
     _require(load_policy(control_root / "legal/release-policy.json") == policy, "control policy mismatch")
     _require(source_compliance.load_owner(control_root / source_compliance.OWNER_PATH) == owner, "control source owner mismatch")
-    correspondence = ffmpeg_correspondence.load_record(control_root / ffmpeg_correspondence.RECORD_PATH)
-    ffmpeg_correspondence.require_ready_owner(correspondence, owner)
+    correspondence = active_runtime_correspondence(control_root, owner)
     contract = payload_verifier.load_asset_contract(control_root / payload_verifier.CONTRACT_PATH)
     declared_authorized = release["status"] == "authorized-ready"
     expected_contract_state = "ready" if declared_authorized else "technical-ready"
@@ -272,11 +271,21 @@ def validate_release_evidence(
         release_notes=release_notes, tag=release["tag"], source_commit=source_commit,
         control_commit=control_commit,
     )
+    runtime = owner["kits"][1].get("runtime_build")
+    if runtime is not None:
+        import hashlib
+        entries = payload_verifier.read_zip_entries(portable_zip, "portable ZIP", deterministic=True)
+        for binary in runtime["binaries"]:
+            name = "data/bin/" + binary["filename"]
+            _require(name in entries, "portable project runtime missing")
+            data = entries[name]
+            _require(len(data) == binary["size"] and hashlib.sha256(data).hexdigest() == binary["sha256"],
+                     "portable runtime binary/source-owner mismatch")
     authorization = release_authorization.load_authorization(control_root / release_authorization.AUTHORIZATION_PATH)
     contract = payload_verifier.load_asset_contract(control_root / payload_verifier.CONTRACT_PATH)
     authorized = release_authorization.verify_authorization(
         authorization, policy=policy, owner=owner, contract=contract, source_commit=source_commit,
-        correspondence=ffmpeg_correspondence.load_record(control_root / ffmpeg_correspondence.RECORD_PATH),
+        correspondence=active_runtime_correspondence(control_root, owner),
     )
     return {
         "state": "AUTHORIZED_READY" if authorized else "TECHNICAL_READY",
@@ -288,6 +297,102 @@ def validate_release_evidence(
         "release_payload_integrated": True,
         "release_blockers": [] if authorized else ["legal-release-authorization-required"],
     }
+
+
+def active_runtime_correspondence(control_root: Path, owner: dict) -> dict:
+    """Bind authorization to active evidence, never to retired Gyan research."""
+    runtime = owner["kits"][1].get("runtime_build")
+    if runtime is None:
+        historical = ffmpeg_correspondence.load_record(control_root / ffmpeg_correspondence.RECORD_PATH)
+        ffmpeg_correspondence.require_ready_owner(historical, owner)
+        return historical
+    import hashlib
+    source_compliance._validate_project_runtime_build(runtime)
+    for recipe in runtime["recipe_files"]:
+        path = control_root / recipe["name"]
+        payload_verifier.require_regular_file(path, control_root, recipe["name"])
+        data = path.read_bytes()
+        _require(len(data) == recipe["size"] and hashlib.sha256(data).hexdigest() == recipe["sha256"],
+                 "active runtime recipe/source-owner mismatch")
+    return runtime
+
+
+def validate_repository_control(root: Path) -> dict:
+    """Current control owner for historical audit verifiers, without publishing."""
+    policy = load_policy(root / "legal/release-policy.json")
+    contract = payload_verifier.load_asset_contract(root / payload_verifier.CONTRACT_PATH)
+    if not (root / source_compliance.OWNER_PATH).is_file():
+        _require(all(item["status"] == "blocked" for item in policy["releases"])
+                 and contract["release_readiness"] == "blocked", "current technical control requires its source owner")
+        return {"technical_source_ready": False, "release_ready": False}
+    owner = source_compliance.load_owner(root / source_compliance.OWNER_PATH)
+    state = validate_prebuild_control(policy, release_for_tag(policy, "v1.3.2"), owner, control_root=root)
+    return state
+
+
+def exclude_verified_release_inputs(root: Path, files: list[str]) -> list[str]:
+    """Historical research scans allow only exact, ignored current build inputs.
+
+    Generated application outputs still require external cleanup before these
+    audits. Arbitrary archives, tools, paths and tracked binaries remain rejected.
+    """
+    owner_path = root / source_compliance.OWNER_PATH
+    if not owner_path.is_file():
+        return files
+    owner = source_compliance.load_owner(owner_path)
+    runtime = owner["kits"][1].get("runtime_build")
+    if runtime is None:
+        return files
+    allowed = {"release/source-assets/" + kit["source_asset"]["filename"]: kit for kit in owner["kits"]}
+    hashes = {
+        "data/bin/yt-dlp.exe": "652e154bce7170070d0f26415c9a3c35c121f5a7903cb8cde6d31c4577517fb9",
+        "data/bin/aria2c.exe": "be2099c214f63a3cb4954b09a0becd6e2e34660b886d4c898d260febfe9d70c2",
+        "data/bin/deno.exe": "b6e83993f1f1ab97075a77043de61118966d719b5450bc631251d47c3a34230b",
+        **{"data/bin/" + row["filename"]: row["sha256"] for row in runtime["binaries"]},
+    }
+    candidates = set(files) & (set(allowed) | set(hashes))
+    if not candidates:
+        return files
+    validate_repository_control(root)
+    import subprocess
+    import hashlib
+    for relative in sorted(candidates):
+        path = root / relative
+        payload_verifier.require_regular_file(path, root, relative)
+        ignored = subprocess.run(["git", "check-ignore", "-q", "--", relative], cwd=root, check=False)
+        _require(ignored.returncode == 0, "current release input is tracked or not ignored")
+        if relative in allowed:
+            source_compliance.verify_source_asset(owner, allowed[relative]["id"], path)
+        else:
+            _require(hashlib.sha256(path.read_bytes()).hexdigest() == hashes[relative], "current runtime input hash mismatch")
+    return [name for name in files if name not in candidates]
+
+
+def historical_control_bytes(root: Path, relative: str, candidate: Path) -> bytes:
+    """Validate live control, then read its immutable pre-migration audit snapshot.
+
+    Only the two superseded release-control files may be projected. Historical
+    evidence itself is never projected or rewritten; path overrides must still
+    be byte-identical to the validated live owner.
+    """
+    _require(relative in {"legal/release-policy.json", "legal/release-assets-v2.json"}, "invalid historical control projection")
+    raw = candidate.read_bytes()
+    if not (root / source_compliance.OWNER_PATH).is_file():
+        return raw
+    _require(raw == (root / relative).read_bytes(), "live control override is not the current owner")
+    validate_repository_control(root)
+    import subprocess
+    snapshot = subprocess.run(
+        ["git", "show", f"a9b3282d1e41539ee650fbe24b0801254613ada4:{relative}"],
+        cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ).stdout
+    import hashlib
+    expected = {
+        "legal/release-policy.json": "6b2fc3d061287f57bf04e6e02e64d56d5bf36af490db16bba129f160c374fdb7",
+        "legal/release-assets-v2.json": "6983a68fe45c66b936ac055179b1ee895c87523ea239b6e035a71372c265a234",
+    }
+    _require(hashlib.sha256(snapshot).hexdigest() == expected[relative], "historical control snapshot hash mismatch")
+    return snapshot
 
 
 def _verify_hygiene(value: Any) -> None:
