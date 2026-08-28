@@ -20,6 +20,53 @@ def reject(action, label):
     raise AssertionError(f"negative accepted: {label}")
 
 
+def acquisition_case(responses, *, key="ffmpeg", expected=b"test", stale_partial=False):
+    pin = copy.deepcopy(runtime.INPUTS[key])
+    pin.update(filename="synthetic-source.tar.gz", size=len(expected),
+               sha256=hashlib.sha256(expected).hexdigest())
+    with tempfile.TemporaryDirectory(prefix="project-ffmpeg-acquire-") as temp:
+        root = Path(temp)
+        partial = root / (pin["filename"] + ".partial")
+        final = root / pin["filename"]
+        if stale_partial:
+            partial.write_bytes(b"stale untrusted bytes")
+        pending = list(responses)
+        urls = []
+        partial_absent_before_attempt = []
+
+        def fake_run(argv, **_kwargs):
+            if not pending:
+                raise AssertionError("unexpected extra acquisition attempt")
+            urls.append(argv[-1])
+            partial_absent_before_attempt.append(not partial.exists())
+            response = pending.pop(0)
+            body = response.get("body")
+            if body is not None:
+                partial.write_bytes(body)
+            return mock.Mock(returncode=response.get("returncode", 0),
+                             stdout=response["stdout"], stderr=response.get("stderr", b""))
+
+        with mock.patch.dict(runtime.INPUTS, {key: pin}), \
+                mock.patch.object(runtime.subprocess, "run", side_effect=fake_run), \
+                mock.patch.object(runtime.time, "sleep") as sleep:
+            error = None
+            result = None
+            try:
+                result = runtime.acquire_input(key, root)
+            except runtime.ProjectFFmpegError as exc:
+                error = str(exc)
+            return {
+                "error": error,
+                "result": result,
+                "final_bytes": final.read_bytes() if final.exists() else None,
+                "partial_exists": partial.exists(),
+                "partial_absent_before_attempt": partial_absent_before_attempt,
+                "urls": urls,
+                "sleeps": [call.args[0] for call in sleep.call_args_list],
+                "remaining": len(pending),
+            }
+
+
 def main():
     count = 0
     runtime.validate_configuration(runtime.CONFIGURE)
@@ -50,6 +97,221 @@ def main():
     reject(lambda: runtime.validate_redirect("ffmpeg", "https://example.invalid/source", ffmpeg["url"]), "arbitrary initial input")
     reject(lambda: runtime.validate_redirect("lame", runtime.INPUTS["lame"]["url"], "https://example.invalid/lame.tar.gz"), "LAME redirect")
     count += 2
+    redirect = f"https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/{runtime.FFMPEG_COMMIT}"
+    direct = acquisition_case([{"stdout": b"200\n", "body": b"test"}])
+    assert direct["error"] is None and direct["final_bytes"] == b"test"
+    assert direct["partial_absent_before_attempt"] == [True] and not direct["partial_exists"]
+    lf_redirect = acquisition_case([
+        {"stdout": b"302\n" + redirect.encode("ascii"), "body": b"untrusted redirect body"},
+        {"stdout": b"200\n", "body": b"test"},
+    ])
+    assert lf_redirect["error"] is None and lf_redirect["final_bytes"] == b"test"
+    assert lf_redirect["urls"] == [ffmpeg["url"], redirect]
+    crlf_redirect = acquisition_case([
+        {"stdout": b"302\r\n" + redirect.encode("ascii") + b"\r\n", "body": b"redirect body"},
+        {"stdout": b"200\r\n\r\n", "body": b"test"},
+    ])
+    assert crlf_redirect["error"] is None and crlf_redirect["final_bytes"] == b"test"
+    transient_503 = acquisition_case([
+        {"stdout": b"503\n", "body": b"temporary failure"},
+        {"stdout": b"302\n" + redirect.encode("ascii"), "body": b"redirect body"},
+        {"stdout": b"200\n", "body": b"test"},
+    ])
+    assert transient_503["error"] is None and transient_503["sleeps"] == [2]
+    assert transient_503["urls"] == [ffmpeg["url"], ffmpeg["url"], redirect]
+    transient_429 = acquisition_case([
+        {"stdout": b"429\n", "body": b"rate limited"},
+        {"stdout": b"429\r\n\r\n", "body": b"rate limited again"},
+        {"stdout": b"200\n", "body": b"test"},
+    ])
+    assert transient_429["error"] is None and transient_429["sleeps"] == [2, 4]
+    for status in ("404", "403"):
+        permanent = acquisition_case([{
+            "stdout": (status + "\nhttps://example.invalid/media?token=secret-canary").encode("ascii"),
+            "body": b"untrusted error body", "stderr": b"Authorization: secret-canary",
+        }])
+        assert permanent["error"] is not None and f"status={status}" in permanent["error"]
+        assert "secret-canary" not in permanent["error"]
+        assert "example.invalid" not in permanent["error"] and "Authorization" not in permanent["error"]
+        assert permanent["final_bytes"] is None and not permanent["partial_exists"]
+        count += 1
+    second_redirect = acquisition_case([
+        {"stdout": b"302\n" + redirect.encode("ascii"), "body": b"first redirect body"},
+        {"stdout": b"302\n" + redirect.encode("ascii"), "body": b"second redirect body"},
+    ])
+    assert second_redirect["error"] and "status=302 hop=2 retry=0" in second_redirect["error"]
+    assert not second_redirect["partial_exists"]
+    count += 1
+    for invalid_redirect in (
+        "https://example.invalid/FFmpeg/FFmpeg/tar.gz/" + runtime.FFMPEG_COMMIT,
+        "https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/master",
+    ):
+        invalid = acquisition_case([{
+            "stdout": b"302\n" + invalid_redirect.encode("ascii"), "body": b"redirect body",
+        }])
+        assert invalid["error"] and invalid["final_bytes"] is None and not invalid["partial_exists"]
+        count += 1
+    wrong_size = acquisition_case([{"stdout": b"200\n", "body": b"longer"}])
+    assert wrong_size["error"] == "download size/hash mismatch: ffmpeg"
+    assert wrong_size["final_bytes"] is None and not wrong_size["partial_exists"]
+    count += 1
+    wrong_hash = acquisition_case([{"stdout": b"200\n", "body": b"best"}])
+    assert wrong_hash["error"] == "download size/hash mismatch: ffmpeg"
+    assert wrong_hash["final_bytes"] is None and not wrong_hash["partial_exists"]
+    count += 1
+    stale = acquisition_case([{"stdout": b"200\n", "body": b"test"}], stale_partial=True)
+    assert stale["error"] is None and stale["partial_absent_before_attempt"] == [True]
+    exhausted = acquisition_case([
+        {"stdout": b"503\n", "body": b"failure 1"},
+        {"stdout": b"503\n", "body": b"failure 2"},
+        {"stdout": b"503\n", "body": b"failure 3"},
+        {"stdout": b"503\n", "body": b"failure 4"},
+    ])
+    assert exhausted["error"] and "status=503 hop=1 retry=3" in exhausted["error"]
+    assert exhausted["sleeps"] == [2, 4, 8] and not exhausted["partial_exists"]
+    count += 1
+    malformed = acquisition_case([{"stdout": b"302", "body": b"untrusted"}])
+    assert malformed["error"] == "malformed HTTP response: ffmpeg hop=1 retry=0"
+    assert not malformed["partial_exists"]
+    count += 1
+
+    sf_path = runtime.LAME_PROJECT_PATH
+    sf_routing = runtime.LAME_SOURCE_URL
+
+    def sf_gateway(query=""):
+        return "https://downloads.sourceforge.net" + sf_path + (("?" + query) if query else "")
+
+    def sf_mirror(query="", host="fixture.dl.sourceforge.net"):
+        return "https://" + host + sf_path + (("?" + query) if query else "")
+
+    def lame_case(responses, **kwargs):
+        return acquisition_case(responses, key="lame", **kwargs)
+
+    gateway_a1 = sf_gateway("r=&ts=opaque-a&use_mirror=fixture")
+    mirror_m1 = sf_mirror("e=opaque-b&fid=opaque-c&st=opaque-d&viasf=1")
+    routed = lame_case([
+        {"stdout": b"302\n" + gateway_a1.encode("ascii"), "body": b"redirect bytes 1"},
+        {"stdout": b"302\n" + mirror_m1.encode("ascii"), "body": b"redirect bytes 2"},
+        {"stdout": b"200\n", "body": b"test"},
+    ])
+    assert routed["error"] is None and routed["final_bytes"] == b"test"
+    assert routed["partial_absent_before_attempt"] == [True, True, True]
+    assert not routed["partial_exists"]
+    direct_mirror = sf_mirror("e=changed-a&fid=changed-b&st=changed-c&viasf=1")
+    direct_route = lame_case([
+        {"stdout": b"302\n" + direct_mirror.encode("ascii"), "body": b"not final"},
+        {"stdout": b"200\n", "body": b"test"},
+    ])
+    assert direct_route["error"] is None and direct_route["final_bytes"] == b"test"
+    viasf_only = lame_case([
+        {"stdout": b"302\n" + sf_gateway("use_mirror=fixture-two").encode("ascii")},
+        {"stdout": b"302\n" + sf_mirror("viasf=1").encode("ascii")},
+        {"stdout": b"200\n", "body": b"test"},
+    ])
+    assert viasf_only["error"] is None
+    empty_query = lame_case([
+        {"stdout": b"302\n" + sf_gateway().encode("ascii")},
+        {"stdout": b"302\n" + sf_mirror().encode("ascii")},
+        {"stdout": b"200\n", "body": b"test"},
+    ])
+    assert empty_query["error"] is None
+    changed_values = lame_case([
+        {"stdout": b"302\n" + sf_gateway("r=changed-r&ts=changed-ts&use_mirror=changed-name").encode("ascii")},
+        {"stdout": b"302\n" + sf_mirror("e=changed-e&fid=changed-fid&st=changed-st&viasf=1").encode("ascii")},
+        {"stdout": b"200\n", "body": b"test"},
+    ])
+    assert changed_values["error"] is None
+    sf_503 = lame_case([
+        {"stdout": b"503\n", "body": b"temporary"},
+        {"stdout": b"302\n" + direct_mirror.encode("ascii"), "body": b"not final"},
+        {"stdout": b"200\n", "body": b"test"},
+    ], stale_partial=True)
+    assert sf_503["error"] is None and sf_503["sleeps"] == [2]
+    assert sf_503["partial_absent_before_attempt"] == [True, True, True]
+    sf_429 = lame_case([
+        {"stdout": b"429\n", "body": b"temporary"},
+        {"stdout": b"200\n", "body": b"test"},
+    ])
+    assert sf_429["error"] is None and sf_429["sleeps"] == [2]
+
+    invalid_lame_targets = (
+        "http://downloads.sourceforge.net" + sf_path,
+        "https://fixture.dl.sourceforge.net.evil.example" + sf_path,
+        "https://user@downloads.sourceforge.net" + sf_path,
+        "https://user:password@downloads.sourceforge.net" + sf_path,
+        "https://downloads.sourceforge.net:444" + sf_path,
+        "https://downloads.sourceforge.net" + sf_path + "#fragment",
+        "https://downloads.sourceforge.net/project/other/lame/3.100/lame-3.100.tar.gz",
+        "https://downloads.sourceforge.net/project/lame/lame/3.99/lame-3.99.tar.gz",
+        "https://downloads.sourceforge.net/project/lame/lame/3.100/other.tar.gz",
+        "https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz/extra",
+        sf_gateway("unknown=value"),
+        sf_gateway("use_mirror=one&use_mirror=two"),
+        sf_mirror("viasf=2"),
+        sf_gateway("r=x&ts=y&use_mirror="),
+        sf_gateway("r=x&ts=y&use_mirror=bad%2Fname"),
+        sf_gateway("r=" + ("x" * 2050) + "&ts=y&use_mirror=fixture"),
+        sf_gateway("r=" + ("x" * 4100) + "&ts=y&use_mirror=fixture"),
+    )
+    for target in invalid_lame_targets:
+        invalid = lame_case([{"stdout": b"302\n" + target.encode("ascii"),
+                              "body": b"untrusted redirect bytes"}])
+        assert invalid["error"] and invalid["final_bytes"] is None
+        assert not invalid["partial_exists"]
+        count += 1
+
+    mirror_one = sf_mirror("e=a&fid=b&st=c&viasf=1")
+    gateway_two = sf_gateway("use_mirror=two")
+    mirror_two = sf_mirror("viasf=1", host="second.dl.sourceforge.net")
+    gateway_empty = sf_gateway()
+    mirror_empty = sf_mirror(host="third.dl.sourceforge.net")
+    fifth_redirect = lame_case([
+        {"stdout": b"302\n" + mirror_one.encode("ascii")},
+        {"stdout": b"302\n" + gateway_two.encode("ascii")},
+        {"stdout": b"302\n" + mirror_two.encode("ascii")},
+        {"stdout": b"302\n" + gateway_empty.encode("ascii")},
+        {"stdout": b"302\n" + mirror_empty.encode("ascii")},
+    ])
+    assert fifth_redirect["error"] == "redirect limit exceeded: lame"
+    assert not fifth_redirect["partial_exists"]
+    count += 1
+    looped = lame_case([
+        {"stdout": b"302\n" + gateway_a1.encode("ascii")},
+        {"stdout": b"302\n" + mirror_one.encode("ascii")},
+        {"stdout": b"302\n" + gateway_a1.encode("ascii")},
+    ])
+    assert looped["error"] == "LAME redirect loop detected" and not looped["partial_exists"]
+    count += 1
+    lame_wrong_size = lame_case([{"stdout": b"200\n", "body": b"longer"}])
+    assert lame_wrong_size["error"] == "download size/hash mismatch: lame"
+    assert not lame_wrong_size["partial_exists"]
+    count += 1
+    lame_wrong_hash = lame_case([{"stdout": b"200\n", "body": b"best"}])
+    assert lame_wrong_hash["error"] == "download size/hash mismatch: lame"
+    assert not lame_wrong_hash["partial_exists"]
+    count += 1
+    final_redirect = lame_case([{
+        "stdout": b"200\n" + direct_mirror.encode("ascii"), "body": b"test",
+    }])
+    assert final_redirect["error"] and "status=200" in final_redirect["error"]
+    assert final_redirect["final_bytes"] is None and not final_redirect["partial_exists"]
+    count += 1
+    with tempfile.TemporaryDirectory(prefix="project-lame-initial-") as temp:
+        altered = copy.deepcopy(runtime.INPUTS["lame"])
+        altered["url"] = sf_routing + "?use_mirror=caller"
+        with mock.patch.dict(runtime.INPUTS, {"lame": altered}), \
+                mock.patch.object(runtime.subprocess, "run") as run:
+            reject(lambda: runtime.acquire_input("lame", Path(temp)), "caller-modified LAME URL")
+            assert not run.called
+        count += 1
+    opaque_canary = "opaque-routing-value-must-not-leak"
+    leak = lame_case([{
+        "stdout": ("302\n" + sf_gateway("unknown=" + opaque_canary)).encode("ascii"),
+        "body": opaque_canary.encode("ascii"), "stderr": opaque_canary.encode("ascii"),
+    }])
+    assert leak["error"] and opaque_canary not in leak["error"]
+    assert "unknown=" not in leak["error"] and not leak["partial_exists"]
+    count += 1
     with tempfile.TemporaryDirectory(prefix="project-ffmpeg-pin-") as temp:
         pin = copy.deepcopy(ffmpeg)
         pin.update(filename="synthetic-source.tar.gz", size=4, sha256=hashlib.sha256(b"test").hexdigest())
