@@ -2,10 +2,10 @@
   "schema_version": 1,
   "release_tag": "v1.3.2",
   "state": "LEGAL_RELEASE_AUTHORIZED",
-  "decision_reference": "owner-release-authorization-v1-3-2-2026-08-27",
+  "decision_reference": "owner-v1-3-2-sourceforge-frs-routing-recovery-2026-08-28",
   "reviewed_source_commit": "45bf7e352a84b16f3875f9613cb6049ba9eb4217",
   "reviewed_policy_sha256": "301ea8a675891065fee3b154e415562bb5fc9a96c225389bbee8333969acf8db",
-  "reviewed_source_owner_sha256": "81cd1a3f38e572a35397211c6d42a4bd95070a24b91a77137a6b5010cb6bc789",
+  "reviewed_source_owner_sha256": "6d8ad18cdba58155613d8b1266b2301390142bee31def74a45bbdab83ecde47d",
   "reviewed_asset_contract_sha256": "9da49ac1b91c87e4a61ad00e61b23147ee83449ef3d1c7ae050677f09c1516a1",
-  "reviewed_ffmpeg_correspondence_sha256": "5a9c878f850d0f73d6edabc40aac3e190e2d33a03a9259a3abc7315302fe3f57"
+  "reviewed_ffmpeg_correspondence_sha256": "d801ce224f868588c0690711bd4851a63ae7c323abd715fb6ff367db1525b452"
 }

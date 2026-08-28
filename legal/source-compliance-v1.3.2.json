@@ -239,7 +239,7 @@
           "version": "3.100",
           "repository": "https://lame.sourceforge.io/",
           "immutable_ref": null,
-          "archive_url": "https://zenlayer.dl.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz",
+          "archive_url": "https://sourceforge.net/projects/lame/files/lame/3.100/lame-3.100.tar.gz/download",
           "archive_filename": "lame-3.100.tar.gz",
           "archive_size": 1524133,
           "archive_sha256": "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e",
@@ -255,10 +255,10 @@
       ],
       "source_asset": {
         "filename": "Youtube-Downloaderbs-v1.3.2-ffmpeg-source.zip",
-        "size": 18333688,
-        "sha256": "778c9a2233a49c5b5ea204111f6dd66d8c3c721eda121750d23ed87d776c8ed1",
+        "size": 18335373,
+        "sha256": "3a7702b1a02533541c7100db93b2434da08992b899415af10a9904f674c42933",
         "entry_count": 13,
-        "manifest_sha256": "dff7f1decd7871eb1f619e4122c1246ec4ae2d61c34b086b97c5ccf96cb089dd"
+        "manifest_sha256": "ca92ba8e9ac36d3bbf33371c00456a349880c39412dc1dc0ce2dfd52fe02a511"
       },
       "status": "ready",
       "blockers": [],
@@ -306,8 +306,8 @@
           },
           {
             "name": "scripts/project_ffmpeg.py",
-            "size": 9083,
-            "sha256": "73941cb243d2f832f25652e77fb8add63f50f2e474b09d53de198bce38118cff"
+            "size": 16385,
+            "sha256": "a60d10bea0199fce2c535f4637ec05fe33e1f4f3b6f157cc462f921e682ed616"
           }
         ],
         "toolchain_inputs": {

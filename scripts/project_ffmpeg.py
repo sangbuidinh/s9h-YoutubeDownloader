@@ -8,10 +8,14 @@ from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import tarfile
-from urllib.parse import urlsplit
+import time
+from urllib.parse import parse_qsl, urlsplit
 import zipfile
 
 FFMPEG_COMMIT = "38b88335f99e76ed89ff3c93f877fdefce736c13"
+LAME_SOURCE_URL = "https://sourceforge.net/projects/lame/files/lame/3.100/lame-3.100.tar.gz/download"
+LAME_ROUTING_PATH = "/projects/lame/files/lame/3.100/lame-3.100.tar.gz/download"
+LAME_PROJECT_PATH = "/project/lame/lame/3.100/lame-3.100.tar.gz"
 INPUTS = {
     "ffmpeg": {
         "filename": f"ffmpeg-{FFMPEG_COMMIT}.tar.gz",
@@ -22,7 +26,7 @@ INPUTS = {
     },
     "lame": {
         "filename": "lame-3.100.tar.gz",
-        "url": "https://zenlayer.dl.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz",
+        "url": LAME_SOURCE_URL,
         "size": 1524133,
         "sha256": "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e",
         "redirect_hosts": [],
@@ -65,6 +69,15 @@ REQUIRED_COMPONENTS = {
     "bsfs": {"aac_adtstoasc", "setts"},
     "protocols": {"file", "pipe", "http", "https", "tcp", "tls", "crypto", "data"},
 }
+TRANSIENT_HTTP_STATUSES = {"408", "425", "429", "500", "502", "503", "504"}
+REDIRECT_HTTP_STATUSES = {"301", "302", "303", "307", "308"}
+HTTP_RETRY_DELAYS = (2, 4, 8)
+LAME_MAX_REDIRECTS = 4
+LAME_MAX_URL_BYTES = 4096
+LAME_MAX_QUERY_BYTES = 2048
+LAME_MIRROR_HOST = re.compile(
+    r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.dl\.sourceforge\.net$", re.IGNORECASE
+)
 
 
 class ProjectFFmpegError(RuntimeError):
@@ -93,8 +106,75 @@ def verify_input(path: Path, key: str) -> None:
             f"input size/hash mismatch: {key}")
 
 
+def _lame_sourceforge_identity(url: str) -> tuple[str, frozenset[str]]:
+    """Validate SourceForge structure while keeping routing values opaque."""
+    require(len(url.encode("utf-8")) <= LAME_MAX_URL_BYTES, "unsafe LAME source URL")
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ProjectFFmpegError("unsafe LAME source URL") from exc
+    require(parsed.scheme == "https" and not parsed.username and not parsed.password
+            and not parsed.fragment and port in (None, 443), "unsafe LAME source URL")
+    host = (parsed.hostname or "").lower()
+    if host == "sourceforge.net" and parsed.path == LAME_ROUTING_PATH:
+        host_class = "routing"
+    elif host == "downloads.sourceforge.net" and parsed.path == LAME_PROJECT_PATH:
+        host_class = "gateway"
+    elif LAME_MIRROR_HOST.fullmatch(host) and parsed.path == LAME_PROJECT_PATH:
+        host_class = "mirror"
+    else:
+        raise ProjectFFmpegError("unexpected LAME source identity")
+    require(re.search(r"%(?![0-9A-Fa-f]{2})", parsed.query) is None,
+            "malformed LAME routing metadata")
+    require(len(parsed.query.encode("utf-8")) <= LAME_MAX_QUERY_BYTES,
+            "overlong LAME routing metadata")
+    try:
+        pairs = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True,
+                          encoding="utf-8", errors="strict") if parsed.query else []
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ProjectFFmpegError("malformed LAME routing metadata") from exc
+    keys = [key for key, _value in pairs]
+    require(all(keys) and len(keys) == len(set(keys)), "malformed LAME routing metadata")
+    values = dict(pairs)
+    keyset = frozenset(keys)
+    if host_class == "routing":
+        require(not keyset, "unexpected LAME routing metadata")
+    elif host_class == "gateway":
+        require(keyset in (frozenset(), frozenset({"use_mirror"}),
+                           frozenset({"r", "ts", "use_mirror"})),
+                "unexpected LAME routing metadata")
+        if keyset:
+            mirror = values["use_mirror"]
+            require(bool(mirror) and len(mirror) <= 64
+                    and re.fullmatch(r"[A-Za-z0-9._-]+", mirror) is not None,
+                    "invalid LAME gateway routing metadata")
+        if "ts" in values:
+            require(bool(values["ts"]), "invalid LAME gateway routing metadata")
+    else:
+        require(keyset in (frozenset(), frozenset({"viasf"}),
+                           frozenset({"e", "fid", "st", "viasf"})),
+                "unexpected LAME routing metadata")
+        require(not keyset or values["viasf"] == "1",
+                "invalid LAME mirror routing metadata")
+        if len(keyset) == 4:
+            require(all(values[name] for name in ("e", "fid", "st")),
+                    "invalid LAME mirror routing metadata")
+    return host_class, keyset
+
+
 def validate_redirect(key: str, original: str, target: str) -> None:
     pin = INPUTS[key]
+    if key == "lame":
+        original_class, _original_keys = _lame_sourceforge_identity(original)
+        target_class, _target_keys = _lame_sourceforge_identity(target)
+        allowed = {
+            "routing": {"gateway", "mirror"},
+            "gateway": {"mirror"},
+            "mirror": {"routing", "gateway"},
+        }
+        require(target_class in allowed[original_class], "unexpected LAME redirect transition")
+        return
     require(original == pin["url"], "unexpected source URL/input")
     parsed = urlsplit(target)
     require(parsed.scheme == "https" and not parsed.username and not parsed.password
@@ -109,6 +189,30 @@ def validate_redirect(key: str, original: str, target: str) -> None:
                 "unexpected toolchain asset redirect path")
 
 
+def parse_curl_write_out(stdout: bytes, key: str, hop: int, retry: int) -> tuple[str, str]:
+    """Parse only curl's ASCII write-out fields; never surface raw response text."""
+    try:
+        raw = stdout.decode("ascii", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ProjectFFmpegError(
+            f"malformed HTTP response: {key} hop={hop} retry={retry}"
+        ) from exc
+    status_line, separator, redirect_part = raw.partition("\n")
+    status = status_line.rstrip("\r")
+    redirect = redirect_part.strip("\r\n")
+    require(bool(separator) and re.fullmatch(r"[0-9]{3}", status) is not None
+            and "\r" not in redirect and "\n" not in redirect,
+            f"malformed HTTP response: {key} hop={hop} retry={retry}")
+    return status, redirect
+
+
+def remove_partial(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def acquire_input(key: str, root: Path) -> Path:
     """No redirect is followed before validation; all bytes stay quarantined until pinned."""
     pin = INPUTS[key]
@@ -119,26 +223,77 @@ def acquire_input(key: str, root: Path) -> Path:
         return path
     partial = root / (pin["filename"] + ".partial")
     url = pin["url"]
-    for hop in range(2):
-        result = subprocess.run([
-            "curl.exe", "--silent", "--show-error", "--proto", "=https",
-            "--max-time", "600", "--max-filesize", str(pin["size"]),
-            "--output", str(partial), "--write-out", "%{http_code}\n%{redirect_url}", url,
-        ], capture_output=True, timeout=610, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        # Never expose redirect query strings, HTTP headers, or raw curl diagnostics.
-        require(result.returncode == 0, f"bounded HTTPS acquisition failed: {key}")
-        lines = result.stdout.decode("ascii").split("\n", 1)
-        if lines[0] == "200":
-            require(partial.stat().st_size == pin["size"]
-                    and hashlib.sha256(partial.read_bytes()).hexdigest() == pin["sha256"],
-                    f"download size/hash mismatch: {key}")
-            partial.rename(path)
-            verify_input(path, key)
-            return path
-        require(hop == 0 and lines[0] in {"301", "302", "303", "307", "308"}
-                and len(lines) == 2, f"unexpected HTTP response: {key}")
-        validate_redirect(key, pin["url"], lines[1])
-        url = lines[1]
+    if key == "lame":
+        require(url == LAME_SOURCE_URL, "unexpected LAME source URL/input")
+        initial_class, initial_keys = _lame_sourceforge_identity(url)
+        require(initial_class == "routing" and not initial_keys, "unexpected LAME source URL/input")
+        initial = urlsplit(url)
+        seen = {(initial.scheme, initial.hostname, initial.path, initial_keys)}
+        max_redirects = LAME_MAX_REDIRECTS
+    else:
+        seen = set()
+        max_redirects = 1
+    for hop_index in range(max_redirects + 1):
+        hop = hop_index + 1
+        for retry in range(len(HTTP_RETRY_DELAYS) + 1):
+            remove_partial(partial)
+            result = subprocess.run([
+                "curl.exe", "--silent", "--show-error", "--proto", "=https",
+                "--max-time", "600", "--max-filesize", str(pin["size"]),
+                "--output", str(partial), "--write-out", "%{http_code}\n%{redirect_url}", url,
+            ], capture_output=True, timeout=610,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            # Never expose redirect query strings, HTTP headers, or raw curl diagnostics.
+            if result.returncode != 0:
+                remove_partial(partial)
+                raise ProjectFFmpegError(f"bounded HTTPS acquisition failed: {key}")
+            try:
+                status, redirect = parse_curl_write_out(result.stdout, key, hop, retry)
+            except ProjectFFmpegError:
+                remove_partial(partial)
+                raise
+            if status == "200":
+                if redirect or not partial.is_file() or partial.is_symlink():
+                    remove_partial(partial)
+                    raise ProjectFFmpegError(
+                        f"unexpected HTTP response: {key} status={status} hop={hop} retry={retry}"
+                    )
+                valid = (partial.stat().st_size == pin["size"]
+                         and hashlib.sha256(partial.read_bytes()).hexdigest() == pin["sha256"])
+                if not valid:
+                    remove_partial(partial)
+                    raise ProjectFFmpegError(f"download size/hash mismatch: {key}")
+                partial.rename(path)
+                verify_input(path, key)
+                return path
+            remove_partial(partial)
+            if status in TRANSIENT_HTTP_STATUSES:
+                if retry < len(HTTP_RETRY_DELAYS):
+                    time.sleep(HTTP_RETRY_DELAYS[retry])
+                    continue
+                raise ProjectFFmpegError(
+                    f"unexpected HTTP response: {key} status={status} hop={hop} retry={retry}"
+                )
+            if status not in REDIRECT_HTTP_STATUSES or not redirect:
+                raise ProjectFFmpegError(
+                    f"unexpected HTTP response: {key} status={status} hop={hop} retry={retry}"
+                )
+            if hop_index >= max_redirects:
+                remove_partial(partial)
+                if key == "lame":
+                    raise ProjectFFmpegError(f"redirect limit exceeded: {key}")
+                raise ProjectFFmpegError(
+                    f"unexpected HTTP response: {key} status={status} hop={hop} retry={retry}"
+                )
+            validate_redirect(key, url, redirect)
+            if key == "lame":
+                _target_class, target_keys = _lame_sourceforge_identity(redirect)
+                target = urlsplit(redirect)
+                identity = (target.scheme, target.hostname, target.path, target_keys)
+                require(identity not in seen, "LAME redirect loop detected")
+                seen.add(identity)
+            url = redirect
+            break
     raise ProjectFFmpegError(f"redirect limit exceeded: {key}")
 
 
