@@ -508,13 +508,54 @@ def _validate_current_publish_readiness_owner(text: str) -> None:
 
 def _validate_current_evidence_order(steps: list[list[str]]) -> None:
     names = ["Install locked build dependencies", "Validate prebuild technical control gate",
-             "Check out release tag", "Verify annotated tag and release absence",
+             "Check out release tag", "Normalize canonical release-note checkout",
+             "Verify annotated tag and release absence",
              "Build project FFmpeg from exact source inputs", "Create and verify project FFmpeg source asset",
              "Acquire and verify accepted aria2 source asset", "Build and validate checksum-pinned assets",
              "Verify both source assets against current owner", "Prepare and verify release legal payload",
              "Validate final release evidence gate", "Create and verify release bundle"]
     positions = [steps.index(_named_step(steps, name)) for name in names]
     _require(positions == sorted(positions), "v1.3.2 evidence gates are out of order")
+    normalization = "\n".join(_named_step(steps, names[3]))
+    for required in (
+        "working-directory: source",
+        'subprocess.check_output(["git", "show", f"HEAD:{relative}"])',
+        'relative = "docs/release_notes_v1.3.2.md"',
+        "target.write_bytes(blob)",
+        "checkout = target.read_bytes()",
+        "sha256(checkout).digest() != sha256(blob).digest()",
+        'blob.startswith(b"\\xef\\xbb\\xbf")',
+        'blob.decode("utf-8", errors="strict")',
+        'b"\\r" in blob',
+        'blob.endswith(b"\\n")',
+        'blob.endswith(b"\\n\\n")',
+        '["git", "rev-parse", "HEAD"]',
+        "head_after != head_before",
+        'if ($LASTEXITCODE -ne 0)',
+    ):
+        _require(required in normalization, f"release-note materialization lacks {required}")
+    _require(
+        normalization.count("target.write_bytes(blob)") == 1
+        and normalization.count('subprocess.check_output(["git", "show", f"HEAD:{relative}"])') == 1,
+        "release-note materialization must exist exactly once",
+    )
+    for forbidden in (
+        "git commit",
+        "git tag",
+        "git reset",
+        "git checkout",
+        "git switch",
+        "git update-ref",
+        "git clean",
+        '["git", "commit"',
+        '["git", "tag"',
+        '["git", "reset"',
+        '["git", "checkout"',
+        '["git", "switch"',
+        '["git", "update-ref"',
+        '["git", "clean"',
+    ):
+        _require(forbidden not in normalization, f"release-note materialization mutates Git identity: {forbidden}")
     final = "\n".join(_named_step(steps, names[-2]))
     for required in ("python ..\\control\\scripts\\verify_release_legal_gate.py `", "--stage final", "--control-root ..\\control", "--source-assets-root release/source-assets",
                      "--legal-payload release/assets/Youtube-Downloaderbs-v1.3.2-legal.zip",
@@ -526,22 +567,22 @@ def _validate_current_evidence_order(steps: list[list[str]]) -> None:
     all_text = "\n".join("\n".join(step) for step in steps)
     _require("Block unavailable FFmpeg source assembly" not in all_text, "obsolete incomplete assembly guard remains")
     required_commands = {
-        names[4]: ("python ..\\control\\scripts\\build_project_ffmpeg.py `", "prepare_source_kit.py verify-runtime", "--work-root $projectBuildRoot", "--downloads-root $sourceDownloads", "--runtime-root (Join-Path $projectBuildRoot \"runtime\")"),
-        names[5]: ("prepare_source_kit.py create-ffmpeg", "--repo-root ..\\control", "--runtime-root (Join-Path $env:RUNNER_TEMP \"s9h-project-ffmpeg/runtime\")", "--output release/source-assets/Youtube-Downloaderbs-v1.3.2-ffmpeg-source.zip", "prepare_source_kit.py verify"),
-        names[6]: ("prepare_source_kit.py acquire-aria2", "prepare_source_kit.py create", "prepare_source_kit.py verify", "--output release/source-assets/Youtube-Downloaderbs-v1.3.2-aria2-source.zip"),
-        names[7]: ('-PreparePinnedRuntime -ProjectRuntimeRoot (Join-Path $env:RUNNER_TEMP "s9h-project-ffmpeg/runtime")',),
+        names[5]: ("python ..\\control\\scripts\\build_project_ffmpeg.py `", "prepare_source_kit.py verify-runtime", "--work-root $projectBuildRoot", "--downloads-root $sourceDownloads", "--runtime-root (Join-Path $projectBuildRoot \"runtime\")"),
+        names[6]: ("prepare_source_kit.py create-ffmpeg", "--repo-root ..\\control", "--runtime-root (Join-Path $env:RUNNER_TEMP \"s9h-project-ffmpeg/runtime\")", "--output release/source-assets/Youtube-Downloaderbs-v1.3.2-ffmpeg-source.zip", "prepare_source_kit.py verify"),
+        names[7]: ("prepare_source_kit.py acquire-aria2", "prepare_source_kit.py create", "prepare_source_kit.py verify", "--output release/source-assets/Youtube-Downloaderbs-v1.3.2-aria2-source.zip"),
+        names[8]: ('-PreparePinnedRuntime -ProjectRuntimeRoot (Join-Path $env:RUNNER_TEMP "s9h-project-ffmpeg/runtime")',),
     }
     for name, commands in required_commands.items():
         step = "\n".join(_named_step(steps, name))
         for command in commands:
             _require(command in step and ("# " + command) not in step, f"source-build step lacks executable {command}")
-        if name != names[7]:
+        if name != names[8]:
             _require(step.count("if ($LASTEXITCODE -ne 0)") >= step.count("          python "), "source-build command lacks exit gate")
-    source_step = "\n".join(_named_step(steps, names[8]))
+    source_step = "\n".join(_named_step(steps, names[9]))
     _require(source_step.count("prepare_source_kit.py verify") == 2, "both sources must be verified")
     for package in ("aria2", "ffmpeg"):
         _require(f"--package {package}" in source_step and f"--asset release/source-assets/Youtube-Downloaderbs-v1.3.2-{package}-source.zip" in source_step, "source verifier identity missing")
-    for name in (names[1], *names[4:]):
+    for name in (names[1], names[3], *names[5:]):
         text = "\n".join(_named_step(steps, name))
         _require(re.search(r"(?m)^\s+(?:continue-on-error|if|env)\s*:", text) is None, "evidence step has YAML bypass")
         for forbidden in ("||", "; exit 0", "SilentlyContinue", "2>$null", "--allow"):
@@ -649,6 +690,15 @@ def _test_negative_mutations(documents: dict[str, str]) -> None:
         ("payload after final gate", _move_named_step_after(current_document, "Prepare and verify release legal payload", "Validate final release evidence gate")),
         ("sources after legal payload", _move_named_step_after(current_document, "Verify both source assets against current owner", "Prepare and verify release legal payload")),
         ("prebuild after build", _move_named_step_after(current_document, "Validate prebuild technical control gate", CONTRACTS[-1].build_step)),
+        ("release-note materialization removed", current_document.replace(_named_step_text(current_document, "Normalize canonical release-note checkout"), "", 1)),
+        ("release-note materialization reordered", _move_named_step_after(current_document, "Normalize canonical release-note checkout", "Verify annotated tag and release absence")),
+        ("release-note blob identity removed", current_document.replace('subprocess.check_output(["git", "show", f"HEAD:{relative}"])', 'Path(relative).read_bytes()', 1)),
+        ("release-note exact write removed", current_document.replace("target.write_bytes(blob)", "target.touch()", 1)),
+        ("release-note digest check removed", current_document.replace("sha256(checkout).digest() != sha256(blob).digest()", "False", 1)),
+        ("release-note CR rejection removed", current_document.replace('if b"\\r" in blob:', "if False:", 1)),
+        ("release-note BOM rejection removed", current_document.replace('if blob.startswith(b"\\xef\\xbb\\xbf"):', "if False:", 1)),
+        ("release-note HEAD identity removed", current_document.replace("if head_after != head_before:", "if False:", 1)),
+        ("release-note source commit mutation", current_document.replace("target.write_bytes(blob)", 'target.write_bytes(blob)\n          subprocess.run(["git", "commit", "-am", "mutation"], check=True)', 1)),
         ("final gate removed", current_document.replace(_named_step_text(current_document, "Validate final release evidence gate"), "", 1)),
         ("source build removed", current_document.replace(_named_step_text(current_document, "Build project FFmpeg from exact source inputs"), "", 1)),
         ("source kit assembly removed", current_document.replace("prepare_source_kit.py create-ffmpeg", "prepare_source_kit.py verify", 1)),

@@ -165,7 +165,12 @@ def _verify_explicit_authorized_control_fixture() -> None:
         (root / "legal/release-assets-v2.json").write_bytes(source_compliance.canonical_json_bytes(contract))
         v3_path = root / "legal/release-assets-v3.json"
         v3 = json.loads(v3_path.read_bytes())
-        v3.update(release_readiness="ready", legal_compliance_certified=True, release_blockers=[])
+        _assert(v3["release_readiness"] == "technical-ready", "v3 must remain inactive")
+        _assert(v3["legal_compliance_certified"] is False, "v3 legal state changed")
+        _assert(
+            v3["release_blockers"] == ["release-sbom-ready-state-not-supported"],
+            "v3 SBOM blocker changed",
+        )
         v3_path.write_bytes(source_compliance.canonical_json_bytes(v3))
         owner = source_compliance.load_owner(root / source_compliance.OWNER_PATH)
         auth = authorization.load_authorization(root / authorization.AUTHORIZATION_PATH)

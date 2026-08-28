@@ -208,6 +208,7 @@ GITATTRIBUTES_LINES = (
     "/docs/sbom-generator-feasibility.md text eol=lf",
     "/docs/release-sbom.md text eol=lf",
     "/docs/release_notes_v1.3.1.md text eol=lf",
+    "/docs/release_notes_v1.3.2.md text eol=lf",
     "/legal/*.json text eol=lf",
     "/legal/README.md text eol=lf",
     "/legal/built-artifact-inventory.json text eol=lf",

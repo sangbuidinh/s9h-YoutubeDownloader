@@ -441,16 +441,39 @@ def _load_control_state(
             release_gate.release_authorization.AuthorizationError, legal_payload.LegalPayloadError) as exc:
         raise BundleError(str(exc)) from exc
     contract_ready = contract["release_readiness"] == "ready"
-    if contract_ready != state["release_ready"]:
-        raise BundleError("release asset contract readiness disagrees with validated control state")
-    if (
-        contract["legal_compliance_certified"] is not state["legal_compliance_certified"]
-        or contract["source_availability_certified"] is not state["source_availability_certified"]
-        or contract["source_kits_ready"] is not state["source_availability_certified"]
+    if contract["contract_version"] == 2:
+        if contract_ready != state["release_ready"]:
+            raise BundleError("release asset contract readiness disagrees with validated control state")
+        if (
+            contract["legal_compliance_certified"] is not state["legal_compliance_certified"]
+            or contract["source_availability_certified"] is not state["source_availability_certified"]
+            or contract["source_kits_ready"] is not state["source_availability_certified"]
+        ):
+            raise BundleError("release asset contract certifications disagree with validated control state")
+    elif (
+        (contract_ready and not state["release_ready"])
+        or (
+            contract["legal_compliance_certified"]
+            and not state["legal_compliance_certified"]
+        )
+        or (
+            contract["source_availability_certified"]
+            and not state["source_availability_certified"]
+        )
+        or (contract["source_kits_ready"] and not state["source_availability_certified"])
     ):
-        raise BundleError("release asset contract certifications disagree with validated control state")
+        raise BundleError("v3 release asset contract is more permissive than validated control state")
     blockers = sorted(set(contract["release_blockers"]) | set(state["release_blockers"]))
-    if state["release_ready"]:
+    effective_ready = state["release_ready"]
+    effective_legal = state["legal_compliance_certified"]
+    effective_source = state["source_availability_certified"]
+    if contract["contract_version"] == 3:
+        # The inactive v3 SBOM evidence schema is intentionally blocked-only.
+        # Preserve technical contract facts while keeping bundle evidence fail-closed.
+        effective_ready = False
+        effective_legal = False
+        effective_source = False
+    if effective_ready:
         if blockers:
             raise BundleError("ready release control state contains blockers")
     elif not blockers:
@@ -462,9 +485,9 @@ def _load_control_state(
         "bundle_format": contract["bundle_format"],
         "requires_sbom": contract["requires_sbom"],
         "release_blockers": blockers,
-        "release_ready": state["release_ready"],
-        "legal_compliance_certified": state["legal_compliance_certified"],
-        "source_availability_certified": state["source_availability_certified"],
+        "release_ready": effective_ready,
+        "legal_compliance_certified": effective_legal,
+        "source_availability_certified": effective_source,
     }
 
 
@@ -531,15 +554,11 @@ def _load_bundle_contract(path: Path, control_root: Path) -> dict[str, Any]:
         or value["bundle_manifest_schema_version"] != V3_MANIFEST_SCHEMA_VERSION
         or value["sbom_input_required"] is not True
         or value["legal_payload_format"] != legacy["legal_payload_format"]
-        or value["release_readiness"] != legacy["release_readiness"]
-        or value["legal_compliance_certified"] is not legacy["legal_compliance_certified"]
-        or value["source_availability_certified"] is not legacy["source_availability_certified"]
-        or value["source_kits_ready"] is not legacy["source_kits_ready"]
         or value["portable_legal_root"] != legacy["portable_legal_root"]
         or value["legal_payload_files"] != legacy["legal_payload_files"]
-        or value["release_blockers"] != legacy["release_blockers"]
     ):
         raise BundleError("release assets v3 contract values are invalid")
+    _validate_v3_readiness(value, legacy)
 
     assets = value["release_assets"]
     if not isinstance(assets, list) or len(assets) != 6:
@@ -578,6 +597,47 @@ def _load_bundle_contract(path: Path, control_root: Path) -> dict[str, Any]:
         "source_availability_certified": value["source_availability_certified"],
         "source_kits_ready": value["source_kits_ready"],
     }
+
+
+def _validate_v3_readiness(value: dict[str, Any], legacy: dict[str, Any]) -> None:
+    readiness_rank = {"blocked": 0, "technical-ready": 1, "ready": 2}
+    readiness = value["release_readiness"]
+    legacy_readiness = legacy["release_readiness"]
+    if readiness not in readiness_rank or legacy_readiness not in readiness_rank:
+        raise BundleError("release assets v3 readiness is invalid")
+    if readiness == "ready":
+        raise BundleError("release assets v3 READY is unsupported until SBOM ready-state support exists")
+    if readiness_rank[readiness] > readiness_rank[legacy_readiness]:
+        raise BundleError("release assets v3 cannot be more permissive than active v2")
+    for field in (
+        "legal_compliance_certified",
+        "source_availability_certified",
+        "source_kits_ready",
+    ):
+        if type(value[field]) is not bool or (value[field] and not legacy[field]):
+            raise BundleError("release assets v3 cannot be more permissive than active v2")
+    blockers = value["release_blockers"]
+    if (
+        not isinstance(blockers, list)
+        or not blockers
+        or len(blockers) != len(set(blockers))
+        or any(not isinstance(item, str) or not item for item in blockers)
+    ):
+        raise BundleError("release assets v3 blockers are invalid")
+    if readiness == "technical-ready":
+        if (
+            value["legal_compliance_certified"] is not False
+            or value["source_availability_certified"] is not True
+            or value["source_kits_ready"] is not True
+            or blockers != ["release-sbom-ready-state-not-supported"]
+        ):
+            raise BundleError("release assets v3 technical-ready state is invalid")
+    elif (
+        value["legal_compliance_certified"] is not False
+        or value["source_availability_certified"] is not False
+        or value["source_kits_ready"] is not False
+    ):
+        raise BundleError("release assets v3 blocked state is invalid")
 
 
 def _bundle_version_label(path: Path) -> str:

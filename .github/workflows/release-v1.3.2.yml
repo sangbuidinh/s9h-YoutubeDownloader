@@ -70,6 +70,43 @@ jobs:
           path: source
           ref: v1.3.2
           fetch-depth: 0
+      - name: Normalize canonical release-note checkout
+        shell: pwsh
+        working-directory: source
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          @'
+          from hashlib import sha256
+          from pathlib import Path
+          import subprocess
+
+          relative = "docs/release_notes_v1.3.2.md"
+          head_before = subprocess.check_output(["git", "rev-parse", "HEAD"]).strip()
+          blob = subprocess.check_output(["git", "show", f"HEAD:{relative}"])
+          if not blob:
+              raise SystemExit("release notes Git blob is empty")
+          if blob.startswith(b"\xef\xbb\xbf"):
+              raise SystemExit("release notes Git blob contains a UTF-8 BOM")
+          blob.decode("utf-8", errors="strict")
+          if b"\r" in blob:
+              raise SystemExit("release notes Git blob is not LF-only")
+          if not blob.endswith(b"\n") or blob.endswith(b"\n\n"):
+              raise SystemExit("release notes Git blob must have exactly one final LF")
+
+          target = Path(relative)
+          target.write_bytes(blob)
+          checkout = target.read_bytes()
+          if sha256(checkout).digest() != sha256(blob).digest() or checkout != blob:
+              raise SystemExit("release notes checkout differs from the checked-out Git blob")
+          head_after = subprocess.check_output(["git", "rev-parse", "HEAD"]).strip()
+          if head_after != head_before:
+              raise SystemExit("release source HEAD changed during release-note normalization")
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) {
+              throw "Canonical release-note checkout normalization failed"
+          }
       - name: Verify annotated tag and release absence
         id: release-metadata
         shell: pwsh
