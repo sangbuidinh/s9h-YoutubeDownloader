@@ -13,6 +13,8 @@ from typing import Any
 
 import release_sbom
 import verify_release_legal_payload as legal_payload
+import source_compliance
+import verify_release_legal_gate as release_gate
 
 
 V2_MANIFEST_SCHEMA_VERSION = 2
@@ -26,7 +28,7 @@ CHECKSUM_NAME = "SHA256SUMS.txt"
 MANIFEST_NAME = "RELEASE_MANIFEST.json"
 NOTES_NAME = "RELEASE_NOTES.md"
 POLICY_PATH = "legal/release-policy.json"
-SOURCE_KITS_PATH = "legal/source-kit-requirements.json"
+SOURCE_KITS_PATH = "legal/source-compliance-v1.3.2.json"
 TAG_PATTERN = re.compile(
     r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
     r"(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$"
@@ -118,7 +120,12 @@ def create_bundle(
     sbom_input: Path | None = None,
 ) -> None:
     _validate_metadata(tag, source_commit, control_commit, prerelease)
-    control = _load_control_state(policy, asset_contract, tag)
+    control = _load_control_state(
+        policy, asset_contract, tag, source_assets_root, legal_payload_path,
+        portable_zip=release_root / "assets" / f"Youtube-Downloaderbs-{tag}.zip",
+        release_notes=release_root / NOTES_NAME,
+        source_commit=source_commit, control_commit=control_commit,
+    )
     evidence = _load_contract_sbom_evidence(
         control,
         sbom_input,
@@ -189,9 +196,9 @@ def create_bundle(
         "prerelease": prerelease,
         "source_commit": source_commit,
         "control_commit": control_commit,
-        "release_ready": False,
-        "legal_compliance_certified": False,
-        "source_availability_certified": False,
+        "release_ready": control["release_ready"],
+        "legal_compliance_certified": control["legal_compliance_certified"],
+        "source_availability_certified": control["source_availability_certified"],
         "assets": assets,
         "checksum_file": _bytes_record(CHECKSUM_NAME, checksum_bytes),
         "release_notes": _file_record(notes_path),
@@ -256,7 +263,12 @@ def verify_bundle(
     _validate_metadata(tag, source_commit, control_commit, prerelease)
     if type(require_release_ready) is not bool:
         raise BundleError("require-release-ready flag is invalid")
-    control = _load_control_state(policy, asset_contract, tag)
+    control = _load_control_state(
+        policy, asset_contract, tag, source_assets_root, legal_payload_path,
+        portable_zip=bundle_root / "assets" / f"Youtube-Downloaderbs-{tag}.zip",
+        release_notes=bundle_root / NOTES_NAME,
+        source_commit=source_commit, control_commit=control_commit,
+    )
     evidence = _load_contract_sbom_evidence(
         control,
         sbom_input,
@@ -295,6 +307,9 @@ def verify_bundle(
         release_blockers=control["release_blockers"],
         manifest_schema_version=control["manifest_schema_version"],
         bundle_format=control["bundle_format"],
+        release_ready=control["release_ready"],
+        legal_compliance_certified=control["legal_compliance_certified"],
+        source_availability_certified=control["source_availability_certified"],
     )
     _verify_release_notes_portable_checksum(
         bundle_root,
@@ -382,7 +397,18 @@ def _verify_release_notes_portable_checksum(
         raise BundleError("release notes portable checksum does not match the release asset")
 
 
-def _load_control_state(policy_path: Path, asset_contract_path: Path, tag: str) -> dict[str, Any]:
+def _load_control_state(
+    policy_path: Path,
+    asset_contract_path: Path,
+    tag: str,
+    source_assets_root: Path,
+    legal_payload_path: Path,
+    *,
+    portable_zip: Path | None = None,
+    release_notes: Path | None = None,
+    source_commit: str | None = None,
+    control_commit: str | None = None,
+) -> dict[str, Any]:
     asset_contract_path = asset_contract_path.expanduser().resolve(strict=False)
     control_root = asset_contract_path.parent.parent
     expected_policy = control_root / POLICY_PATH
@@ -390,15 +416,68 @@ def _load_control_state(policy_path: Path, asset_contract_path: Path, tag: str) 
     if policy_path.expanduser().resolve(strict=False) != expected_policy.resolve(strict=False):
         raise BundleError("release policy path is invalid")
     contract = _load_bundle_contract(asset_contract_path, control_root)
-    policy = _load_canonical_json_file(expected_policy, "release policy")
-    source_kits = _load_canonical_json_file(expected_source_kits, "source kit requirements")
-    _validate_blocked_control_state(policy, source_kits, tag)
-    blockers = sorted(
-        set(contract["release_blockers"])
-        | set(_policy_release(policy, tag)["reason_codes"])
-    )
-    if not blockers:
-        raise BundleError("release blockers are unavailable")
+    if tag != "v1.3.2":
+        # Current technical readiness never retroactively certifies another tag.
+        contract = dict(contract, release_readiness="blocked", legal_compliance_certified=False,
+                        source_availability_certified=False, source_kits_ready=False,
+                        release_blockers=list(legal_payload.RELEASE_BLOCKERS))
+    try:
+        policy = release_gate.load_policy(expected_policy)
+        source_kits = source_compliance.load_owner(expected_source_kits)
+        release = _policy_release(policy, tag)
+        state = release_gate.validate_release_evidence(
+            policy,
+            release,
+            source_kits,
+            source_assets_root=source_assets_root,
+            legal_payload=legal_payload_path,
+            control_root=control_root,
+            portable_zip=portable_zip,
+            release_notes=release_notes,
+            source_commit=source_commit,
+            control_commit=control_commit,
+        )
+    except (release_gate.ReleaseLegalGateError, source_compliance.SourceComplianceError,
+            release_gate.release_authorization.AuthorizationError, legal_payload.LegalPayloadError) as exc:
+        raise BundleError(str(exc)) from exc
+    contract_ready = contract["release_readiness"] == "ready"
+    if contract["contract_version"] == 2:
+        if contract_ready != state["release_ready"]:
+            raise BundleError("release asset contract readiness disagrees with validated control state")
+        if (
+            contract["legal_compliance_certified"] is not state["legal_compliance_certified"]
+            or contract["source_availability_certified"] is not state["source_availability_certified"]
+            or contract["source_kits_ready"] is not state["source_availability_certified"]
+        ):
+            raise BundleError("release asset contract certifications disagree with validated control state")
+    elif (
+        (contract_ready and not state["release_ready"])
+        or (
+            contract["legal_compliance_certified"]
+            and not state["legal_compliance_certified"]
+        )
+        or (
+            contract["source_availability_certified"]
+            and not state["source_availability_certified"]
+        )
+        or (contract["source_kits_ready"] and not state["source_availability_certified"])
+    ):
+        raise BundleError("v3 release asset contract is more permissive than validated control state")
+    blockers = sorted(set(contract["release_blockers"]) | set(state["release_blockers"]))
+    effective_ready = state["release_ready"]
+    effective_legal = state["legal_compliance_certified"]
+    effective_source = state["source_availability_certified"]
+    if contract["contract_version"] == 3:
+        # The inactive v3 SBOM evidence schema is intentionally blocked-only.
+        # Preserve technical contract facts while keeping bundle evidence fail-closed.
+        effective_ready = False
+        effective_legal = False
+        effective_source = False
+    if effective_ready:
+        if blockers:
+            raise BundleError("ready release control state contains blockers")
+    elif not blockers:
+        raise BundleError("blocked release control state has no blockers")
     return {
         "control_root": control_root.resolve(),
         "contract": contract,
@@ -406,6 +485,9 @@ def _load_control_state(policy_path: Path, asset_contract_path: Path, tag: str) 
         "bundle_format": contract["bundle_format"],
         "requires_sbom": contract["requires_sbom"],
         "release_blockers": blockers,
+        "release_ready": effective_ready,
+        "legal_compliance_certified": effective_legal,
+        "source_availability_certified": effective_source,
     }
 
 
@@ -439,6 +521,10 @@ def _load_bundle_contract(path: Path, control_root: Path) -> dict[str, Any]:
             "requires_sbom": False,
             "asset_templates": templates,
             "release_blockers": legacy["release_blockers"],
+            "release_readiness": legacy["release_readiness"],
+            "legal_compliance_certified": legacy["legal_compliance_certified"],
+            "source_availability_certified": legacy["source_availability_certified"],
+            "source_kits_ready": legacy["source_kits_ready"],
         }
     if path != expected_v3:
         raise BundleError("release asset contract path is invalid")
@@ -468,15 +554,11 @@ def _load_bundle_contract(path: Path, control_root: Path) -> dict[str, Any]:
         or value["bundle_manifest_schema_version"] != V3_MANIFEST_SCHEMA_VERSION
         or value["sbom_input_required"] is not True
         or value["legal_payload_format"] != legacy["legal_payload_format"]
-        or value["release_readiness"] != legacy["release_readiness"]
-        or value["legal_compliance_certified"] is not False
-        or value["source_availability_certified"] is not False
-        or value["source_kits_ready"] is not False
         or value["portable_legal_root"] != legacy["portable_legal_root"]
         or value["legal_payload_files"] != legacy["legal_payload_files"]
-        or value["release_blockers"] != legacy["release_blockers"]
     ):
         raise BundleError("release assets v3 contract values are invalid")
+    _validate_v3_readiness(value, legacy)
 
     assets = value["release_assets"]
     if not isinstance(assets, list) or len(assets) != 6:
@@ -510,7 +592,52 @@ def _load_bundle_contract(path: Path, control_root: Path) -> dict[str, Any]:
         "requires_sbom": True,
         "asset_templates": templates,
         "release_blockers": value["release_blockers"],
+        "release_readiness": value["release_readiness"],
+        "legal_compliance_certified": value["legal_compliance_certified"],
+        "source_availability_certified": value["source_availability_certified"],
+        "source_kits_ready": value["source_kits_ready"],
     }
+
+
+def _validate_v3_readiness(value: dict[str, Any], legacy: dict[str, Any]) -> None:
+    readiness_rank = {"blocked": 0, "technical-ready": 1, "ready": 2}
+    readiness = value["release_readiness"]
+    legacy_readiness = legacy["release_readiness"]
+    if readiness not in readiness_rank or legacy_readiness not in readiness_rank:
+        raise BundleError("release assets v3 readiness is invalid")
+    if readiness == "ready":
+        raise BundleError("release assets v3 READY is unsupported until SBOM ready-state support exists")
+    if readiness_rank[readiness] > readiness_rank[legacy_readiness]:
+        raise BundleError("release assets v3 cannot be more permissive than active v2")
+    for field in (
+        "legal_compliance_certified",
+        "source_availability_certified",
+        "source_kits_ready",
+    ):
+        if type(value[field]) is not bool or (value[field] and not legacy[field]):
+            raise BundleError("release assets v3 cannot be more permissive than active v2")
+    blockers = value["release_blockers"]
+    if (
+        not isinstance(blockers, list)
+        or not blockers
+        or len(blockers) != len(set(blockers))
+        or any(not isinstance(item, str) or not item for item in blockers)
+    ):
+        raise BundleError("release assets v3 blockers are invalid")
+    if readiness == "technical-ready":
+        if (
+            value["legal_compliance_certified"] is not False
+            or value["source_availability_certified"] is not True
+            or value["source_kits_ready"] is not True
+            or blockers != ["release-sbom-ready-state-not-supported"]
+        ):
+            raise BundleError("release assets v3 technical-ready state is invalid")
+    elif (
+        value["legal_compliance_certified"] is not False
+        or value["source_availability_certified"] is not False
+        or value["source_kits_ready"] is not False
+    ):
+        raise BundleError("release assets v3 blocked state is invalid")
 
 
 def _bundle_version_label(path: Path) -> str:
@@ -519,47 +646,6 @@ def _bundle_version_label(path: Path) -> str:
     if path.name == Path(V3_CONTRACT_PATH).name:
         return "v3"
     raise BundleError("release asset contract path is invalid")
-
-
-def _validate_blocked_control_state(policy: object, source_kits: object, tag: str) -> None:
-    if not isinstance(policy, dict) or set(policy) != {
-        "schema_version",
-        "policy_mode",
-        "legal_compliance_certified",
-        "source_availability_certified",
-        "release_payload_integrated",
-        "releases",
-    }:
-        raise BundleError("release policy fields are invalid")
-    if (
-        policy["schema_version"] != 1
-        or policy["policy_mode"] != "fail-closed"
-        or policy["legal_compliance_certified"] is not False
-        or policy["source_availability_certified"] is not False
-        or policy["release_payload_integrated"] is not False
-    ):
-        raise BundleError("release policy is not fail-closed")
-    release = _policy_release(policy, tag)
-    if release.get("status") != "blocked" or not release.get("reason_codes"):
-        raise BundleError("release policy does not block the requested tag")
-    if not isinstance(source_kits, dict) or set(source_kits) != {
-        "schema_version",
-        "target_phase",
-        "release_gate_reconsideration_allowed",
-        "legal_compliance_certified",
-        "kits",
-    }:
-        raise BundleError("source kit requirement fields are invalid")
-    kits = source_kits["kits"]
-    if (
-        source_kits["schema_version"] != 1
-        or source_kits["release_gate_reconsideration_allowed"] is not False
-        or source_kits["legal_compliance_certified"] is not False
-        or not isinstance(kits, list)
-        or [kit.get("id") for kit in kits] != ["aria2", "ffmpeg"]
-        or any(kit.get("status") != "blocked" or not kit.get("blockers") for kit in kits)
-    ):
-        raise BundleError("source kit requirements do not remain blocked")
 
 
 def _policy_release(policy: dict[str, Any], tag: str) -> dict[str, Any]:
@@ -611,6 +697,9 @@ def _validate_manifest(
     release_blockers: list[str],
     manifest_schema_version: int,
     bundle_format: str,
+    release_ready: bool,
+    legal_compliance_certified: bool,
+    source_availability_certified: bool,
 ) -> None:
     if not isinstance(manifest, dict):
         raise BundleError("release manifest must be an object")
@@ -640,9 +729,9 @@ def _validate_manifest(
         (type(manifest["prerelease"]) is bool and manifest["prerelease"] == prerelease, "release manifest prerelease flag is invalid"),
         (manifest["source_commit"] == source_commit, "release manifest source commit is invalid"),
         (manifest["control_commit"] == control_commit, "release manifest control commit is invalid"),
-        (manifest["release_ready"] is False, "release manifest readiness is invalid"),
-        (manifest["legal_compliance_certified"] is False, "release manifest legal certification is invalid"),
-        (manifest["source_availability_certified"] is False, "release manifest source certification is invalid"),
+        (manifest["release_ready"] is release_ready, "release manifest readiness is invalid"),
+        (manifest["legal_compliance_certified"] is legal_compliance_certified, "release manifest legal certification is invalid"),
+        (manifest["source_availability_certified"] is source_availability_certified, "release manifest source certification is invalid"),
         (manifest["release_blockers"] == release_blockers, "release manifest blockers are invalid"),
     )
     for condition, message in checks:

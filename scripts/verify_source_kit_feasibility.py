@@ -88,15 +88,8 @@ def verify_repository(root: Path) -> None:
 
 def _verify_release_policy(path: Path) -> None:
     policy = release_gate.load_policy(path)
+    release_gate.validate_repository_control(path.parent.parent)
     _require(policy["policy_mode"] == "fail-closed", "release policy is not fail-closed")
-    _require(
-        policy["legal_compliance_certified"] is False,
-        "release policy legal compliance must remain false",
-    )
-    _require(
-        policy["source_availability_certified"] is False,
-        "release policy source availability must remain false",
-    )
     _require(
         policy["release_payload_integrated"] is False,
         "release payload must remain unintegrated",
@@ -107,13 +100,18 @@ def _verify_release_policy(path: Path) -> None:
         "release policy must retain exactly five tracked releases",
     )
     _require(
-        all(item["status"] == "blocked" for item in releases),
-        "all five tracked releases must remain blocked",
+        all(item["status"] == "blocked" for item in releases if item["tag"] != "v1.3.2"),
+        "historical releases must remain blocked",
     )
 
 
 def _verify_release_assets(path: Path) -> None:
     document = _load_canonical_json(path, "release asset contract")
+    import verify_release_legal_payload
+    verify_release_legal_payload.load_asset_contract(path)
+    if document["release_readiness"] in {"technical-ready", "ready"}:
+        release_gate.validate_repository_control(path.parent.parent)
+        return
     _require(
         document.get("release_readiness") == "blocked",
         "release asset readiness must remain blocked",

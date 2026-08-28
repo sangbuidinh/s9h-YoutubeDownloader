@@ -344,9 +344,17 @@ VERSION      Current application version
 
 No project license has been selected. Public availability of this repository is not a grant of permission to reproduce, redistribute, or create derivative works from the original project code or assets.
 
-Third-party software retains its own license terms. See [Third-Party Notices](THIRD_PARTY_NOTICES.md) and [Legal Materials](legal/README.md) for the current known-direct-component inventory and preserved license texts. Release-package notice integration and source-distribution verification remain blocked pending Phase 6B2.
+Third-party software retains its own license terms. See [Third-Party Notices](THIRD_PARTY_NOTICES.md) and [Legal Materials](legal/README.md) for the current known-direct-component inventory and preserved license texts. The v1.3.2 technical candidate requires verified source assets and packaged notices; publication still requires separate external review and explicit legal authorization.
 
 ## Phase 6B1 controlled build inventory
+
+Current v1.3.2 technical controls are `legal/source-compliance-v1.3.2.json` and
+`legal/release-policy.json`. The active FFmpeg/ffprobe target is the
+project-controlled 8.1.2 build; the Gyan correspondence investigation is closed
+INCOMPLETE and preserved as historical evidence. Publication still requires a
+separate explicit legal authorization. The phase-specific records below retain
+their historical observations and do not certify the new runtime or existing
+releases.
 
 A controlled Windows x64 PyInstaller build was inspected. [`legal/built-artifact-inventory.json`](legal/built-artifact-inventory.json) is a snapshot of that one exact controlled build; it does not prove that future binaries are identical. Unresolved native members remain explicit, and no binary is committed with the inventory.
 

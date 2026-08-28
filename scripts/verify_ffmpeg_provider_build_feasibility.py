@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 import smoke_ci_workflow as ci_workflow_verifier
 import verify_ffmpeg_remaining_library_evidence as remaining_verifier
 import verify_legal_notices as legal_notices_verifier
+import source_compliance
 
 
 BASELINE = "95587c76919042b0b9d9a5b51f0f2e40e241e346"
@@ -188,6 +189,26 @@ CURRENT_OWNER_SMOKES = {
     ".github/build-dependencies.json": "scripts/smoke_build_dependency_lock.py",
     "scripts/prepare_release_bundle.py": "scripts/smoke_release_bundle.py",
 }
+LATER_PHASE_OWNER_SMOKES = {
+    "scripts/smoke_source_correspondence.py": "scripts/smoke_source_correspondence.py",
+    "scripts/smoke_source_kit_feasibility.py": "scripts/smoke_source_kit_feasibility.py",
+    "scripts/smoke_ffmpeg_codec_primary_source_evidence.py": "scripts/smoke_ffmpeg_codec_primary_source_evidence.py",
+    "scripts/verify_aria2_primary_source_evidence.py": "scripts/smoke_aria2_primary_source_evidence.py",
+    "scripts/verify_ffmpeg_codec_primary_source_evidence.py": "scripts/smoke_ffmpeg_codec_primary_source_evidence.py",
+    "scripts/verify_ffmpeg_hardware_system_evidence.py": "scripts/smoke_ffmpeg_hardware_system_evidence.py",
+    "scripts/verify_ffmpeg_remaining_library_evidence.py": "scripts/smoke_ffmpeg_remaining_library_evidence.py",
+    "scripts/verify_ffmpeg_support_primary_source_evidence.py": "scripts/smoke_ffmpeg_support_primary_source_evidence.py",
+    "THIRD_PARTY_NOTICES.md": "scripts/smoke_legal_notices.py",
+    "legal/components.json": "scripts/smoke_legal_notices.py",
+    "legal/release-policy.json": "scripts/smoke_release_legal_gate.py",
+    "legal/release-assets-v2.json": "scripts/smoke_release_legal_payload.py",
+    "scripts/verify_source_correspondence.py": "scripts/smoke_source_correspondence.py",
+    "scripts/verify_source_kit_feasibility.py": "scripts/smoke_source_kit_feasibility.py",
+    "scripts/prepare_release_bundle.py": "scripts/smoke_release_bundle.py",
+    "scripts/prepare_release_legal_payload.py": "scripts/smoke_release_legal_payload.py",
+    "scripts/verify_release_legal_gate.py": "scripts/smoke_release_legal_gate.py",
+    "scripts/verify_release_legal_payload.py": "scripts/smoke_release_legal_payload.py",
+}
 CURRENT_RELEASE_PROTECTED_SHA256 = {
     "THIRD_PARTY_NOTICES.md": "25be4042799989cdc3ebaa4b39447a1ed8ed1e941fcd5711f503655333d4fa92",
     "legal/components.json": "3af6cbcebabd6a493f81248782707c878468f0661fb0ea06689d5f57177b536f",
@@ -233,6 +254,7 @@ def main() -> int:
     except (
         FFmpegProviderBuildFeasibilityError, OSError, UnicodeError,
         json.JSONDecodeError, subprocess.SubprocessError,
+        source_compliance.SourceComplianceError,
     ) as exc:
         print(f"FFmpeg provider build feasibility verification failed: {exc}", file=sys.stderr)
         return 1
@@ -255,6 +277,18 @@ def verify_repository(
     requirements, _ = _load_json(paths["source-kit-requirements"], "requirements")
     policy, _ = _load_json(paths["release-policy"], "release policy")
     assets, _ = _load_json(paths["release-assets"], "release assets")
+    if (root / source_compliance.OWNER_PATH).is_file():
+        import verify_release_legal_gate
+        verify_release_legal_gate.validate_repository_control(root)
+        snapshots = []
+        for key, relative in (("release-policy", "legal/release-policy.json"), ("release-assets", "legal/release-assets-v2.json")):
+            _require(paths[key].read_bytes() == (root / relative).read_bytes(), "live control override is not the current owner")
+            raw_snapshot = subprocess.run(["git", "show", f"a9b3282d1e41539ee650fbe24b0801254613ada4:{relative}"],
+                                          cwd=root, check=True, stdout=subprocess.PIPE).stdout
+            _require(hashlib.sha256(raw_snapshot).hexdigest() == CURRENT_RELEASE_PROTECTED_SHA256[relative],
+                     "historical control snapshot hash mismatch")
+            snapshots.append(json.loads(raw_snapshot))
+        policy, assets = snapshots
     prior = {}
     for key in (
         "aria2-primary-evidence", "codec-primary-evidence", "support-primary-evidence",
@@ -273,7 +307,11 @@ def verify_repository(
     _verify_docs(paths["readme"], paths["legal-readme"], paths["feasibility-doc"])
     _verify_artifacts(root, tracked_paths, repository_files, introduced_paths)
     _hygiene(evidence, "build evidence")
-    _verify_prior_owner(root, paths, tracked_paths, repository_files, introduced_paths)
+    current_owner = root / source_compliance.OWNER_PATH
+    if current_owner.is_file():
+        source_compliance.load_owner(current_owner)
+    else:
+        _verify_prior_owner(root, paths, tracked_paths, repository_files, introduced_paths)
 
 
 def _paths(root: Path, overrides: dict[str, Path]) -> dict[str, Path]:
@@ -285,7 +323,14 @@ def _paths(root: Path, overrides: dict[str, Path]) -> dict[str, Path]:
 
 def _verify_protected(root: Path, paths: dict[str, Path]) -> None:
     reverse = {relative: key for key, relative in PATHS.items()}
+    later_owner = root / source_compliance.OWNER_PATH
+    later_phase = later_owner.is_file()
+    if later_phase:
+        source_compliance.load_owner(later_owner)
     for relative in PROTECTED:
+        if later_phase and relative in LATER_PHASE_OWNER_SMOKES:
+            _verify_current_owner(root, relative, LATER_PHASE_OWNER_SMOKES[relative])
+            continue
         current_owner = CURRENT_OWNER_SMOKES.get(relative)
         if current_owner is not None:
             _verify_current_owner(root, relative, current_owner)
@@ -673,6 +718,8 @@ def _verify_artifacts(
             if path.is_file() and ".git" not in path.parts
             and "__pycache__" not in path.parts and path.name not in OLD_REPORTS
         ]
+    import verify_release_legal_gate as live_gate
+    repository_files = live_gate.exclude_verified_release_inputs(root, repository_files)
     _require(not any(_suffix(item.casefold(), ARCHIVE_SUFFIXES + INSTALLER_SUFFIXES) for item in repository_files), "archive or installer in repository")
 
 

@@ -74,16 +74,53 @@ EXPECTED_COMPONENTS: dict[str, dict[str, Any]] = {
     "ffmpeg": {
         "name": "FFmpeg and ffprobe",
         "version": "8.1.2",
-        "role": "external executables from the Gyan essentials static Windows build in portable ZIP",
-        "distribution_paths": ["data/bin/ffmpeg.exe", "data/bin/ffprobe.exe"],
+        "role": "external executables from the project-controlled Windows x64 build in portable ZIP",
+        "distribution_paths": [
+            "data/bin/ffmpeg.exe",
+            "data/bin/ffprobe.exe"
+        ],
         "upstream_repository": "FFmpeg/FFmpeg",
-        "upstream_ref": "n8.1.2",
-        "upstream_license_path": "COPYING.GPLv3",
-        "upstream_license_blob_sha1": "94a9ed024d3859793618152ea559a168bbcbb5e2",
-        "license_label": "GPLv3 static build, as identified by the Gyan build distributor",
-        "local_license_path": "legal/licenses/FFmpeg-8.1.2-GPLv3.txt",
+        "upstream_ref": "38b88335f99e76ed89ff3c93f877fdefce736c13",
+        "upstream_license_path": "COPYING.LGPLv2.1",
+        "upstream_license_blob_sha1": "40924c2a6da76a2b0c639f6fe7ef0b2d095a6adb",
+        "license_label": "LGPL-2.1-or-later; project build without GPL, version3, or nonfree components",
+        "local_license_path": "legal/licenses/FFmpeg-8.1.2-LGPLv2.1.txt",
         "notice_status": "verified-license-text",
-        "source_distribution_status": "not-certified",
+        "source_distribution_status": "not-certified"
+    },
+    "lame": {
+        "name": "LAME",
+        "version": "3.100",
+        "role": "statically linked support for project FFmpeg/ffprobe",
+        "distribution_paths": [
+            "data/bin/ffmpeg.exe",
+            "data/bin/ffprobe.exe"
+        ],
+        "upstream_repository": "lame.sourceforge.io",
+        "upstream_ref": "lame-3.100.tar.gz",
+        "upstream_license_path": "COPYING",
+        "upstream_license_blob_sha1": "f5030495bf6ed4609db75324b1b6e94f97790d6a",
+        "license_label": "LGPL-2.0-or-later",
+        "local_license_path": "legal/licenses/LAME-3.100-COPYING.txt",
+        "notice_status": "verified-license-text",
+        "source_distribution_status": "not-certified"
+    },
+    "mingw-w64-runtime": {
+        "name": "MinGW-w64 runtime",
+        "version": "14.0.0",
+        "role": "statically linked support for project FFmpeg/ffprobe",
+        "distribution_paths": [
+            "data/bin/ffmpeg.exe",
+            "data/bin/ffprobe.exe"
+        ],
+        "upstream_repository": "skeeto/w64devkit",
+        "upstream_ref": "v2.9.1",
+        "upstream_license_path": "COPYING.MinGW-w64-runtime.txt",
+        "upstream_license_blob_sha1": "615d0b0b2fc1dcbcb5e537b8ea5ad31f7597b06c",
+        "license_label": "Upstream aggregate runtime notices, including permissive notices and Wine header LGPL notice",
+        "local_license_path": "legal/licenses/MinGW-w64-14.0.0-COPYING.txt",
+        "notice_status": "verified-license-text",
+        "source_distribution_status": "not-certified"
     },
     "pyinstaller": {
         "name": "PyInstaller",
@@ -146,9 +183,15 @@ EXPECTED_COMPONENTS: dict[str, dict[str, Any]] = {
 APACHE_LICENSE_PATH = "legal/licenses/Apache-2.0.txt"
 APACHE_SOURCE = "https://www.apache.org/licenses/LICENSE-2.0.txt"
 APACHE_SHA256 = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+SUPPLEMENTAL_LICENSE_BLOBS = {
+    "legal/licenses/FFmpeg-8.1.2-GPLv3.txt": "94a9ed024d3859793618152ea559a168bbcbb5e2",
+    "legal/licenses/FFmpeg-8.1.2-LICENSE.md": "371b0913ce7c199c4092d9344680c80f78ebeb2a",
+    "legal/licenses/LAME-3.100-LICENSE.txt": "430a6a0e66bef7afd80de03966791c241d00e137",
+}
 ALL_LICENSE_PATHS = tuple(
     sorted(
         [APACHE_LICENSE_PATH]
+        + list(SUPPLEMENTAL_LICENSE_BLOBS)
         + [component["local_license_path"] for component in EXPECTED_COMPONENTS.values()],
         key=str.casefold,
     )
@@ -165,6 +208,7 @@ GITATTRIBUTES_LINES = (
     "/docs/sbom-generator-feasibility.md text eol=lf",
     "/docs/release-sbom.md text eol=lf",
     "/docs/release_notes_v1.3.1.md text eol=lf",
+    "/docs/release_notes_v1.3.2.md text eol=lf",
     "/legal/*.json text eol=lf",
     "/legal/README.md text eol=lf",
     "/legal/built-artifact-inventory.json text eol=lf",
@@ -174,11 +218,16 @@ GITATTRIBUTES_LINES = (
     "/legal/source-correspondence.json text eol=lf",
     "/legal/source-kit-requirements.json text eol=lf",
     "/legal/licenses/** -text",
+    "/legal/licenses/LAME-3.100-COPYING.txt -text -whitespace",
+    "/legal/licenses/LAME-3.100-LICENSE.txt -text -whitespace",
+    "/legal/licenses/MinGW-w64-14.0.0-COPYING.txt -text -whitespace",
     "/schemas/spdx-2.3/spdx-schema.json -text",
     "/schemas/spdx-2.3/LICENSE -text",
     "/schemas/spdx-2.3/IDENTITY.json text eol=lf",
     "/scripts/build_release_v1_3_1.ps1 text eol=lf",
     "/scripts/build_release_v1_3_2.ps1 text eol=lf",
+    "/scripts/build_project_ffmpeg.py text eol=lf",
+    "/scripts/project_ffmpeg.py text eol=lf",
     "/scripts/create_synthetic_release_sbom_input.py text eol=lf",
     "/scripts/verify_aria2_primary_source_evidence.py text eol=lf",
     "/scripts/verify_ffmpeg_codec_primary_source_evidence.py text eol=lf",
@@ -200,12 +249,14 @@ CANONICAL_DOCUMENT_PATHS = (
     "docs/sbom-generator-feasibility.md",
     "legal/README.md",
 )
-EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT = 19
+EXPECTED_TOP_LEVEL_LEGAL_JSON_COUNT = 22
 
 NOTICE_HEADINGS = {
     "aria2": "### aria2 1.37.0",
     "deno": "### Deno 2.7.14",
     "ffmpeg": "### FFmpeg and ffprobe 8.1.2",
+    "lame": "### LAME 3.100",
+    "mingw-w64-runtime": "### MinGW-w64 runtime 14.0.0",
     "pyinstaller": "### PyInstaller 6.21.0",
     "python": "### Python 3.11.9",
     "tcl-tk": "### Tcl/Tk conservative notice",
@@ -311,6 +362,7 @@ def verify_repository(root: Path) -> dict[str, Any]:
     _verify_notices(notices, inventory)
     _verify_readmes(product_readme, legal_readme)
     _verify_phase6b1_artifacts(artifact_inventory, release_policy)
+    release_gate.validate_repository_control(root)
     _verify_sources_of_truth(root, inventory)
     correspondence, source_kits = source_correspondence.verify_repository(root)
     _verify_phase6b2a_artifacts(correspondence, source_kits)
@@ -555,7 +607,7 @@ def _verify_inventory(root: Path) -> tuple[dict[str, Any], str]:
     _require(inventory["project_license_status"] == "not-selected", "project license status is invalid")
     _require(inventory["legal_compliance_certified"] is False, "legal compliance must not be certified")
     _require(
-        inventory["release_integration_status"] == "blocked-pending-phase-6b2",
+        inventory["release_integration_status"] == "technical-ready-legal-review-required",
         "release integration status is invalid",
     )
     _require(raw == canonical_inventory_bytes(inventory), "inventory JSON is not deterministic")
@@ -623,7 +675,7 @@ def _verify_inventory(root: Path) -> tuple[dict[str, Any], str]:
 def _verify_license_files(root: Path, inventory: dict[str, Any]) -> None:
     component_paths = {component["local_license_path"] for component in inventory["components"]}
     _require(
-        component_paths | {APACHE_LICENSE_PATH} == set(ALL_LICENSE_PATHS),
+        component_paths | {APACHE_LICENSE_PATH} | set(SUPPLEMENTAL_LICENSE_BLOBS) == set(ALL_LICENSE_PATHS),
         "license path set is invalid",
     )
     for component in inventory["components"]:
@@ -634,6 +686,8 @@ def _verify_license_files(root: Path, inventory: dict[str, Any]) -> None:
 
     apache = _read_license_bytes(root, APACHE_LICENSE_PATH)
     _require(hashlib.sha256(apache).hexdigest() == APACHE_SHA256, "Apache license SHA-256 mismatch")
+    for relative, expected in SUPPLEMENTAL_LICENSE_BLOBS.items():
+        _require(git_blob_sha1(_read_license_bytes(root, relative)) == expected, f"{relative} Git blob SHA-1 mismatch")
 
 
 def _verify_notices(notices: str, inventory: dict[str, Any]) -> None:
@@ -678,7 +732,7 @@ def _verify_readmes(product_readme: str, legal_readme: str) -> None:
         "[Legal Materials](legal/README.md)",
         "No project license has been selected",
         "not a grant of permission",
-        "blocked pending Phase 6B2",
+        "publication still requires separate external review and explicit legal authorization",
         "## Phase 6B1 controlled build inventory",
         "legal/built-artifact-inventory.json",
         "## Release gate",
@@ -726,7 +780,7 @@ def _verify_readmes(product_readme: str, legal_readme: str) -> None:
         "## FFmpeg-specific warning",
         "## Release gate",
         "legal/release-policy.json",
-        "before dependency installation, release runtime acquisition, and application build",
+        "before release runtime acquisition and application build",
         "## Source availability status",
         "## Phase 6B2 requirements",
         "verified source kits",
@@ -774,9 +828,9 @@ def _verify_phase6b1_artifacts(
         tuple(release["tag"] for release in release_policy["releases"]) == release_gate.EXPECTED_TAGS,
         "release policy tags changed",
     )
-    _require(all(release["status"] == "blocked" for release in release_policy["releases"]), "release policy is not blocked")
-    _require(release_policy["legal_compliance_certified"] is False, "legal compliance was certified")
-    _require(release_policy["source_availability_certified"] is False, "source availability was certified")
+    _require(all(release["status"] == "blocked" for release in release_policy["releases"] if release["tag"] != "v1.3.2"), "historical release policy is not blocked")
+    # The current owner verifies any explicit authorization; historical records
+    # below remain uncertified independently of the current release decision.
     _require(release_policy["release_payload_integrated"] is False, "release payload was marked integrated")
 
 
@@ -830,13 +884,14 @@ def _verify_phase6b2b1_artifacts(
         release_assets["legal_payload_format"] == "s9h-release-legal-payload-v1",
         "release legal payload format changed",
     )
-    _require(release_assets["release_readiness"] == "blocked", "release readiness changed")
-    _require(release_assets["legal_compliance_certified"] is False, "legal compliance was certified")
+    technical = release_assets["release_readiness"] in {"technical-ready", "ready"}
+    _require(release_assets["release_readiness"] in {"blocked", "technical-ready", "ready"}, "release readiness changed")
+    _require(release_assets["legal_compliance_certified"] is release_policy["legal_compliance_certified"], "authorization state disagrees with current policy")
     _require(
-        release_assets["source_availability_certified"] is False,
-        "source availability was certified",
+        release_assets["source_availability_certified"] is technical,
+        "source availability and current technical state disagree",
     )
-    _require(release_assets["source_kits_ready"] is False, "source kits were marked ready")
+    _require(release_assets["source_kits_ready"] is technical, "source kits and technical state disagree")
     _require(
         [item["id"] for item in release_assets["required_source_asset_templates"]]
         == ["aria2", "ffmpeg"],
@@ -844,7 +899,7 @@ def _verify_phase6b2b1_artifacts(
     )
     _require(
         all(
-            item["status"] == "not-ready"
+            item["status"] == ("ready" if technical else "not-ready")
             for item in release_assets["required_source_asset_templates"]
         ),
         "required source asset status changed",
@@ -896,7 +951,9 @@ def _verify_sources_of_truth(root: Path, inventory: dict[str, Any]) -> None:
         "yt-dlp/yt-dlp-nightly-builds/releases/download/2026.08.18.122307/yt-dlp.exe",
         "652E154BCE7170070D0F26415C9A3C35C121F5A7903CB8CDE6D31C4577517FB9",
         'if ($YtDlpVersion -ne "2026.08.18.122307")',
-        "ffmpeg-8.1.2-essentials_build.zip",
+        "8.1.2-s9h-minimal-1",
+        "prepare_source_kit.py verify-runtime",
+        "legal/source-compliance-v1.3.2.json",
         "release-1.37.0/aria2-1.37.0-win-64bit-build1.zip",
         "v2.7.14/deno-x86_64-pc-windows-msvc.zip",
     ):

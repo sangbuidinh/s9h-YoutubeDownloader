@@ -937,7 +937,7 @@ def _validate_release_legal_integration(
         "prepare_release_bundle.py verify",
         "release-assets-v2.json",
         "--source-assets-root release/source-assets",
-        "--require-release-ready false",
+        "--require-release-ready true" if tag == "v1.3.2" else "--require-release-ready false",
     ):
         _require(required in bundle_text, f"{path} bundle v2 integration is missing: {required}")
     _require(
@@ -1147,15 +1147,16 @@ def _validate_dependency_install(
     checkout_steps = _action_steps(steps, "actions/checkout")
     _require(len(setup_steps) == 1, f"{path} must set up Python exactly once")
     python_verification = _named_step(steps, "Verify pinned Python version")
-    legal_gate = _named_step(steps, "Enforce fail-closed release legal gate")
+    current = tag == "v1.3.2"
+    legal_gate = _named_step(steps, "Validate prebuild technical control gate" if current else "Enforce fail-closed release legal gate")
     _validate_release_legal_gate(path, tag, steps, legal_gate)
     build_steps = [step for step in steps if build_command in "\n".join(step)]
     _require(len(build_steps) == 1, f"{path} build step is ambiguous")
     _require(
         steps.index(setup_steps[0])
         < steps.index(python_verification)
-        < steps.index(legal_gate)
-        < steps.index(installer)
+        < steps.index(installer if current else legal_gate)
+        < steps.index(legal_gate if current else installer)
         < steps.index(build_steps[0]),
         f"{path} legal gate and installer order is invalid",
     )
@@ -1209,8 +1210,8 @@ def _validate_dependency_install(
         steps.index(lock_checkout)
         < steps.index(setup_steps[0])
         < steps.index(python_verification)
-        < steps.index(legal_gate)
-        < steps.index(installer)
+        < steps.index(installer if current else legal_gate)
+        < steps.index(legal_gate if current else installer)
         < steps.index(tag_checkout)
         < steps.index(verification)
         < steps.index(canonical_temp)
@@ -1234,8 +1235,15 @@ def _validate_release_legal_gate(
     ):
         _require(required in gate_text, f"{path} legal gate is missing: {required}")
     job_text = "\n".join("\n".join(step) for step in steps)
-    _require(job_text.count("verify_release_legal_gate.py") == 1, f"{path} legal gate count changed")
-    _require(job_text.count("release-policy.json") == 3, f"{path} release policy path count changed")
+    current = tag == "v1.3.2"
+    _require(job_text.count("verify_release_legal_gate.py") == (2 if current else 1), f"{path} legal gate count changed")
+    _require(job_text.count("release-policy.json") == (4 if current else 3), f"{path} release policy path count changed")
+    if current:
+        import smoke_release_workflow_split as release_split
+        try:
+            release_split._validate_current_evidence_order(steps)
+        except release_split.WorkflowSplitError as exc:
+            raise SupplyChainContractError(str(exc)) from exc
     _require(
         re.search(r"(?m)^\s+(?:continue-on-error|if|env)\s*:", gate_text) is None,
         f"{path} legal gate contains a YAML bypass",

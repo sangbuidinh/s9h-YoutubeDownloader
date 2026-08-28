@@ -3,7 +3,7 @@
   "inventory_scope": "known-direct-components",
   "project_license_status": "not-selected",
   "legal_compliance_certified": false,
-  "release_integration_status": "blocked-pending-phase-6b2",
+  "release_integration_status": "technical-ready-legal-review-required",
   "components": [
     {
       "id": "aria2",
@@ -51,23 +51,68 @@
       "id": "ffmpeg",
       "name": "FFmpeg and ffprobe",
       "version": "8.1.2",
-      "role": "external executables from the Gyan essentials static Windows build in portable ZIP",
+      "role": "external executables from the project-controlled Windows x64 build in portable ZIP",
       "distribution_paths": [
         "data/bin/ffmpeg.exe",
         "data/bin/ffprobe.exe"
       ],
       "upstream_repository": "FFmpeg/FFmpeg",
-      "upstream_ref": "n8.1.2",
-      "upstream_license_path": "COPYING.GPLv3",
-      "upstream_license_blob_sha1": "94a9ed024d3859793618152ea559a168bbcbb5e2",
-      "license_label": "GPLv3 static build, as identified by the Gyan build distributor",
-      "local_license_path": "legal/licenses/FFmpeg-8.1.2-GPLv3.txt",
+      "upstream_ref": "38b88335f99e76ed89ff3c93f877fdefce736c13",
+      "upstream_license_path": "COPYING.LGPLv2.1",
+      "upstream_license_blob_sha1": "40924c2a6da76a2b0c639f6fe7ef0b2d095a6adb",
+      "license_label": "LGPL-2.1-or-later; project build without GPL, version3, or nonfree components",
+      "local_license_path": "legal/licenses/FFmpeg-8.1.2-LGPLv2.1.txt",
       "notice_status": "verified-license-text",
       "source_distribution_status": "not-certified",
       "notes": [
-        "Binary package identified by current release scripts: ffmpeg-8.1.2-essentials_build.zip.",
-        "The recorded upstream FFmpeg source ref and build-provider information do not by themselves certify that complete Corresponding Source for the distributed static binary and all incorporated libraries is available.",
-        "Phase 6B1 does not certify Corresponding Source or integrate a source archive into release payloads."
+        "Project-controlled FFmpeg 8.1.2 with native defaults, libmp3lame, and Windows SChannel; external autodetection disabled.",
+        "Technical binary-to-source mapping is owned by legal/source-compliance-v1.3.2.json. Technical validation is not a legal certification of complete Corresponding Source or release authorization.",
+        "The retired Gyan record remains INCOMPLETE in legal/ffmpeg-correspondence-v1.3.2.json.",
+        "This software is based in part on the work of the Independent JPEG Group. Incorporated IJG-derived files are unmodified."
+      ]
+    },
+    {
+      "id": "lame",
+      "name": "LAME",
+      "version": "3.100",
+      "role": "statically linked support for project FFmpeg/ffprobe",
+      "distribution_paths": [
+        "data/bin/ffmpeg.exe",
+        "data/bin/ffprobe.exe"
+      ],
+      "upstream_repository": "lame.sourceforge.io",
+      "upstream_ref": "lame-3.100.tar.gz",
+      "upstream_license_path": "COPYING",
+      "upstream_license_blob_sha1": "f5030495bf6ed4609db75324b1b6e94f97790d6a",
+      "license_label": "LGPL-2.0-or-later",
+      "local_license_path": "legal/licenses/LAME-3.100-COPYING.txt",
+      "notice_status": "verified-license-text",
+      "source_distribution_status": "not-certified",
+      "notes": [
+        "LAME supplies the required libmp3lame MP3 encoder. See https://lame.sourceforge.io/ .",
+        "Exact release bytes and checksum are pinned in scripts/project_ffmpeg.py; upstream_ref is an archive identity, not a fabricated Git commit."
+      ]
+    },
+    {
+      "id": "mingw-w64-runtime",
+      "name": "MinGW-w64 runtime",
+      "version": "14.0.0",
+      "role": "statically linked support for project FFmpeg/ffprobe",
+      "distribution_paths": [
+        "data/bin/ffmpeg.exe",
+        "data/bin/ffprobe.exe"
+      ],
+      "upstream_repository": "skeeto/w64devkit",
+      "upstream_ref": "v2.9.1",
+      "upstream_license_path": "COPYING.MinGW-w64-runtime.txt",
+      "upstream_license_blob_sha1": "615d0b0b2fc1dcbcb5e537b8ea5ad31f7597b06c",
+      "license_label": "Upstream aggregate runtime notices, including permissive notices and Wine header LGPL notice",
+      "local_license_path": "legal/licenses/MinGW-w64-14.0.0-COPYING.txt",
+      "notice_status": "verified-license-text",
+      "source_distribution_status": "not-certified",
+      "notes": [
+        "Exact notice bytes are from checksum-pinned w64devkit 2.9.1; its Dockerfile identifies MinGW-w64 14.0.0.",
+        "General-purpose compiler binaries are build tools, not FFmpeg source archives; the compiler runtime notice is preserved separately."
       ]
     },
     {

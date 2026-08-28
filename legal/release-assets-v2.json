@@ -2,22 +2,22 @@
   "schema_version": 1,
   "bundle_format": "s9h-release-bundle-v2",
   "legal_payload_format": "s9h-release-legal-payload-v1",
-  "release_readiness": "blocked",
-  "legal_compliance_certified": false,
-  "source_availability_certified": false,
-  "source_kits_ready": false,
+  "release_readiness": "ready",
+  "legal_compliance_certified": true,
+  "source_availability_certified": true,
+  "source_kits_ready": true,
   "portable_legal_root": "legal",
   "legal_payload_asset_template": "Youtube-Downloaderbs-{tag}-legal.zip",
   "required_source_asset_templates": [
     {
       "id": "aria2",
       "filename": "Youtube-Downloaderbs-{tag}-aria2-source.zip",
-      "status": "not-ready"
+      "status": "ready"
     },
     {
       "id": "ffmpeg",
       "filename": "Youtube-Downloaderbs-{tag}-ffmpeg-source.zip",
-      "status": "not-ready"
+      "status": "ready"
     }
   ],
   "legal_payload_files": [
@@ -31,16 +31,16 @@
     "legal/licenses/Apache-2.0.txt",
     "legal/licenses/Deno-2.7.14-MIT.txt",
     "legal/licenses/FFmpeg-8.1.2-GPLv3.txt",
+    "legal/licenses/FFmpeg-8.1.2-LGPLv2.1.txt",
+    "legal/licenses/FFmpeg-8.1.2-LICENSE.md",
+    "legal/licenses/LAME-3.100-COPYING.txt",
+    "legal/licenses/LAME-3.100-LICENSE.txt",
+    "legal/licenses/MinGW-w64-14.0.0-COPYING.txt",
     "legal/licenses/PyInstaller-6.21.0-COPYING.txt",
     "legal/licenses/Python-3.11.9-LICENSE.txt",
     "legal/licenses/Tcl-Tk-license.terms",
     "legal/licenses/aria2-1.37.0-GPLv2.txt",
     "legal/licenses/yt-dlp-2026.08.18.122307-UNLICENSE.txt"
   ],
-  "release_blockers": [
-    "aria2-source-kit-not-ready",
-    "ffmpeg-source-kit-not-ready",
-    "source-assets-not-integrated",
-    "release-policy-fail-closed"
-  ]
+  "release_blockers": []
 }

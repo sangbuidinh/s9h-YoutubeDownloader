@@ -13,6 +13,9 @@ build.
 - Records the nightly binary distribution tag separately from upstream source
   commit `5d5b634d8e6b41dc2891847a5ea7a5a3f569a28c`.
 - Synchronizes the active third-party notice and license payload.
+- Keeps FFmpeg at 8.1.2 while moving to a project-controlled minimal build
+  with the native media components and LAME needed by the application.
+  This runtime change makes no media-quality or performance improvement claim.
 - Resolves the existing Premiere-safe selector once for Fast video. Split
   selections download the exact H.264 MP4 video stream and exact AAC/M4A
   companion stream through native yt-dlp with one fragment worker, then
@@ -45,8 +48,20 @@ native transfer across the full transfer span.
 Neither route marks the item complete before its required merge, validation,
 and promotion steps finish.
 
-Production performance acceptance remains pending operator testing of the
-packaged application on the exact six-video batch.
+The controlled six-video package comparison is accepted for this release. Stable
+recorded 82.18 seconds total, 22.45 seconds preparation, 53.00 seconds transfer,
+and approximately 84.5 seconds wall time. Fast recorded 70.97 seconds total,
+11.48 seconds preparation, 52.83 seconds transfer, and 74.265 seconds wall time.
+That is an 11.21-second (13.64%) saving. Most of the measured improvement was in
+preparation time; transfer time was approximately unchanged. This controlled
+result is not a universal speed guarantee.
+
+Downloaded state is video-scoped. Changing numbering or the Save folder alone
+does not authorize a re-download. Manually setting `Chưa tải` remains an explicit
+re-download override, while a missing-part state repairs only the required
+missing outputs and preserves completed parts. Performance telemetry now counts
+media subprocess attempts without counting metadata extraction, and the Fast
+documentation reflects the native yt-dlp video transport used by this release.
 
 ## Download
 
@@ -64,8 +79,8 @@ contains the required runtime files.
 ## Runtime components
 
 - yt-dlp nightly 2026.08.18.122307
-- FFmpeg 8.1.2 Essentials
-- ffprobe 8.1.2 Essentials
+- FFmpeg 8.1.2 project-controlled minimal build
+- ffprobe 8.1.2 project-controlled minimal build
 - aria2c 1.37.0
 - Deno 2.7.14
 

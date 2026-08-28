@@ -19,7 +19,7 @@ The current stable release sources identify these versions and builds:
 - yt-dlp nightly 2026.08.18.122307 from `yt-dlp/yt-dlp-nightly-builds`,
   generated from upstream source commit
   `5d5b634d8e6b41dc2891847a5ea7a5a3f569a28c` in `yt-dlp/yt-dlp`;
-- Gyan FFmpeg 8.1.2 essentials build;
+- project-controlled FFmpeg/ffprobe 8.1.2 with LAME 3.100 and Windows SChannel;
 - aria2 1.37.0;
 - Deno 2.7.14;
 - Python 3.11.9;
@@ -29,15 +29,21 @@ Version-specific build scripts remain the source of truth for the binary version
 
 ## FFmpeg-specific warning
 
-Gyan identifies its static builds as GPLv3. FFmpeg license configuration varies with enabled components. Source-distribution obligations are not resolved merely by copying the GPL text. A conclusion about redistribution requires review of the exact Gyan archive, configuration, incorporated libraries, and Corresponding Source.
+The active project build uses FFmpeg's LGPL-2.1-or-later configuration and LAME's LGPL-2.0-or-later code. Its exact source pins, recipe and two binary mappings are in `legal/source-compliance-v1.3.2.json`. No GPL, version3, nonfree, libx264 or libx265 option is enabled. Source-distribution obligations are not resolved merely by copying license text. Gyan's GPLv3 binary is retired from the active v1.3.2 target; `legal/ffmpeg-correspondence-v1.3.2.json` remains INCOMPLETE and is not active readiness evidence.
 
 ## Release gate
 
-`legal/release-policy.json` intentionally blocks all five current version workflows. The gate executes before dependency installation, release runtime acquisition, and application build. Existing releases are not retroactively certified.
+`legal/release-policy.json` retains the four historical release blockers. The current v1.3.2 prebuild gate validates the active technical owner after locked build dependencies, before release runtime acquisition and application build. Final publication separately requires explicit legal authorization in `legal/release-authorization-v1.3.2.json`; it remains `LEGAL_REVIEW_REQUIRED`. Existing releases are not retroactively certified.
 
 ## Source availability status
 
-FFmpeg/ffprobe Corresponding Source remains unverified. aria2 source-distribution integration remains incomplete. Neither a copied license file nor an upstream link is represented as sufficient. Phase 6B2 must provide verified source kits and equivalent access alongside the applicable releases.
+The accepted aria2 source ZIP is unchanged. The project FFmpeg source ZIP contains the exact FFmpeg and LAME archives, project recipes, no-source-patch evidence, notices and binary-to-source mapping. Its sealed owner is authoritative only after complete verification. Neither a copied license file nor an upstream link is represented as sufficient. Verified source kits must be published with equivalent access alongside the applicable binaries, after external review and separate authorization.
+
+The authorization field `reviewed_ffmpeg_correspondence_sha256` binds the active `runtime_build` document for project builds. It does not bind or approve the retired Gyan record. Policy, source owner, asset contract and source commit are also bound independently.
+
+## Historical phase records
+
+The phase-specific sections below preserve their original observations and non-claims. Earlier Gyan and source-assembly blockers describe those historical investigations; the active current state is defined above and in the current owner, not inferred from this historical prose.
 
 ## Phase 6B2 requirements
 

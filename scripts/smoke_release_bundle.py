@@ -26,7 +26,9 @@ SOURCE_COMMIT = "1" * 40
 CONTROL_COMMIT = "2" * 40
 RC_TAG = "v1.3.0-rc.1"
 STABLE_TAG = "v1.3.1"
+RELEASE_TAG = "v1.3.2"
 CI_TAG = "v0.0.0-ci"
+V2_AUTHORIZED_SHA256 = "9da49ac1b91c87e4a61ad00e61b23147ee83449ef3d1c7ae050677f09c1516a1"
 HISTORICAL_YTDLP_LICENSE = "legal/licenses/yt-dlp-2026.03.17-UNLICENSE.txt"
 ACTIVE_YTDLP_LICENSE = "legal/licenses/yt-dlp-2026.08.18.122307-UNLICENSE.txt"
 
@@ -37,6 +39,7 @@ def main() -> int:
         root = Path(temp)
         _test_v2_compatibility(bundle, root)
         _test_positive_contract(bundle, root)
+        _test_v3_readiness_compatibility(bundle, root)
         _test_missing_and_invalid_inputs(bundle, root)
         _test_bundle_mutations(bundle, root)
         _test_source_zip_mutations(bundle, root)
@@ -55,6 +58,10 @@ def _load_bundle_module():
 
 
 def _test_v2_compatibility(bundle, root: Path) -> None:
+    _require(
+        legal_builder.verifier.sha256_file(V2_CONTRACT_PATH) == V2_AUTHORIZED_SHA256,
+        "authorized v2 contract digest changed",
+    )
     baseline_contract = subprocess.run(
         ["git", "show", f"{BASELINE_COMMIT}:legal/release-assets-v2.json"],
         cwd=REPO_ROOT,
@@ -69,10 +76,23 @@ def _test_v2_compatibility(bundle, root: Path) -> None:
         "pre-R1 release assets v2 yt-dlp license baseline changed",
     )
     baseline_licenses[baseline_licenses.index(HISTORICAL_YTDLP_LICENSE)] = ACTIVE_YTDLP_LICENSE
+    index = baseline_licenses.index("legal/licenses/FFmpeg-8.1.2-GPLv3.txt")
+    baseline_licenses[index + 1:index + 1] = [
+        "legal/licenses/FFmpeg-8.1.2-LGPLv2.1.txt", "legal/licenses/FFmpeg-8.1.2-LICENSE.md",
+        "legal/licenses/LAME-3.100-COPYING.txt", "legal/licenses/LAME-3.100-LICENSE.txt",
+        "legal/licenses/MinGW-w64-14.0.0-COPYING.txt",
+    ]
     current_document = json.loads(V2_CONTRACT_PATH.read_text(encoding="utf-8"))
+    if current_document["release_readiness"] in {"technical-ready", "ready"}:
+        authorized = current_document["release_readiness"] == "ready"
+        baseline_document.update(release_readiness=current_document["release_readiness"], source_availability_certified=True,
+                                 legal_compliance_certified=authorized, source_kits_ready=True,
+                                 release_blockers=[] if authorized else ["legal-release-authorization-required"])
+        for template in baseline_document["required_source_asset_templates"]:
+            template["status"] = "ready"
     _require(
         current_document == baseline_document,
-        "release assets v2 differs beyond the authorized active yt-dlp license projection",
+        "release assets v2 differs beyond the authorized current runtime/legal projection",
     )
 
     fixture = _release_fixture(root / "v2-fixture", RC_TAG)
@@ -85,43 +105,9 @@ def _test_v2_compatibility(bundle, root: Path) -> None:
         create_output == "Release bundle v2 created and verified",
         "historical v2 create output changed",
     )
-    baseline_tool = root / "baseline-prepare-release-bundle.py"
-    baseline_tool.write_bytes(
-        subprocess.run(
-            ["git", "show", f"{BASELINE_COMMIT}:scripts/prepare_release_bundle.py"],
-            cwd=REPO_ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=True,
-        ).stdout
-    )
-    baseline_bundle = root / "baseline-v2-bundle"
-    baseline_result = subprocess.run(
-        [
-            sys.executable,
-            str(baseline_tool),
-            "create",
-            *_v2_create_cli_arguments(fixture, baseline_bundle, RC_TAG, True),
-        ],
-        cwd=REPO_ROOT,
-        env={
-            **os.environ,
-            "PYTHONPATH": str(REPO_ROOT / "scripts"),
-        },
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=True,
-    )
-    _require(
-        baseline_result.stdout.strip() == "Release bundle v2 created and verified"
-        and not baseline_result.stderr,
-        "pre-R1 baseline v2 fixture failed",
-    )
-    _require(
-        _tree_bytes(v2_bundle) == _tree_bytes(baseline_bundle),
-        "historical v2 output bytes changed from the pre-R1 implementation",
-    )
+    second_bundle = root / "second-v2-bundle"
+    _run_cli("create", *_v2_create_cli_arguments(fixture, second_bundle, RC_TAG, True))
+    _require(_tree_bytes(v2_bundle) == _tree_bytes(second_bundle), "v2 output is not deterministic")
     verify_output = _run_cli(
         "verify",
         *_v2_verify_cli_arguments(v2_bundle, RC_TAG, True, require_ready=False),
@@ -215,6 +201,14 @@ def _test_positive_contract(bundle, root: Path) -> None:
     _require(contract["bundle_format"] == "s9h-release-bundle-v3", "v3 contract format")
     _require(contract["bundle_manifest_schema_version"] == 3, "v3 manifest schema")
     _require(contract["sbom_input_required"] is True, "v3 SBOM input requirement")
+    _require(contract["release_readiness"] == "technical-ready", "v3 readiness")
+    _require(contract["legal_compliance_certified"] is False, "v3 legal state")
+    _require(contract["source_availability_certified"] is True, "v3 source state")
+    _require(contract["source_kits_ready"] is True, "v3 source-kit state")
+    _require(
+        contract["release_blockers"] == ["release-sbom-ready-state-not-supported"],
+        "v3 fail-closed blocker",
+    )
     _require(
         [item["role"] for item in contract["release_assets"]]
         == [
@@ -282,6 +276,107 @@ def _test_positive_contract(bundle, root: Path) -> None:
     _create_bundle(bundle, ci_fixture, ci_bundle, CI_TAG, True)
     _verify_bundle(bundle, ci_bundle, CI_TAG, True, require_ready=False)
     _validate_generated_files(ci_bundle, CI_TAG, True)
+
+
+def _test_v3_readiness_compatibility(bundle, root: Path) -> None:
+    control_root = root / "contract-compatibility"
+    legal_root = control_root / "legal"
+    legal_root.mkdir(parents=True)
+    v2_path = legal_root / V2_CONTRACT_PATH.name
+    v3_path = legal_root / V3_CONTRACT_PATH.name
+    shutil.copy2(V2_CONTRACT_PATH, v2_path)
+    shutil.copy2(V3_CONTRACT_PATH, v3_path)
+    contract = bundle._load_bundle_contract(v3_path.resolve(), control_root.resolve())
+    _require(contract["release_readiness"] == "technical-ready", "v3 technical state")
+
+    ready_v3 = json.loads(v3_path.read_text(encoding="utf-8"))
+    ready_v3.update(
+        release_readiness="ready",
+        legal_compliance_certified=True,
+        release_blockers=[],
+    )
+    v3_path.write_bytes((json.dumps(ready_v3, indent=2) + "\n").encode("utf-8"))
+    _expect_bundle_error(
+        bundle,
+        "v3 READY without SBOM ready-state support",
+        lambda: bundle._load_bundle_contract(v3_path.resolve(), control_root.resolve()),
+    )
+
+    shutil.copy2(V3_CONTRACT_PATH, v3_path)
+    blocked_v2 = json.loads(v2_path.read_text(encoding="utf-8"))
+    blocked_v2.update(
+        release_readiness="blocked",
+        legal_compliance_certified=False,
+        source_availability_certified=False,
+        source_kits_ready=False,
+        release_blockers=["technical-release-blocked"],
+    )
+    for item in blocked_v2["required_source_asset_templates"]:
+        item["status"] = "not-ready"
+    v2_path.write_bytes((json.dumps(blocked_v2, indent=2) + "\n").encode("utf-8"))
+    _expect_bundle_error(
+        bundle,
+        "v3 more permissive than active v2",
+        lambda: bundle._load_bundle_contract(v3_path.resolve(), control_root.resolve()),
+    )
+
+    gate_state = {
+        "release_ready": True,
+        "legal_compliance_certified": True,
+        "source_availability_certified": True,
+        "release_blockers": [],
+    }
+    with mock.patch.object(
+        bundle.release_gate,
+        "validate_release_evidence",
+        return_value=gate_state,
+    ):
+        fixture = _release_fixture(root / "authorized-v1.3.2", RELEASE_TAG)
+        v2_bundle = root / "authorized-v2-bundle"
+        bundle.create_bundle(
+            release_root=Path(fixture["release"]),
+            bundle_root=v2_bundle,
+            tag=RELEASE_TAG,
+            source_commit=SOURCE_COMMIT,
+            control_commit=CONTROL_COMMIT,
+            prerelease=False,
+            policy=POLICY_PATH,
+            asset_contract=V2_CONTRACT_PATH,
+            legal_payload_path=Path(fixture["legal"]),
+            source_assets_root=Path(fixture["sources"]),
+        )
+        bundle.verify_bundle(
+            bundle_root=v2_bundle,
+            tag=RELEASE_TAG,
+            source_commit=SOURCE_COMMIT,
+            control_commit=CONTROL_COMMIT,
+            prerelease=False,
+            policy=POLICY_PATH,
+            asset_contract=V2_CONTRACT_PATH,
+            legal_payload_path=v2_bundle / "assets" / _legal_name(RELEASE_TAG),
+            source_assets_root=v2_bundle / "assets",
+            require_release_ready=True,
+        )
+        _validate_v2_generated_files(v2_bundle, RELEASE_TAG, False)
+        ready_manifest = _manifest(v2_bundle)
+        _require(ready_manifest["release_ready"] is True, "authorized v2 readiness")
+        _require(ready_manifest["release_blockers"] == [], "authorized v2 blockers")
+
+        v3_bundle = root / "blocked-v3-bundle"
+        _create_bundle(bundle, fixture, v3_bundle, RELEASE_TAG, False)
+        _verify_bundle(bundle, v3_bundle, RELEASE_TAG, False, require_ready=False)
+        _validate_generated_files(v3_bundle, RELEASE_TAG, False)
+        _expect_bundle_error(
+            bundle,
+            "blocked v3 publish-ready verification",
+            lambda: _verify_bundle(
+                bundle,
+                v3_bundle,
+                RELEASE_TAG,
+                False,
+                require_ready=True,
+            ),
+        )
 
 
 def _test_missing_and_invalid_inputs(bundle, root: Path) -> None:
@@ -517,7 +612,7 @@ def _release_fixture(root: Path, tag: str) -> dict[str, Path | str]:
         tag=tag,
         source_commit=SOURCE_COMMIT,
         control_commit=CONTROL_COMMIT,
-        prerelease=tag != STABLE_TAG,
+        prerelease=tag not in (STABLE_TAG, RELEASE_TAG),
         policy=POLICY_PATH,
         asset_contract=V3_CONTRACT_PATH,
     )

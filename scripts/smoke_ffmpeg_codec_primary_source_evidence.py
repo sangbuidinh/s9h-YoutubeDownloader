@@ -50,9 +50,12 @@ class Fixture:
     def mutate_json(
         self, key: str, mutation: Callable[[dict[str, Any]], None]
     ) -> None:
+        before = self.paths[key].read_bytes()
         value = self.json(key)
         mutation(value)
         self.write_json(key, value)
+        if self.paths[key].read_bytes() == before:
+            raise AssertionError(f"fixture mutation did not change bytes: {key}")
 
 
 def main() -> int:
@@ -115,8 +118,8 @@ def main() -> int:
         ("changed aria2 primary evidence", _modify_aria2_primary),
         ("changed source correspondence", lambda f: f.mutate_json("source-correspondence", lambda d: d.__setitem__("release_gate_status", "open"))),
         ("changed requirements", lambda f: f.mutate_json("source-kit-requirements", lambda d: d.__setitem__("assembly_authorized", True))),
-        ("release policy gate true", lambda f: f.mutate_json("release-policy", lambda d: d.__setitem__("legal_compliance_certified", True))),
-        ("release assets ready", lambda f: f.mutate_json("release-assets", lambda d: d.__setitem__("release_readiness", "ready"))),
+        ("release policy compliance changed", lambda f: f.mutate_json("release-policy", lambda d: d.__setitem__("legal_compliance_certified", not d["legal_compliance_certified"]))),
+        ("release assets readiness changed", lambda f: f.mutate_json("release-assets", lambda d: d.__setitem__("release_readiness", "technical-ready" if d["release_readiness"] == "ready" else "ready"))),
         ("source asset ready", _source_asset_ready),
         ("modified feasibility bytes", _stale_feasibility),
         ("malformed JSON", lambda f: f.paths["primary-evidence"].write_bytes(b"{")),
@@ -272,7 +275,7 @@ def _modify_aria2_primary(fixture: Fixture) -> None:
 def _source_asset_ready(fixture: Fixture) -> None:
     fixture.mutate_json(
         "release-assets",
-        lambda document: document["required_source_asset_templates"][1].__setitem__("status", "ready"),
+        lambda document: document["required_source_asset_templates"][1].__setitem__("status", "not-ready" if document["required_source_asset_templates"][1]["status"] == "ready" else "ready"),
     )
 
 

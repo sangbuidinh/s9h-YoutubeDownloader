@@ -102,7 +102,7 @@ def main() -> int:
     validate_contracts(documents)
     _validate_historical_bundle_commands()
     _test_negative_mutations(documents)
-    print("release workflow split smoke tests passed: 5 versioned v2 command paths exercised")
+    print("release workflow split smoke tests passed: 4 historical v2 command paths and current source-build/ready-state wiring")
     return 0
 
 
@@ -166,7 +166,8 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
     _require(len(_action_steps(build_steps, "actions/setup-python")) == 1, f"{contract.path} setup-python count changed")
     setup_python = _action_steps(build_steps, "actions/setup-python")[0]
     python_verification = _named_step(build_steps, "Verify pinned Python version")
-    legal_gate = _named_step(build_steps, "Enforce fail-closed release legal gate")
+    current = contract.tag == "v1.3.2"
+    legal_gate = _named_step(build_steps, "Validate prebuild technical control gate" if current else "Enforce fail-closed release legal gate")
     installer = _named_step(build_steps, "Install locked build dependencies")
     build_step = _named_step(build_steps, contract.build_step)
     legal_payload_step = _named_step(build_steps, "Prepare and verify release legal payload")
@@ -176,8 +177,8 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
     _require(
         build_steps.index(setup_python)
         < build_steps.index(python_verification)
-        < build_steps.index(legal_gate)
-        < build_steps.index(installer)
+        < build_steps.index(installer if current else legal_gate)
+        < build_steps.index(legal_gate if current else installer)
         < build_steps.index(build_step),
         f"{contract.path} legal gate and build order is invalid",
     )
@@ -220,9 +221,11 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
         "release-assets-v2.json",
         f"--legal-payload release/assets/{contract.legal_name}",
         "--source-assets-root release/source-assets",
-        "--require-release-ready false",
+        "--require-release-ready true" if current else "--require-release-ready false",
     ):
         _require(required in bundle_text, f"{contract.path} bundle v2 step is missing: {required}")
+    if current:
+        _validate_current_evidence_order(build_steps)
     for forbidden in ("New-Item", "SYNTHETIC_SOURCE_FIXTURE", "SOURCE_MANIFEST.json"):
         _require(forbidden not in legal_payload_text + bundle_text, f"{contract.path} creates a source placeholder")
     _require(
@@ -370,6 +373,9 @@ def _validate_workflow(contract: ReleaseContract, workflow: str) -> None:
             f"{contract.path} publish-ready verifier contains a bypass: {forbidden}",
         )
 
+    if contract.tag == "v1.3.2":
+        _validate_current_publish_readiness_owner("\n".join(verifier))
+
     absence = _named_step(publish_steps, "Confirm release absence immediately before publishing")
     release = _single_action_step(publish_steps, "softprops/action-gh-release")
     output_validation_step = _named_step(publish_steps, "Validate immutable build outputs")
@@ -469,8 +475,11 @@ def _validate_legal_gate(
     for required in (verifier, policy, f"--tag {contract.tag}"):
         _require(required in gate_text, f"{contract.path} legal gate is missing: {required}")
     build_text = "\n".join("\n".join(step) for step in build_steps)
-    _require(build_text.count("verify_release_legal_gate.py") == 1, f"{contract.path} legal gate count changed")
-    _require(build_text.count("release-policy.json") == 3, f"{contract.path} release policy path count changed")
+    current = contract.tag == "v1.3.2"
+    _require(build_text.count("verify_release_legal_gate.py") == (2 if current else 1), f"{contract.path} legal gate count changed")
+    _require(build_text.count("release-policy.json") == (4 if current else 3), f"{contract.path} release policy path count changed")
+    if current:
+        _require("--stage prebuild" in gate_text and "--control-root control" in gate_text, "current prebuild stage is not explicit")
     _require(
         re.search(r"(?m)^\s+(?:continue-on-error|if|env)\s*:", gate_text) is None,
         f"{contract.path} legal gate contains a YAML bypass",
@@ -486,6 +495,98 @@ def _validate_legal_gate(
         "ALLOW_RELEASE",
     ):
         _require(forbidden not in gate_text, f"{contract.path} legal gate contains a bypass: {forbidden}")
+
+
+def _validate_current_publish_readiness_owner(text: str) -> None:
+    # Exact-key names remain in the structural schema. Evaluating their values
+    # here would duplicate the canonical bundle/authorization state machine.
+    _require(
+        re.search(r"(?i)\$manifest\.(?:release_ready|legal_compliance_certified|source_availability_certified|release_blockers)\b", text) is None,
+        "current inline publish verifier duplicates canonical readiness or rejects READY bundles",
+    )
+
+
+def _validate_current_evidence_order(steps: list[list[str]]) -> None:
+    names = ["Install locked build dependencies", "Validate prebuild technical control gate",
+             "Check out release tag", "Normalize canonical release-note checkout",
+             "Verify annotated tag and release absence",
+             "Build project FFmpeg from exact source inputs", "Create and verify project FFmpeg source asset",
+             "Acquire and verify accepted aria2 source asset", "Build and validate checksum-pinned assets",
+             "Verify both source assets against current owner", "Prepare and verify release legal payload",
+             "Validate final release evidence gate", "Create and verify release bundle"]
+    positions = [steps.index(_named_step(steps, name)) for name in names]
+    _require(positions == sorted(positions), "v1.3.2 evidence gates are out of order")
+    normalization = "\n".join(_named_step(steps, names[3]))
+    for required in (
+        "working-directory: source",
+        'subprocess.check_output(["git", "show", f"HEAD:{relative}"])',
+        'relative = "docs/release_notes_v1.3.2.md"',
+        "target.write_bytes(blob)",
+        "checkout = target.read_bytes()",
+        "sha256(checkout).digest() != sha256(blob).digest()",
+        'blob.startswith(b"\\xef\\xbb\\xbf")',
+        'blob.decode("utf-8", errors="strict")',
+        'b"\\r" in blob',
+        'blob.endswith(b"\\n")',
+        'blob.endswith(b"\\n\\n")',
+        '["git", "rev-parse", "HEAD"]',
+        "head_after != head_before",
+        'if ($LASTEXITCODE -ne 0)',
+    ):
+        _require(required in normalization, f"release-note materialization lacks {required}")
+    _require(
+        normalization.count("target.write_bytes(blob)") == 1
+        and normalization.count('subprocess.check_output(["git", "show", f"HEAD:{relative}"])') == 1,
+        "release-note materialization must exist exactly once",
+    )
+    for forbidden in (
+        "git commit",
+        "git tag",
+        "git reset",
+        "git checkout",
+        "git switch",
+        "git update-ref",
+        "git clean",
+        '["git", "commit"',
+        '["git", "tag"',
+        '["git", "reset"',
+        '["git", "checkout"',
+        '["git", "switch"',
+        '["git", "update-ref"',
+        '["git", "clean"',
+    ):
+        _require(forbidden not in normalization, f"release-note materialization mutates Git identity: {forbidden}")
+    final = "\n".join(_named_step(steps, names[-2]))
+    for required in ("python ..\\control\\scripts\\verify_release_legal_gate.py `", "--stage final", "--control-root ..\\control", "--source-assets-root release/source-assets",
+                     "--legal-payload release/assets/Youtube-Downloaderbs-v1.3.2-legal.zip",
+                     "--portable-zip release/assets/Youtube-Downloaderbs-v1.3.2.zip",
+                     "--release-notes release/RELEASE_NOTES.md", "--source-commit", "--control-commit",
+                     'if ($LASTEXITCODE -ne 0) { throw "Final release evidence validation failed" }'):
+        _require(required in final, f"final evidence gate lacks {required}")
+    _require(re.search(r"(?m)^          python \.\.\\control\\scripts\\verify_release_legal_gate.py `\s*$", final) is not None, "final gate must execute the verifier")
+    all_text = "\n".join("\n".join(step) for step in steps)
+    _require("Block unavailable FFmpeg source assembly" not in all_text, "obsolete incomplete assembly guard remains")
+    required_commands = {
+        names[5]: ("python ..\\control\\scripts\\build_project_ffmpeg.py `", "prepare_source_kit.py verify-runtime", "--work-root $projectBuildRoot", "--downloads-root $sourceDownloads", "--runtime-root (Join-Path $projectBuildRoot \"runtime\")"),
+        names[6]: ("prepare_source_kit.py create-ffmpeg", "--repo-root ..\\control", "--runtime-root (Join-Path $env:RUNNER_TEMP \"s9h-project-ffmpeg/runtime\")", "--output release/source-assets/Youtube-Downloaderbs-v1.3.2-ffmpeg-source.zip", "prepare_source_kit.py verify"),
+        names[7]: ("prepare_source_kit.py acquire-aria2", "prepare_source_kit.py create", "prepare_source_kit.py verify", "--output release/source-assets/Youtube-Downloaderbs-v1.3.2-aria2-source.zip"),
+        names[8]: ('-PreparePinnedRuntime -ProjectRuntimeRoot (Join-Path $env:RUNNER_TEMP "s9h-project-ffmpeg/runtime")',),
+    }
+    for name, commands in required_commands.items():
+        step = "\n".join(_named_step(steps, name))
+        for command in commands:
+            _require(command in step and ("# " + command) not in step, f"source-build step lacks executable {command}")
+        if name != names[8]:
+            _require(step.count("if ($LASTEXITCODE -ne 0)") >= step.count("          python "), "source-build command lacks exit gate")
+    source_step = "\n".join(_named_step(steps, names[9]))
+    _require(source_step.count("prepare_source_kit.py verify") == 2, "both sources must be verified")
+    for package in ("aria2", "ffmpeg"):
+        _require(f"--package {package}" in source_step and f"--asset release/source-assets/Youtube-Downloaderbs-v1.3.2-{package}-source.zip" in source_step, "source verifier identity missing")
+    for name in (names[1], names[3], *names[5:]):
+        text = "\n".join(_named_step(steps, name))
+        _require(re.search(r"(?m)^\s+(?:continue-on-error|if|env)\s*:", text) is None, "evidence step has YAML bypass")
+        for forbidden in ("||", "; exit 0", "SilentlyContinue", "2>$null", "--allow"):
+            _require(forbidden not in text, "evidence step has shell bypass")
 
 
 def _validate_historical_bundle_commands() -> None:
@@ -521,7 +622,7 @@ def _validate_historical_bundle_commands() -> None:
 
     with tempfile.TemporaryDirectory(prefix="s9h-historical-workflow-v2-") as temp:
         root = Path(temp)
-        for index, contract in enumerate(CONTRACTS):
+        for index, contract in enumerate(HISTORICAL_CONTRACTS):
             fixture = bundle_smoke._release_fixture(
                 root / f"fixture-{index}",
                 contract.tag,
@@ -576,6 +677,47 @@ def _validate_historical_bundle_commands() -> None:
 
 
 def _test_negative_mutations(documents: dict[str, str]) -> None:
+    current_path = CONTRACTS[-1].path
+    current_document = documents[current_path]
+    current_mutations = [
+        ("obsolete blocked-only READY rejection", current_document.replace(
+            '          $assets = @($manifest.assets)',
+            '          if ([bool]$manifest.release_ready) { throw "obsolete blocked-only check" }\n          $assets = @($manifest.assets)', 1)),
+        ("obsolete nonempty blocker requirement", current_document.replace(
+            '          $assets = @($manifest.assets)',
+            '          if (@($manifest.release_blockers).Count -le 0) { throw "obsolete blockers" }\n          $assets = @($manifest.assets)', 1)),
+        ("final gate after bundle", _move_named_step_after(current_document, "Validate final release evidence gate", "Create and verify release bundle")),
+        ("payload after final gate", _move_named_step_after(current_document, "Prepare and verify release legal payload", "Validate final release evidence gate")),
+        ("sources after legal payload", _move_named_step_after(current_document, "Verify both source assets against current owner", "Prepare and verify release legal payload")),
+        ("prebuild after build", _move_named_step_after(current_document, "Validate prebuild technical control gate", CONTRACTS[-1].build_step)),
+        ("release-note materialization removed", current_document.replace(_named_step_text(current_document, "Normalize canonical release-note checkout"), "", 1)),
+        ("release-note materialization reordered", _move_named_step_after(current_document, "Normalize canonical release-note checkout", "Verify annotated tag and release absence")),
+        ("release-note blob identity removed", current_document.replace('subprocess.check_output(["git", "show", f"HEAD:{relative}"])', 'Path(relative).read_bytes()', 1)),
+        ("release-note exact write removed", current_document.replace("target.write_bytes(blob)", "target.touch()", 1)),
+        ("release-note digest check removed", current_document.replace("sha256(checkout).digest() != sha256(blob).digest()", "False", 1)),
+        ("release-note CR rejection removed", current_document.replace('if b"\\r" in blob:', "if False:", 1)),
+        ("release-note BOM rejection removed", current_document.replace('if blob.startswith(b"\\xef\\xbb\\xbf"):', "if False:", 1)),
+        ("release-note HEAD identity removed", current_document.replace("if head_after != head_before:", "if False:", 1)),
+        ("release-note source commit mutation", current_document.replace("target.write_bytes(blob)", 'target.write_bytes(blob)\n          subprocess.run(["git", "commit", "-am", "mutation"], check=True)', 1)),
+        ("final gate removed", current_document.replace(_named_step_text(current_document, "Validate final release evidence gate"), "", 1)),
+        ("source build removed", current_document.replace(_named_step_text(current_document, "Build project FFmpeg from exact source inputs"), "", 1)),
+        ("source kit assembly removed", current_document.replace("prepare_source_kit.py create-ffmpeg", "prepare_source_kit.py verify", 1)),
+        ("runtime source verification absent", current_document.replace("prepare_source_kit.py verify-runtime", "prepare_source_kit.py verify", 1)),
+        ("runtime path absent", current_document.replace('-PreparePinnedRuntime -ProjectRuntimeRoot', '-PreparePinnedRuntime -WrongRoot', 1)),
+        ("runtime build after application", _move_named_step_after(current_document, "Build project FFmpeg from exact source inputs", CONTRACTS[-1].build_step)),
+        ("bundle ready not required", current_document.replace("--require-release-ready true", "--require-release-ready false", 1)),
+        ("comment-only final gate", current_document.replace("          python ..\\control\\scripts\\verify_release_legal_gate.py", "          # python ..\\control\\scripts\\verify_release_legal_gate.py", 1)),
+        ("final gate ignored", current_document.replace("      - name: Validate final release evidence gate\n", "      - name: Validate final release evidence gate\n        continue-on-error: true\n", 1)),
+        ("final source argument absent", current_document.replace("            --stage final `", "            --stage prebuild `", 1)),
+    ]
+    for label, document in current_mutations:
+        mutated = dict(documents)
+        mutated[current_path] = document
+        try:
+            validate_contracts(mutated)
+        except WorkflowSplitError:
+            continue
+        raise WorkflowSplitError(f"current evidence mutation was accepted: {label}")
     legacy = CONTRACTS[0]
     fixed = CONTRACTS[1]
     cases = (

@@ -43,12 +43,6 @@ jobs:
           }
 
           Write-Host "Pinned Python verified: $VersionOutput"
-      - name: Enforce fail-closed release legal gate
-        shell: pwsh
-        run: |
-          python control/scripts/verify_release_legal_gate.py `
-            --policy control/legal/release-policy.json `
-            --tag v1.3.2
       - name: Install locked build dependencies
         shell: pwsh
         run: |
@@ -59,12 +53,60 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
               throw "Locked build dependency installation failed"
           }
+      - name: Validate prebuild technical control gate
+        shell: pwsh
+        run: |
+          python control/scripts/verify_release_legal_gate.py `
+            --policy control/legal/release-policy.json `
+            --control-root control `
+            --stage prebuild `
+            --tag v1.3.2
+          if ($LASTEXITCODE -ne 0) {
+              throw "Prebuild technical control validation failed"
+          }
       - name: Check out release tag
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           path: source
           ref: v1.3.2
           fetch-depth: 0
+      - name: Normalize canonical release-note checkout
+        shell: pwsh
+        working-directory: source
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+
+          @'
+          from hashlib import sha256
+          from pathlib import Path
+          import subprocess
+
+          relative = "docs/release_notes_v1.3.2.md"
+          head_before = subprocess.check_output(["git", "rev-parse", "HEAD"]).strip()
+          blob = subprocess.check_output(["git", "show", f"HEAD:{relative}"])
+          if not blob:
+              raise SystemExit("release notes Git blob is empty")
+          if blob.startswith(b"\xef\xbb\xbf"):
+              raise SystemExit("release notes Git blob contains a UTF-8 BOM")
+          blob.decode("utf-8", errors="strict")
+          if b"\r" in blob:
+              raise SystemExit("release notes Git blob is not LF-only")
+          if not blob.endswith(b"\n") or blob.endswith(b"\n\n"):
+              raise SystemExit("release notes Git blob must have exactly one final LF")
+
+          target = Path(relative)
+          target.write_bytes(blob)
+          checkout = target.read_bytes()
+          if sha256(checkout).digest() != sha256(blob).digest() or checkout != blob:
+              raise SystemExit("release notes checkout differs from the checked-out Git blob")
+          head_after = subprocess.check_output(["git", "rev-parse", "HEAD"]).strip()
+          if head_after != head_before:
+              raise SystemExit("release source HEAD changed during release-note normalization")
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) {
+              throw "Canonical release-note checkout normalization failed"
+          }
       - name: Verify annotated tag and release absence
         id: release-metadata
         shell: pwsh
@@ -239,10 +281,69 @@ jobs:
           Write-Host "Canonical Windows temporary root validated successfully."
           $global:LASTEXITCODE = 0
           exit 0
+      - name: Build project FFmpeg from exact source inputs
+        shell: pwsh
+        working-directory: source
+        run: |
+          $projectBuildRoot = Join-Path $env:RUNNER_TEMP "s9h-project-ffmpeg"
+          $sourceDownloads = Join-Path $env:RUNNER_TEMP "s9h-project-source-downloads"
+          python ..\control\scripts\build_project_ffmpeg.py `
+            --work-root $projectBuildRoot --downloads-root $sourceDownloads --jobs 4
+          if ($LASTEXITCODE -ne 0) { throw "Project FFmpeg source build failed" }
+          python ..\control\scripts\prepare_source_kit.py verify-runtime `
+            --owner ..\control\legal\source-compliance-v1.3.2.json `
+            --runtime-root (Join-Path $projectBuildRoot "runtime") --repo-root ..\control
+          if ($LASTEXITCODE -ne 0) { throw "Built runtime differs from reviewed source owner" }
+      - name: Create and verify project FFmpeg source asset
+        shell: pwsh
+        working-directory: source
+        run: |
+          python ..\control\scripts\prepare_source_kit.py create-ffmpeg `
+            --owner ..\control\legal\source-compliance-v1.3.2.json `
+            --downloads-root (Join-Path $env:RUNNER_TEMP "s9h-project-source-downloads") `
+            --repo-root ..\control `
+            --runtime-root (Join-Path $env:RUNNER_TEMP "s9h-project-ffmpeg/runtime") `
+            --output release/source-assets/Youtube-Downloaderbs-v1.3.2-ffmpeg-source.zip
+          if ($LASTEXITCODE -ne 0) { throw "Project FFmpeg source assembly failed" }
+          python ..\control\scripts\prepare_source_kit.py verify `
+            --owner ..\control\legal\source-compliance-v1.3.2.json --package ffmpeg `
+            --asset release/source-assets/Youtube-Downloaderbs-v1.3.2-ffmpeg-source.zip
+          if ($LASTEXITCODE -ne 0) { throw "Project FFmpeg source asset verification failed" }
+      - name: Acquire and verify accepted aria2 source asset
+        shell: pwsh
+        working-directory: source
+        run: |
+          $ariaDownloads = Join-Path $env:RUNNER_TEMP "s9h-aria2-source-downloads"
+          python ..\control\scripts\prepare_source_kit.py acquire-aria2 `
+            --owner ..\control\legal\source-compliance-v1.3.2.json --downloads-root $ariaDownloads
+          if ($LASTEXITCODE -ne 0) { throw "aria2 source acquisition failed" }
+          python ..\control\scripts\prepare_source_kit.py create `
+            --owner ..\control\legal\source-compliance-v1.3.2.json --downloads-root $ariaDownloads `
+            --license ..\control\legal\licenses\aria2-1.37.0-GPLv2.txt `
+            --output release/source-assets/Youtube-Downloaderbs-v1.3.2-aria2-source.zip
+          if ($LASTEXITCODE -ne 0) { throw "aria2 source assembly failed" }
+          python ..\control\scripts\prepare_source_kit.py verify `
+            --owner ..\control\legal\source-compliance-v1.3.2.json --package aria2 `
+            --asset release/source-assets/Youtube-Downloaderbs-v1.3.2-aria2-source.zip
+          if ($LASTEXITCODE -ne 0) { throw "Accepted aria2 source asset verification failed" }
       - name: Build and validate checksum-pinned assets
         shell: pwsh
         working-directory: source
-        run: .\scripts\build_release_v1_3_2.ps1 -PreparePinnedRuntime
+        run: .\scripts\build_release_v1_3_2.ps1 -PreparePinnedRuntime -ProjectRuntimeRoot (Join-Path $env:RUNNER_TEMP "s9h-project-ffmpeg/runtime")
+      - name: Verify both source assets against current owner
+        shell: pwsh
+        working-directory: source
+        run: |
+          python ..\control\scripts\prepare_source_kit.py verify `
+            --owner ..\control\legal\source-compliance-v1.3.2.json `
+            --package aria2 `
+            --asset release/source-assets/Youtube-Downloaderbs-v1.3.2-aria2-source.zip
+          if ($LASTEXITCODE -ne 0) { throw "aria2 source verification failed" }
+          python ..\control\scripts\prepare_source_kit.py verify `
+            --owner ..\control\legal\source-compliance-v1.3.2.json `
+            --package ffmpeg `
+            --asset release/source-assets/Youtube-Downloaderbs-v1.3.2-ffmpeg-source.zip
+          if ($LASTEXITCODE -ne 0) { throw "FFmpeg source verification failed" }
       - name: Prepare and verify release legal payload
         shell: pwsh
         working-directory: source
@@ -270,6 +371,22 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
               throw "Release legal payload verification failed"
           }
+      - name: Validate final release evidence gate
+        shell: pwsh
+        working-directory: source
+        run: |
+          python ..\control\scripts\verify_release_legal_gate.py `
+            --policy ..\control\legal\release-policy.json `
+            --control-root ..\control `
+            --stage final `
+            --tag v1.3.2 `
+            --source-assets-root release/source-assets `
+            --legal-payload release/assets/Youtube-Downloaderbs-v1.3.2-legal.zip `
+            --portable-zip release/assets/Youtube-Downloaderbs-v1.3.2.zip `
+            --release-notes release/RELEASE_NOTES.md `
+            --source-commit "${{ steps.release-metadata.outputs.source-commit }}" `
+            --control-commit "${{ steps.release-metadata.outputs.control-commit }}"
+          if ($LASTEXITCODE -ne 0) { throw "Final release evidence validation failed" }
       - name: Create and verify release bundle
         shell: pwsh
         working-directory: source
@@ -299,7 +416,7 @@ jobs:
             --asset-contract ..\control\legal\release-assets-v2.json `
             --legal-payload release/publish-bundle/assets/Youtube-Downloaderbs-v1.3.2-legal.zip `
             --source-assets-root release/publish-bundle/assets `
-            --require-release-ready false
+            --require-release-ready true
           if ($LASTEXITCODE -ne 0) {
               throw "Release bundle verification failed"
           }
@@ -498,12 +615,9 @@ jobs:
           if ($manifest.source_commit -cne $env:EXPECTED_SOURCE_COMMIT -or $manifest.control_commit -cne $env:EXPECTED_CONTROL_COMMIT) {
               throw "Release manifest commit metadata is invalid"
           }
-          if ([bool]$manifest.release_ready -or [bool]$manifest.legal_compliance_certified -or [bool]$manifest.source_availability_certified) {
-              throw "Release manifest readiness is invalid"
-          }
-          if (@($manifest.release_blockers).Count -le 0) {
-              throw "Release manifest blockers are missing"
-          }
+          # Readiness and explicit authorization belong exclusively to the
+          # canonical Python verifier in Enforce publish-ready release bundle.
+          # This step validates layout, metadata, asset roles, sizes and hashes.
           $assets = @($manifest.assets)
           if ($assets.Count -ne 5) {
               throw "Release manifest asset count is invalid"

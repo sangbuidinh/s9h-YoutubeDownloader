@@ -19,14 +19,23 @@ This file covers known direct third-party components that current repository sou
 
 ### FFmpeg and ffprobe 8.1.2
 
-- Role: external executables from the Gyan FFmpeg 8.1.2 essentials static Windows build in the portable ZIP.
+- Role: external executables from the project-controlled FFmpeg 8.1.2 Windows x64 build in the portable ZIP.
 - Distributed filenames: `data/bin/ffmpeg.exe` and `data/bin/ffprobe.exe`.
-- Binary package: `ffmpeg-8.1.2-essentials_build.zip` from Gyan.
-- Upstream: `FFmpeg/FFmpeg` at ref `n8.1.2`.
-- License label: GPLv3 static build, as identified by the Gyan build distributor.
-- Local license: `legal/licenses/FFmpeg-8.1.2-GPLv3.txt`.
-- Source-distribution status: not certified. The Corresponding Source set for the distributed static binaries and incorporated libraries has not been certified as complete.
-- Inclusion does not imply endorsement by or affiliation with FFmpeg or Gyan.
+- Upstream: `FFmpeg/FFmpeg` at commit `38b88335f99e76ed89ff3c93f877fdefce736c13` (8.1.2).
+- License label: LGPL-2.1-or-later for this configuration; GPL, version3, and nonfree are disabled. Native defaults are retained; external autodetection is disabled. libmp3lame supplies MP3 encoding; Windows SChannel supplies TLS.
+- Local licenses: `legal/licenses/FFmpeg-8.1.2-LGPLv2.1.txt` and `legal/licenses/FFmpeg-8.1.2-LICENSE.md`.
+- Active source and binary mapping: `legal/source-compliance-v1.3.2.json`. Source ZIP: `Youtube-Downloaderbs-v1.3.2-ffmpeg-source.zip`, supplied alongside binaries subject to separate release authorization. A technical mapping is not legal certification.
+- This software is based in part on the work of the Independent JPEG Group. Incorporated IJG-derived source files are unmodified.
+- Gyan is retired from the active v1.3.2 target. Its GPLv3 text and INCOMPLETE correspondence record remain historical evidence, not evidence for this build.
+- Inclusion does not imply endorsement by or affiliation with FFmpeg.
+
+### LAME 3.100
+
+libmp3lame is linked statically into the project runtime for the existing MP3 quality-zero contract. LAME is acknowledged at https://lame.sourceforge.io/ . Exact source release `lame-3.100.tar.gz` is pinned and included in the FFmpeg source ZIP. LAME code is LGPL-2.0-or-later; the unchanged upstream texts are `legal/licenses/LAME-3.100-COPYING.txt` and `legal/licenses/LAME-3.100-LICENSE.txt`.
+
+### MinGW-w64 runtime 14.0.0
+
+The checksum-pinned w64devkit 2.9.1 compiler supplies MinGW-w64 14.0.0 support. Its exact aggregate runtime notice, including permissive and Wine-header notices, is preserved at `legal/licenses/MinGW-w64-14.0.0-COPYING.txt`. Windows system DLLs are not bundled. Compiler tools are not represented as FFmpeg media dependencies or as a legal certification.
 
 ### aria2 1.37.0
 
@@ -66,7 +75,7 @@ The application imports Tkinter, and the controlled Phase 6B1 build contains Tcl
 
 ## GPL source-availability warning
 
-FFmpeg/ffprobe and aria2 are distributed as separate executables. Separation does not eliminate each executable's own redistribution obligations. Attribution or a copied license text alone does not resolve source-distribution requirements. Exact Corresponding Source and source-offer handling have not been certified, and release integration must not be described as complete until Phase 6B2 closes these items.
+FFmpeg/ffprobe and aria2 are distributed as separate executables. Separation does not eliminate each executable's own redistribution obligations. Attribution or a copied license text alone does not resolve Corresponding Source requirements. Current technical readiness requires verified exact source assets and packaged notices; it does not certify legal compliance or authorize distribution. Equivalent source access and the final release decision remain subject to external review and explicit legal authorization.
 
 ## Phase 6B1 controlled build inventory
 
@@ -74,11 +83,13 @@ FFmpeg/ffprobe and aria2 are distributed as separate executables. Separation doe
 
 ## Release gate
 
-`legal/release-policy.json` keeps all current version workflows fail-closed before dependency installation, runtime acquisition, or application build. Existing releases are not retroactively certified.
+`legal/release-policy.json` keeps historical workflows fail-closed and validates the current technical inputs before runtime acquisition or application build. Final publication additionally requires explicit legal authorization, which remains absent. Existing releases are not retroactively certified.
 
 ## Source availability status
 
-FFmpeg/ffprobe Corresponding Source remains unverified, and aria2 source-distribution integration remains incomplete. A copied license or upstream link is not represented as sufficient. Phase 6B2 must provide verified source kits and equivalent release access.
+Current technical state is owned by `legal/source-compliance-v1.3.2.json` and `legal/release-policy.json`. The project-controlled FFmpeg source kit and accepted aria2 source kit require byte-level validation and equivalent release access. A copied license or upstream link is not represented as sufficient. Production authorization remains `LEGAL_REVIEW_REQUIRED`; publishing remains disabled without that separate decision.
+
+The phase-specific sections below preserve historical observations. Their Gyan and earlier source-kit blockers are not claims about the replacement runtime.
 
 ## Phase 6B2A source correspondence audit
 
@@ -102,6 +113,11 @@ Third-party names and marks belong to their respective owners. Inclusion of a co
 - `legal/licenses/aria2-1.37.0-GPLv2.txt`
 - `legal/licenses/Deno-2.7.14-MIT.txt`
 - `legal/licenses/FFmpeg-8.1.2-GPLv3.txt`
+- `legal/licenses/FFmpeg-8.1.2-LGPLv2.1.txt`
+- `legal/licenses/FFmpeg-8.1.2-LICENSE.md`
+- `legal/licenses/LAME-3.100-COPYING.txt`
+- `legal/licenses/LAME-3.100-LICENSE.txt`
+- `legal/licenses/MinGW-w64-14.0.0-COPYING.txt`
 - `legal/licenses/PyInstaller-6.21.0-COPYING.txt`
 - `legal/licenses/Python-3.11.9-LICENSE.txt`
 - `legal/licenses/Tcl-Tk-license.terms`

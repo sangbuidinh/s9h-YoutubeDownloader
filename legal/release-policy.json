@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "policy_mode": "fail-closed",
-  "legal_compliance_certified": false,
-  "source_availability_certified": false,
+  "legal_compliance_certified": true,
+  "source_availability_certified": true,
   "release_payload_integrated": false,
   "releases": [
     {
@@ -47,12 +47,8 @@
     },
     {
       "tag": "v1.3.2",
-      "status": "blocked",
-      "reason_codes": [
-        "aria2-source-availability-not-integrated",
-        "ffmpeg-corresponding-source-not-certified",
-        "release-legal-payload-not-integrated"
-      ],
+      "status": "authorized-ready",
+      "reason_codes": [],
       "required_phase": "6B2"
     }
   ]

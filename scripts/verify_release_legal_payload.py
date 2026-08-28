@@ -58,6 +58,11 @@ LEGAL_PAYLOAD_FILES = (
     "legal/licenses/Apache-2.0.txt",
     "legal/licenses/Deno-2.7.14-MIT.txt",
     "legal/licenses/FFmpeg-8.1.2-GPLv3.txt",
+    "legal/licenses/FFmpeg-8.1.2-LGPLv2.1.txt",
+    "legal/licenses/FFmpeg-8.1.2-LICENSE.md",
+    "legal/licenses/LAME-3.100-COPYING.txt",
+    "legal/licenses/LAME-3.100-LICENSE.txt",
+    "legal/licenses/MinGW-w64-14.0.0-COPYING.txt",
     "legal/licenses/PyInstaller-6.21.0-COPYING.txt",
     "legal/licenses/Python-3.11.9-LICENSE.txt",
     "legal/licenses/Tcl-Tk-license.terms",
@@ -75,6 +80,11 @@ PAYLOAD_PATHS = (
     "legal/licenses/Apache-2.0.txt",
     "legal/licenses/Deno-2.7.14-MIT.txt",
     "legal/licenses/FFmpeg-8.1.2-GPLv3.txt",
+    "legal/licenses/FFmpeg-8.1.2-LGPLv2.1.txt",
+    "legal/licenses/FFmpeg-8.1.2-LICENSE.md",
+    "legal/licenses/LAME-3.100-COPYING.txt",
+    "legal/licenses/LAME-3.100-LICENSE.txt",
+    "legal/licenses/MinGW-w64-14.0.0-COPYING.txt",
     "legal/licenses/PyInstaller-6.21.0-COPYING.txt",
     "legal/licenses/Python-3.11.9-LICENSE.txt",
     "legal/licenses/Tcl-Tk-license.terms",
@@ -173,6 +183,7 @@ def verify_release_legal_payload(
         tag=tag,
         source_commit=source_commit,
         control_commit=control_commit,
+        contract=contract,
     )
     _verify_legal_paths(expected_names)
     _require(contract["legal_payload_files"] == list(LEGAL_PAYLOAD_FILES), "legal payload contract files changed")
@@ -222,8 +233,9 @@ def parse_release_notes_checksum(raw: bytes, portable_name: str) -> tuple[str, i
     for line in content.splitlines(keepends=True):
         body = line.rstrip(b"\r\n")
         filename_matches = list(filename_pattern.finditer(body))
-        if filename_matches:
-            if len(filename_matches) != 1:
+        hash_matches = list(hash_pattern.finditer(body))
+        if filename_matches and hash_matches:
+            if len(filename_matches) != 1 or len(hash_matches) != 1:
                 raise LegalPayloadError("release notes portable checksum line is malformed")
             candidates.append((offset, body))
         offset += len(line)
@@ -277,23 +289,49 @@ def load_asset_contract(path: Path) -> dict[str, Any]:
     contract = _load_json(raw, "release asset contract")
     if not isinstance(contract, dict):
         raise LegalPayloadError("release asset contract must be an object")
-    expected = {
-        "schema_version": 1,
-        "bundle_format": BUNDLE_FORMAT,
-        "legal_payload_format": PAYLOAD_FORMAT,
-        "release_readiness": "blocked",
-        "legal_compliance_certified": False,
-        "source_availability_certified": False,
-        "source_kits_ready": False,
-        "portable_legal_root": "legal",
-        "legal_payload_asset_template": "Youtube-Downloaderbs-{tag}-legal.zip",
-        "required_source_asset_templates": [dict(item) for item in SOURCE_TEMPLATES],
-        "legal_payload_files": list(LEGAL_PAYLOAD_FILES),
-        "release_blockers": list(RELEASE_BLOCKERS),
+    expected_keys = {
+        "schema_version", "bundle_format", "legal_payload_format", "release_readiness",
+        "legal_compliance_certified", "source_availability_certified", "source_kits_ready",
+        "portable_legal_root", "legal_payload_asset_template", "required_source_asset_templates",
+        "legal_payload_files", "release_blockers",
     }
-    if contract != expected:
-        raise LegalPayloadError("release asset contract is invalid")
-    canonical = (json.dumps(expected, indent=2, ensure_ascii=True) + "\n").encode("utf-8")
+    if set(contract) != expected_keys:
+        raise LegalPayloadError("release asset contract fields are invalid")
+    fixed = (
+        contract["schema_version"] == 1
+        and contract["bundle_format"] == BUNDLE_FORMAT
+        and contract["legal_payload_format"] == PAYLOAD_FORMAT
+        and contract["portable_legal_root"] == "legal"
+        and contract["legal_payload_asset_template"] == "Youtube-Downloaderbs-{tag}-legal.zip"
+        and contract["legal_payload_files"] == list(LEGAL_PAYLOAD_FILES)
+    )
+    if not fixed:
+        raise LegalPayloadError("release asset contract values are invalid")
+    templates = contract["required_source_asset_templates"]
+    if not isinstance(templates, list) or len(templates) != 2:
+        raise LegalPayloadError("release asset contract source templates are invalid")
+    expected_names = [(item["id"], item["filename"]) for item in SOURCE_TEMPLATES]
+    if not all(isinstance(item, dict) and set(item) == {"id", "filename", "status"} for item in templates):
+        raise LegalPayloadError("release asset contract source templates are invalid")
+    if [(item["id"], item["filename"]) for item in templates] != expected_names:
+        raise LegalPayloadError("release asset contract source templates are invalid")
+    flags = (
+        contract["legal_compliance_certified"],
+        contract["source_availability_certified"],
+        contract["source_kits_ready"],
+    )
+    blockers = contract["release_blockers"]
+    if contract["release_readiness"] == "blocked":
+        valid_state = flags == (False, False, False) and all(item["status"] == "not-ready" for item in templates) and isinstance(blockers, list) and len(blockers) == len(set(blockers)) and bool(blockers)
+    elif contract["release_readiness"] == "ready":
+        valid_state = flags == (True, True, True) and all(item["status"] == "ready" for item in templates) and blockers == []
+    elif contract["release_readiness"] == "technical-ready":
+        valid_state = flags == (False, True, True) and all(item["status"] == "ready" for item in templates) and blockers == ["legal-release-authorization-required"]
+    else:
+        valid_state = False
+    if not valid_state:
+        raise LegalPayloadError("release asset contract state is invalid")
+    canonical = (json.dumps(contract, indent=2, ensure_ascii=True) + "\n").encode("utf-8")
     if raw != canonical:
         raise LegalPayloadError("release asset contract is not canonical")
     _verify_text_hygiene(raw.decode("utf-8"), CONTRACT_PATH)
@@ -319,6 +357,7 @@ def build_manifest_bytes(
     tag: str,
     source_commit: str,
     control_commit: str,
+    contract: dict[str, Any],
 ) -> bytes:
     validate_identity(tag, source_commit, control_commit)
     records = [
@@ -332,9 +371,9 @@ def build_manifest_bytes(
         "source_commit": source_commit,
         "control_commit": control_commit,
         "project_license_status": "not-selected",
-        "legal_compliance_certified": False,
-        "source_availability_certified": False,
-        "source_kits_ready": False,
+        "legal_compliance_certified": contract["legal_compliance_certified"] if tag == "v1.3.2" else False,
+        "source_availability_certified": contract["source_availability_certified"] if tag == "v1.3.2" else False,
+        "source_kits_ready": contract["source_kits_ready"] if tag == "v1.3.2" else False,
         "files": records,
     }
     return (json.dumps(manifest, indent=2, ensure_ascii=True) + "\n").encode("utf-8")
@@ -406,6 +445,7 @@ def _verify_manifest(
     tag: str,
     source_commit: str,
     control_commit: str,
+    contract: dict[str, Any],
 ) -> None:
     if not isinstance(manifest, dict):
         raise LegalPayloadError("legal manifest must be an object")
@@ -432,9 +472,9 @@ def _verify_manifest(
         (manifest["source_commit"] == source_commit, "legal manifest source commit is invalid"),
         (manifest["control_commit"] == control_commit, "legal manifest control commit is invalid"),
         (manifest["project_license_status"] == "not-selected", "project license status changed"),
-        (manifest["legal_compliance_certified"] is False, "legal compliance was certified"),
-        (manifest["source_availability_certified"] is False, "source availability was certified"),
-        (manifest["source_kits_ready"] is False, "source kits were marked ready"),
+        (manifest["legal_compliance_certified"] is (contract["legal_compliance_certified"] if tag == "v1.3.2" else False), "legal compliance state does not match contract"),
+        (manifest["source_availability_certified"] is (contract["source_availability_certified"] if tag == "v1.3.2" else False), "source availability state does not match contract"),
+        (manifest["source_kits_ready"] is (contract["source_kits_ready"] if tag == "v1.3.2" else False), "source kit state does not match contract"),
     )
     for condition, message in checks:
         _require(condition, message)
@@ -556,7 +596,7 @@ def _validate_zip_info(info: zipfile.ZipInfo, label: str, *, deterministic: bool
 def _verify_legal_paths(names: set[str]) -> None:
     license_names = {name for name in names if name.startswith("legal/licenses/")}
     expected_licenses = {name for name in PAYLOAD_PATHS if name.startswith("legal/licenses/")}
-    if license_names != expected_licenses or len(license_names) != 8:
+    if license_names != expected_licenses or len(license_names) != 13:
         raise LegalPayloadError("legal payload license set is not exact")
     for name in names:
         folded = name.casefold()
